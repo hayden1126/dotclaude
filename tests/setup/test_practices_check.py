@@ -3054,10 +3054,19 @@ class SkippedLine(BashBase):
         for command in ('gh pr create -t x --body "$(cat body.md)"', 'gh pr create -t x --body "$B"',
                         "gh pr create -t x --web", "gh pr create -t x -w",
                         'cat <<EOF > log\nhi\nEOF\ngh pr create -t x --body "$(cat body.md)"',
-                        'cat <<< hi; gh pr create -t x --body "$B"'):
+                        'cat <<< hi; gh pr create -t x --body "$B"',
+                        "gh pr create -t x --body $'a\\nSkipped: x'",
+                        'gh pr create -t x --body "$(cat <<EOF\n$(cat notes.md)\nEOF\n)"'):
             with self.subTest(command=command):
                 self.assertIsNone(self.ready(command))
         self.assertIn("skipped-line", self.log())
+
+    def test_a_literal_dollar_is_a_readable_body(self):
+        self.assertIn(self.REFUSED, self.ready("gh pr create -t x --body 'costs $5, no line'"))
+
+    def test_a_quoted_heredoc_does_not_expand(self):
+        self.assertIn(self.REFUSED, self.ready(
+            "gh pr create -t x --body \"$(cat <<'EOF'\n$(not run)\nEOF\n)\""))
 
     def test_a_heredoc_body_with_no_line_is_refused(self):
         self.assertIn(self.REFUSED, self.ready(

@@ -2583,7 +2583,8 @@ PR_SELECTOR = re.compile(r"\w[\w./-]*", re.A)
 PR_URL = re.compile(r"https://github\.com/([^/\s]+/[^/\s]+)/pull/(\d+)(?:[/?#]\S*)?")
 ORIGIN_URL = re.compile(r"(?:https://(?:[^/@\s]+@)?|ssh://git@|git@)github\.com[:/]"
                         r"([^/\s]+/[^/\s]+?)(?:\.git)?/?")
-HEREDOC_BODY = re.compile(r"(?:--body[= ]|-b[ =]?)\s*\"?\$\(\s*cat\s+<<-?[^<]")
+HEREDOC_BODY = re.compile(r"(?:--body[= ]|-b[ =]?)\s*\"?\$\(\s*cat\s+<<-?\s*(['\"]?)[^<]")
+EXPANSION = re.compile(r"%[A-Z]+%|\$[A-Za-z_{(]")  # a parser placeholder, or a shell expansion
 SKIPPED_REASON = (
     "[practices:skipped] This PR's body has no `Skipped:` line, so it can't be marked ready. Add "
     "this block to the body (`gh pr edit <n> --body-file <file>`, or the --body of `gh pr "
@@ -2595,6 +2596,15 @@ SKIPPED_REASON = (
 def has_skipped_line(text):
     """Whether a line of text starts `Skipped:` (a bullet or bold allowed) with something after it."""
     return any(m.group(1).strip().lstrip("*_").strip() for m in SKIPPED_LINE.finditer(text))
+
+
+def body_unseen(command, bodies):
+    """Whether a --body is built by an expansion, so this check can't read it. A heredoc written
+    out in the command can be read, unless its delimiter is unquoted and it expands something."""
+    heredoc = HEREDOC_BODY.search(command)
+    if heredoc:
+        return not heredoc.group(1) and bool(EXPANSION.search(command, heredoc.end()))
+    return any(EXPANSION.search(b) for b in bodies)
 
 
 def flag_values(args, short, long_):
@@ -2680,8 +2690,7 @@ def create_has_line(event, args, cwd, bounds):
         return True
     files = list(flag_values(args, "-F", "--body-file"))
     if not files:
-        # A body built by an expansion can't be read here, unless a heredoc wrote it out above.
-        if not HEREDOC_BODY.search(command) and any("%SUBST%" in b or "$" in b for b in bodies):
+        if body_unseen(command, bodies):
             log("skipped-line", "a --body built by an expansion, so the PR went unchecked")
             return None
         return False

@@ -162,6 +162,26 @@ class GenericSuites(Base):
                 self.assertIsNone(self.pre(first, session=first))
                 self.assertIsNone(self.pre(second, session=first))
 
+    def test_a_rerun_after_a_compaction_still_never_counts(self):
+        self.assertIsNone(self.pre(SUITE))
+        self.assertIsNotNone(self.pre(OTHER))
+        self.assertIsNone(self.pre(OTHER))
+        boundary = {"type": "system", "subtype": "compact_boundary", "uuid": "b1"}
+        with open(self.transcript, "a") as f:
+            f.write(json.dumps(boundary, separators=(",", ":")) + "\n")
+        self.assertIsNone(self.pre(SUITE))
+
+    def test_flags_that_name_a_suite_count(self):
+        self.assertIsNone(self.pre("vitest --project=unit", session="a"))
+        self.assertIn("long-runs", self.pre("vitest --project=e2e", session="a"))
+        self.assertIsNone(self.pre("npm test --workspace=a", session="b"))
+        self.assertIn("long-runs", self.pre("npm test --workspace=b", session="b"))
+
+    def test_coverage_flags_are_no_new_suite(self):
+        self.assertIsNone(self.pre("pytest"))
+        self.assertIsNone(self.pre("pytest --cov src"))
+        self.assertIsNone(self.pre("pytest --cov=src"))
+
     def test_different_scripts_are_different_suites(self):
         self.assertIsNone(self.pre("npm run test:unit"))
         self.assertIn("long-runs", self.pre("npm run test:e2e"))
@@ -172,7 +192,9 @@ class GenericSuites(Base):
         self.assertIn("long-runs", self.pre("cd b && pytest"))
 
     def test_a_look_at_the_runner_is_no_suite(self):
-        for command in ("pytest --version", "pytest --collect-only", "pytest --lf", "pytest -h"):
+        for command in ("pytest --version", "pytest --collect-only", "pytest --lf", "pytest -h",
+                        "cargo test --help", "cargo test --no-run", "make -n test", "tox -l",
+                        "go test -list ."):
             with self.subTest(command=command):
                 self.assertIsNone(self.pre(command))
         self.assertIsNone(self.pre("npm test"))  # the looks above counted as no suite

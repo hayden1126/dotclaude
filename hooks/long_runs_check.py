@@ -56,9 +56,13 @@ GATES_MAX = 50
 GATE_LEN_MAX = 200
 SOURCE_FILE = re.compile(r"\.(py|ts|tsx|js|jsx|mjs|cjs|rb|rs|go|java|kt)(:\d+)?$")
 VALUE_FLAGS = {"-n", "--numprocesses", "--tb", "--maxfail", "-p", "--pattern", "--color", "--reporter",
-               "--durations", "--workers", "-j", "-count", "-timeout", "--timeout"}
+               "--durations", "--workers", "-j", "-count", "-timeout", "--timeout", "--cov",
+               "--cov-report"}
 NOT_A_RUN = {"--version", "-V", "--help", "-h", "--collect-only", "--co", "--lf", "--last-failed",
-             "--list", "--listTests", "--list-tests"}
+             "--list", "--listTests", "--list-tests", "--no-run"}
+NOT_A_RUN_FOR = {"make": {"-n", "--dry-run", "--just-print"}, "tox": {"-l", "-a", "--listenvs"},
+                 "go": {"-list"}}
+SUITE_FLAGS = {"--project", "--workspace", "--filter", "--config", "-c", "-w"}  # name the suite
 REASON = (
     "[long-runs] This command starts a heavy gate or a second test suite, and the long-runs "
     "skill isn't loaded in this context. Load it (the Skill tool, skill \"long-runs\"), work out "
@@ -70,7 +74,7 @@ def narrowed(args, flags=()):
     """Whether a test runner's arguments pick out part of a suite."""
     for a in args:
         head = a.split("=", 1)[0]
-        if a in NOT_A_RUN or head in flags or (a.startswith("-k") and not a.startswith("--") and len(a) > 2):
+        if head in flags or (a.startswith("-k") and not a.startswith("--") and len(a) > 2):
             return True
         if a in ("-k", "--keyword"):
             return True
@@ -102,6 +106,9 @@ def suite_args(name, args):
     if pair is None:
         return None
     name, args = pair
+    heads = {a.split("=", 1)[0] for a in args}
+    if heads & (NOT_A_RUN | NOT_A_RUN_FOR.get(name, set())):
+        return None
     if name == "pytest" or name in ("tox", "nox", "rspec"):
         return None if narrowed(args) else args
     if name == "unittest":
@@ -142,6 +149,8 @@ def suite_key(name, args, rest, where):
     for a in rest:
         if skip:
             skip = False
+        elif a.split("=", 1)[0] in SUITE_FLAGS:
+            kept.append(a)
         elif a.startswith("-"):
             skip = a in VALUE_FLAGS
         else:
@@ -269,8 +278,8 @@ def check(event):
     seen = set(state.get("suites") or []) | suites
     if suites and not write_state(path, {**state, "suites": sorted(seen)}):
         return None
-    if not (heavy or len(seen) >= 2):
-        return None
+    if not (heavy or (len(seen) >= 2 and suites - set(state.get("suites") or []))):
+        return None  # only a suite not seen before counts: a rerun never does
     with PC.Transcripts(event) as ts:
         if ts.own is None:
             return None
