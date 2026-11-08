@@ -119,11 +119,56 @@ A voice recording is personal data, so `demo/voice*/` stays out of git, whatever
 
 **Believe it only after listening.** The checks prove the file's shape, not that it sounds right. Have the user play `demo-voice.mp4` to the end, listening for crackle, a robotic tone, and the voice drifting off the captions.
 
+## Edit in invideo
+
+invideo is a web video editor whose timeline you edit through its connector while a person edits the same timeline in the browser. Use it after the take, and the voice if there is one, is built, for titles, transitions, music and moving a clip. What was measured here was measured on its claude.ai connector, with one person in the same account; the rest is marked unmeasured or unproven.
+
+**Setup, once per machine.** These are installs: do them before the event, and never inside an install freeze the user keeps.
+
+1. The user connects invideo in claude.ai's connector settings and signs in. Its tools then appear here as `mcp__claude_ai_invideo_Editor__*`; `current_user` shows the account and its credits. invideo's own instructions tell Claude Code to use its full connector (`https://mcp.invideo.io/mcp`) instead. That one is unmeasured, and its tools have other names, so the rules below wouldn't match them: stay on the claude.ai one unless the user chooses to switch, before the event.
+2. Auto mode can refuse any of invideo's calls until it is allowed. The user adds these to `permissions.allow` by hand, in their user-level Claude Code `settings.json`, and on a machine dotclaude installs, in its `settings.machine.json` too, so a rerun of its `setup.sh` keeps them. Each lets that one call run with no prompt, on invideo's servers, as the signed-in account; invideo writes that code, and only the user writes the rule. The AI-generation calls, which spend credits, stay off the list, but auto mode may let one through anyway, so ask the user before any of them. Some rules reach further than their name: `add_media` also places paid stock, so a credit charge goes through unprompted; `edit_timeline` can delete or overwrite a teammate's work; and `timeline_history` can restore an older checkpoint over the current timeline (it backs up what was there first). The edits measured here spent no credits. Asking before anything paid and reading the timeline before each edit (below) are yours to do; no setting enforces them. The rules stay after the event, and so do the uploads, a voice included. When the team stops using invideo, tell the user to remove the rules and any invideo hosts added below, and to delete the project in invideo's site if its files shouldn't stay there.
+
+```json
+"mcp__claude_ai_invideo_Editor__current_user",
+"mcp__claude_ai_invideo_Editor__new_project",
+"mcp__claude_ai_invideo_Editor__register",
+"mcp__claude_ai_invideo_Editor__new_timeline",
+"mcp__claude_ai_invideo_Editor__start_upload",
+"mcp__claude_ai_invideo_Editor__add_media",
+"mcp__claude_ai_invideo_Editor__timeline_history",
+"mcp__claude_ai_invideo_Editor__edit_timeline",
+"mcp__claude_ai_invideo_Editor__search_library",
+"mcp__claude_ai_invideo_Editor__export",
+"mcp__claude_ai_invideo_Editor__leave_timeline",
+"mcp__claude_ai_invideo_Editor__get_timeline",
+"mcp__claude_ai_invideo_Editor__timeline_catalog",
+"mcp__claude_ai_invideo_Editor__read",
+"mcp__claude_ai_invideo_Editor__status"
+```
+
+Give the user this block for the settings files, not for `/permissions`, which saves a pasted block as one rule that matches nothing. A file with no allow list yet takes it inside `"permissions": {"allow": [ ... ]}`. Pasted into an existing list, it needs a comma on each side that has an entry: after the entry before it, and after its own last line when entries follow. A settings file that doesn't parse breaks dotclaude's `setup.sh` merge.
+
+3. Uploads go to `iv-prod-pro-uploads.s3.amazonaws.com` and exports come from `m.invideo.io`. In auto mode, pass the host in the Bash tool's `allowed_domains` on each `curl` call, which allows it for that call only. In any other mode, ask the user to add both to the project's allowed list in `.claude/settings.local.json`, as "Write the beats" says for any host, with a row in `ACCESS.md` if that file exists.
+
+**Before uploading,** ask whether the demo shows anything that must stay private, and ask the speaker before their voice goes up: every file goes to invideo.
+
+1. `new_project`, then `register` a name and pass it as `as` on every call, so your edits carry your own name. Give the user each URL you get back. When the user gives you a project or timeline URL instead, `register` there and work on it.
+2. `new_timeline` at the take's size and frame rate, unless the team already has one.
+3. For each file, `start_upload` returns a signed URL that carries a short-lived key. PUT the file with `curl -sS --fail -X PUT -H 'content-type: <type>' --data-binary @<file> '<url>'` (without `--fail`, an expired key's 403 still exits 0), with the file's own type (`video/mp4`, `audio/wav`). Then `add_media` with the `upload_id`. Read the media bin (`get_timeline`, `collection: asset`) before placing anything: uploads added in parallel are listed out of order. Export links are signed too and last a day. Keep both kinds of URL on the command line, never in a file.
+4. Every change to the timeline, from placing a clip to a fade, is an op sent with `edit_timeline`. Edit the timeline the team works on, so everyone sees one cut: read it before each edit, look up an op's fields with `timeline_catalog` before its first use, and send `dry_run` first. "Someone's edit landed since your read" means someone else changed it: read it again and rebuild the edit on what is there now. For a change the team may throw away, `timeline_history` with `action: create_branch` makes a branch with its own URL and state token; nothing measured here merges a branch back, so export from the branch the team picks.
+5. Place `demo/out/demo-voice.mp4` with `place_media` and `linked_audio` at frame 0: `voice.mjs` has already put the voice on its beats and checked it. With no voiceover, place `demo/out/demo.mp4`, which has no audio, so `check` fails on it until music or a voice is added. The times below assume the take starts at frame 0; on a timeline with something before it, add the frame where the take starts. To move one beat's voice by hand, unlink the voice from the picture (`unlink_clips`), cut the voice in the silence just before and just after that beat's speech (`split_clip`, one cut per call, since the right half gets a new id), and move that piece (`move_clip`) no further than the silence beside it. `ffmpeg -i demo/out/demo-voice.mp4 -vn -af silencedetect=noise=-30dB:d=0.1 -f null -` lists those silences in the take's own time. Don't cut at the beat's edges: beats touch, and the next beat's words can start right after the boundary, so a piece moved later writes over them. Listen after the move. A beat starts at its `start` minus `trim` in `demo/out/steps.json`, in seconds; times the take's fps gives frames, and invideo keeps fractional frames. To check one change fast, export only that stretch, as in step 7, with `start` and `end` in seconds. Don't upload the files in `demo/voice/` to place them one by one: they keep the silence `voice.mjs` trims, so each would land late.
+6. A title from `add_text` with `align: center` came out in the middle of the frame, over the app, and white text on a light page was hard to read. Move it off the controls with `set_position` and give it a `background_color` (both unmeasured), then look at a frame of it.
+7. `export` with `format: video`, `quality` set to the take's height, `fps` to its frame rate, and `encode_quality: best`, the only setting measured. Poll it with `status` until it completes, then `read` the URL `export` returned: the file's signed link is under `export.files`. Download it to a file of its own, such as `demo/out/edit.mp4`, so it doesn't overwrite the take: `curl -sS --fail -o <export> '<link>'` (`--fail` again, since a day-old link's 403 would otherwise be saved as the video). Then run `node demo/voice.mjs check <export>`. Look at frames from it as you would a take. When your part is done, `leave_timeline` takes your cursor off.
+
+**Measured.** Edits land to the frame: six clips placed at fractional frames came out within 3.5 ms of `voice.mjs`'s own build, and a beat's voice cut out of `demo-voice.mp4` and moved 12 frames came out 400 ms later, with its neighbours untouched. Exports show no watermark, cost no credits, come back with stereo audio and a BT.709 colour tag, and may lose the take's last frame (33 ms): a 508-frame take came back with 507, likely because invideo stored its length to the millisecond and rounded down, while a 180-frame one kept all. `check` still passes. A 3-minute export took between 34 and 126 s and downloaded in under 30 s, but one 17 s export took about 4 to 5 minutes (not timed closely), so leave time for a slow one. At `encode_quality: best`, busy footage came back at about 15 Mbit/s, so a 229 MB upload returned as 342 MB, while a 3-minute UI demo came back at 13 MB: under a file-size cap, re-encode with a higher `-crf`. **Unproven:** teammates editing from their own accounts, whether they see your cursor, the full connector, a lower `encode_quality`, and venue Wi-Fi speeds.
+
+**Stock music and footage** come from `search_library`, which is free. `add_media` with `stock` charges credits: a track quoted at 0.05 credits took 0.5. Ask the user before each one, and compare `credits_remaining` from `current_user` before and after. invideo licenses its stock and gives no licence text, so check `EVENT.md`'s "Third-party material" field first. An event that allows only freely available or openly licensed material rules it out: upload a file under such a licence instead, and note its source.
+
 ## Hand edits
 
-For anything `voice.mjs` doesn't do, such as dragging a clip by half a second, use a drag-and-drop video editor: Clipchamp comes with Windows 11, and Canva takes uploaded video and audio. Any editor that exports H.264 MP4 works. Don't build one.
+For anything `voice.mjs` and invideo don't do, use a drag-and-drop video editor: Clipchamp comes with Windows 11, and Canva takes uploaded video and audio in its own editor (its connector refuses them). Any editor that exports H.264 MP4 works. Don't build one.
 
-1. Import `demo/out/demo.mp4` and the files in `demo/voice/`. For a Windows app, copy them to a Windows folder first. Captions are in the picture already.
+1. Import `demo/out/demo.mp4`, or `demo/out/demo-voice.mp4`, which has the voice on its beats already. A file from `demo/voice/` keeps the silence before its speech that `voice.mjs` trims, so line up where its speech starts, not where the file starts. For a Windows app, copy them to a Windows folder first. Captions are in the picture already.
 2. Edit, then export at the take's size and frame rate.
 3. Run `node demo/voice.mjs check <export>`. It fails on the wrong size, frame rate or codec, and on missing or silent audio. It reports the length and doesn't judge it, since an edit may change it, so compare that with the limit in `EVENT.md`.
 
