@@ -3,7 +3,8 @@
 # the practices engine. It denies an edit once until the skill that owns its event is loaded
 # (L1), denies once per file on a high-precision bad pattern (L2), tells the model after a
 # commit what it added that a rule flags (L3s), denies a push once per new finding in what it
-# would send, denies a PR's ready once until a reviewer ran with the gate lines (L3r), denies a
+# would send, denies a PR's ready once until a reviewer ran with the gate lines (L3r), refuses it
+# every time until the PR body has a `Skipped:` line (SKIPPED-LINE), denies a
 # package install once per new package until its install scripts are read or turned off (SEC-64),
 # and after a compaction restates the loaded skills' must-hold lines (L4). Every settings.json
 # entry runs it behind `[ -f ]` and ends with `exit 0`, so a missing shim is silent, and a Bash call reaches

@@ -365,7 +365,9 @@ about 8 hours on a blocker fixed in another window 4 minutes later, while lane p
 merge that never needed the reinstall. So a stopped chain still sends step 6's messages, saying what
 stalled, and arms a wake on the blocker ("The lead", step 7, in `skills/lanes/SKILL.md`). A stop at
 step 1 reports the merge as unproven, since a lane's `merged #N` can be wrong, and a DA15/DA16
-refusal tells no lane to merge until Hayden rules: the shared git dir is the thing in doubt.
+refusal tells no lane to merge until Hayden rules: the shared git dir is the thing in doubt. A merged
+`Keep open:` lane hears "hold your pass" from a chain stopped before the reinstall, and the pass line
+once it has run; after the reinstall, the pass line comes with the stall named.
 
 ## One lead per main checkout (lane two-sessions, 2026-10-14)
 

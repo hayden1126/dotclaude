@@ -738,7 +738,7 @@ need nothing extra.
   `events.toml` naming the edits that are its event (a route handler, a server action, a data
   export) and a few high-precision bad patterns. The engine reads every installed skill's file,
   installed skills first and a project's after them, so a project's file can only add rules. It acts at
-  five levels, plus one rule of its own on installs:
+  five levels, plus two rules of its own, on installs and on PR bodies:
   - **L1:** an edit that is a skill's event is denied once until the skill is loaded in this
     context (a Skill call, or a Read of its SKILL.md since the last compaction). The deny carries
     the event's lines, and the resend passes.
@@ -754,6 +754,12 @@ need nothing extra.
     ran a reviewer agent whose brief carries the head commit's `[practices:review:<sha12>]`
     marker, so a review clears only the commit it judged. The deny holds the marker and the gate
     lines of every skill whose events the branch touched, ready to paste into that brief.
+  - **SKIPPED-LINE:** the same two calls are refused every time, not once, until the PR body has a
+    `Skipped:` line (`Skipped: nothing` passes), the block the `long-runs` skill describes. A
+    `ready` reads the body with `gh pr view`, run from `/` with a bare environment; a create reads
+    its own `--body` or `--body-file`. A body it can't read (an expansion, `--web`, gh failing or
+    taking over 3 s) passes, logged. It shares L3r's one deny, because when two hooks deny one call
+    Claude Code shows only the reason of the last to finish, and L3r's fires once.
   - **L4:** after a compaction, it re-injects the loaded skills' must-hold lines and asks Claude
     Code to reload the skill listing (`reloadSkills`).
   - **SEC-64:** a Bash call that adds a named package (`npm`, `pnpm`, `yarn` or `bun` add or
@@ -794,6 +800,16 @@ need nothing extra.
   session start names the error, and a deny whose resend couldn't pass (its state write failed,
   with no transcript to fall back on) is dropped and logged rather than repeated.
   Errors go to `$XDG_STATE_HOME/dotclaude/practices/errors.log`.
+- **PreToolUse(`Bash`): `long-runs-check.sh`** (in this repo). Sessions skip the `long-runs` skill
+  before heavy runs, so this denies once per session and compaction window until it is loaded, on
+  `lane trial`, `lane lock suite` or `gate`, a repo's own `[long_runs] gates` (argv prefixes, never
+  patterns) in `.claude/practices/config.toml`, or a second different whole test suite. A rerun
+  never counts, nor does a narrowed run (one file, `::`, `-k`, a name filter) or a look at the
+  runner (`--version`, `--collect-only`). `lane lock install` and subagents never fire it. A
+  replay over 45 days of real sessions put it at 36% of sessions that ran a gate or PR command.
+  It yields on any call the practices hook could deny, for the same two-denies reason.
+  `practices-gate off` covers it (rule id LONG-RUNS), it fails open, and its state sits beside the
+  practices engine's.
 - **PreToolUse(`Bash`): `delete-guard.sh`** (in this repo), for commands run with
   `dangerouslyDisableSandbox` only (the settings command skips Python for every other call).
   Inside the sandbox a delete reaches only the working directory and `$TMPDIR`; outside it reaches
