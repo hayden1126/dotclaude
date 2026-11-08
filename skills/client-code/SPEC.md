@@ -29,13 +29,13 @@ A repo that says nothing about its audience gets the gate. The gate costs a bann
 | push | The same scan on what a push would send, denied once per new finding | before the push |
 | L4 | The gate lines after a compaction, when the skill was loaded | SessionStart(compact) |
 
-**LEG-01** reads `.js`, `.jsx`, `.ts`, `.tsx`, `.html`, `.vue` and `.svelte`: `googletagmanager.com`, `gtag(`, `static.hotjar.com`, `hj(`, `clarity.ms`, `connect.facebook.net`, `fbq(`, `cdn.segment.com`, `posthog.init`, `Hotjar.init(`, `ReactGA.initialize(`, `<GoogleAnalytics` and `<GoogleTagManager`. `consent` or a word starting `accept`, in any case, anywhere in the file, excuses it. Cookieless Plausible is left out on purpose.
+**LEG-01** reads `.js`, `.jsx`, `.ts`, `.tsx`, `.html`, `.vue` and `.svelte`: `googletagmanager.com`, `gtag(`, `static.hotjar.com`, `hj(`, `clarity.ms`, `connect.facebook.net`, `fbq(`, `cdn.segment.com`, `posthog.init`, `Hotjar.init(`, `hotjar.initialize(`, `Clarity.init(`, `ReactGA.initialize(`, `<GoogleAnalytics` and `<GoogleTagManager`. `consent` or a word starting `accept`, in any case, anywhere in the file, excuses it. Cookieless Plausible is left out on purpose.
 
-**UX-63** reads `.tsx`, `.jsx`, `.vue` and `.svelte`: a bare or dotted call whose name starts `delete`, `remove` or `destroy` and an upper-case letter, the same name passed as a click or form handler, and `method: "DELETE"` in either quote. `.removeItem`, `.removeEventListener`, `.removeChild`, `.removeAttribute` and `.removeProperty` are left out, since they clean up the browser and delete nothing a user owns. `confirm`, `undo` (not `undone`), `alertdialog`, `<dialog` or `showModal`, in any case, anywhere in the file, excuses it.
+**UX-63** reads `.tsx`, `.jsx`, `.vue` and `.svelte`: a bare or dotted call whose name starts `delete`, `remove` or `destroy` and an upper-case letter, the same name passed by name as a click or submit handler or a form action, with `.bind(` too, and `method: "DELETE"` in either quote. `.removeItem`, `.removeEventListener`, `.removeChild`, `.removeAttribute` and `.removeProperty` are left out, since they clean up the browser and delete nothing a user owns. `confirm`, `undo` (not `undone`), `alertdialog`, `<dialog` or `showModal`, in any case, anywhere in the file, excuses it.
 
 Known misses:
-- **LEG-01:** a file holding `consent` or `accept` for another reason, Consent Mode included, whose tag has already loaded; a vendor not listed.
-- **UX-63:** a bare `.delete(`, since `Map`, `Set` and `URLSearchParams` use it, and with it `axios.delete(`; a delete under another name (`onDelete(id)`, `mutate(id)`); a delete in an `.html` or `.ts` file; a guard word used for something else (`confirmPassword`).
+- **LEG-01:** a file holding `consent` or `accept` for another reason, Consent Mode included, whose tag has already loaded; a vendor, or a vendor's form, not listed.
+- **UX-63:** a bare `.delete(`, since `Map`, `Set` and `URLSearchParams` use it, and with it `axios.delete(`; a delete under another name (`onDelete(id)`, `mutate(id)`); a delete in an `.html`, `.js` or `.ts` file, a `.js` component included, since plain `.js` is mostly server code; a guard word used for something else (`confirmPassword`).
 
 Accepted false matches, each costing one resend: a gate or confirm in another file or in words the pattern misses, a test file (a glob can't exclude), a comment naming a tracker, a function's own definition, and a cart's bare `removeItem(id)`-style call, `removeItemFromCart`, or `removeListener` cleanup.
 
@@ -70,6 +70,7 @@ What would revisit it: an eval of this skill where the deny arrives and the mode
 ## Unmeasured
 
 - Whether the skill and the denies improve the results: this file ships before that run.
+- LEG-04's input masking: no hook or oracle reads it, and the skill only says to keep it on.
 - Every tracker form but Google Analytics and Hotjar. The others come from each vendor's documentation, not from a run.
 - Whether "the repo says it has no EU or UK users" is read correctly from a repo's notes.
 

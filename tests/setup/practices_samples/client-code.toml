@@ -545,3 +545,104 @@ path = "lib/track.ts"
 content = '''
 ReactGA.initialize("G-1")
 '''
+
+# ---------------------------------------------------------------- review round 2
+
+[[sample]]
+kind = "rule"
+id = "UX-63"
+fires = true
+path = "app/T.tsx"
+content = '''
+<form action={deleteClient.bind(null, client.id)}><button>Delete</button></form>
+'''
+
+[[sample]]
+kind = "rule"
+id = "UX-63"
+fires = true
+path = "app/F.tsx"
+content = '''
+<form onSubmit={deleteClient}><button>Delete</button></form>
+'''
+
+[[sample]]
+kind = "rule"
+id = "UX-63"
+fires = true
+path = "src/A.vue"
+content = '''
+<form @submit.prevent="deleteClient"><button>Delete</button></form>
+'''
+
+[[sample]]
+kind = "rule"
+id = "UX-63"
+fires = true
+path = "src/B.vue"
+content = '''
+<button @click.prevent="deleteClient">Delete</button>
+'''
+
+[[sample]]
+kind = "rule"
+id = "UX-63"
+fires = true
+path = "src/C.vue"
+content = '''
+<button v-on:click="deleteClient">Delete</button>
+'''
+
+[[sample]]
+kind = "rule"
+id = "UX-63"
+fires = true
+path = "src/D.svelte"
+content = '''
+<button on:click|preventDefault={deleteClient}>Delete</button>
+'''
+
+[[sample]]
+kind = "rule"
+id = "UX-63"
+fires = true
+path = "a.tsx"
+content = '''
+const foundOrder = 1; deleteRow(id)
+'''
+
+[[sample]]
+kind = "rule"
+id = "UX-63"
+fires = false
+path = "a.tsx"
+content = '''
+deleteRow(id); showToast({ action: handleUndo })
+'''
+
+[[sample]]
+kind = "rule"
+id = "UX-63"
+fires = false
+path = "a.tsx"
+content = '''
+deleteRow(id); undoDelete()
+'''
+
+[[sample]]
+kind = "rule"
+id = "LEG-01"
+fires = true
+path = "a.ts"
+content = '''
+hotjar.initialize({ id: 1, sv: 6 })
+'''
+
+[[sample]]
+kind = "rule"
+id = "LEG-01"
+fires = true
+path = "a.ts"
+content = '''
+Clarity.init("abc")
+'''

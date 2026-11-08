@@ -8,7 +8,7 @@ description: Hayden's discipline for building web UIs that work on mobile and de
 Build web UIs that work on mobile and desktop the first time. Each rule is a scar from a real bug. (The client-specific gated single-file dashboard pattern that seeded these rules now lives with that project, in a project-scoped skill in its own repo.)
 - **Reference first:** point the agent at a design you like before building, since agents copy better than they invent.
 - **Polish values:** for animation and surface polish values, see `frontend-motion`.
-- **Trackers and destructive actions:** the consent gate and the confirm-or-undo rule are in `client-code`.
+- **Trackers and destructive actions:** in Claude Code, the consent gate and the confirm-or-undo rule are in `client-code`.
 - **Clickable design mocks:** in Claude Code, the layout, template and layout check are in `mocks`.
 
 ## Verify in a real browser, at both widths

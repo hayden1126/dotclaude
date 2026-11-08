@@ -14,7 +14,7 @@
 #
 # UX-63. Known misses: a bare `.delete(`, left out because Map, Set and URLSearchParams use it
 # (axios.delete too); a helper under another name (`onDelete(id)`, `mutate(id)`); a delete in
-# an .html file or a .ts helper; a file that holds a guard word for
+# an .html, .js or .ts file (a .js component too: plain .js is mostly server code here); a file that holds a guard word for
 # another reason (`confirmPassword`). Accepted false matches, each costing one resend: a confirm
 # in an imported component, a function's own definition, a cart's `removeItem`-style bare call,
 # `removeListener` and similar cleanup calls, a cart's `removeItemFromCart`.
@@ -23,8 +23,8 @@
 skill = "client-code"
 
 gate = [
-  "Build a consent gate by default for any tracker, unless the repo says it has no EU or UK users: nothing loads and no cookie is set before a stored accept, no choice and a reject leave it off, Accept and Reject are equally easy, session replay masks inputs; say so in your reply (LEG-01).",
-  "Build a confirm naming what goes, or an undo window, by default for any delete, remove or destroy action, even when the request names only the button; say so in your reply (UX-63).",
+  "Build a consent gate by default for any tracker, unless the repo says it has no EU or UK users: nothing loads and no cookie is set before a stored accept, no choice and a reject leave it off, Accept and Reject are equally easy, session replay keeps input masking on; say so in your reply (LEG-01).",
+  "Build a confirm naming what goes, or an undo window, by default for a delete, remove or destroy action on something a user would miss, even when the request names only the button; say so in your reply (UX-63).",
 ]
 
 [[rule]]
@@ -39,12 +39,12 @@ when = '''(?x)
   | cdn\.segment\.com
   | posthog\.init
   # A vendor's npm package, with no URL on the line.
-  | \bHotjar\.init\( | \bReactGA\.initialize\(
+  | \bHotjar\.init\( | \bhotjar\.initialize\( | \bClarity\.init\( | \bReactGA\.initialize\(
   # The @next/third-parties components have no URL on the line.
   | <GoogleAnalytics\b | <GoogleTagManager\b
 '''
 unless = '''(?i)consent|\baccept'''
-say = "This adds a tracker to a file with no consent gate. Build the gate by default and say so in your reply: nothing loads and no cookie is set until the visitor accepts, the choice is stored, no choice and a reject both leave it off, and Accept and Reject are equally easy. Session replay also masks inputs. Skip the gate only if the repo says it has no EU or UK users. If the gate is in another file, resend or add `practices-allow: LEG-01 <reason>`. A test or comment naming a tracker is a false match: resend."
+say = "This adds a tracker to a file with no consent gate. Build the gate by default and say so in your reply: nothing loads and no cookie is set until the visitor accepts, the choice is stored, no choice and a reject both leave it off, and Accept and Reject are equally easy. Session replay keeps input masking on. Skip the gate only if the repo says it has no EU or UK users. If the gate is in another file, resend or add `practices-allow: LEG-01 <reason>`. A test or comment naming a tracker is a false match: resend."
 
 [[rule]]
 id = "UX-63"
@@ -54,12 +54,15 @@ when = '''(?x)
   (?<![.\w])(?:delete|remove|destroy)[A-Z]\w*\s*\(
   # A method on something, with the browser's own cleanup calls left out.
   | \.(?!(?:removeItem|removeEventListener|removeChild|removeAttribute|removeProperty)\b)(?:delete|remove|destroy)[A-Z]\w*\s*\(
-  # A handler passed by name: React's onClick, action and formAction, Svelte's on:click and
-  # onclick, Vue's @click.
-  | \b(?:on[Cc]lick|on:click|action|formAction)\s*=\s*\{\s*(?:delete|remove|destroy)[A-Z]\w*\s*\}
-  | @click\s*=\s*["'](?:delete|remove|destroy)[A-Z]\w*["']
+  # A handler passed by name: React's onClick, onSubmit, action and formAction, Svelte's on:click
+  # and onclick, Vue's @click and v-on:click, with their modifiers.
+  | \b(?:on[Cc]lick|on[Ss]ubmit|action|formAction)\s*=\s*\{\s*(?:delete|remove|destroy)[A-Z]\w*\s*\}
+  | \bon:(?:click|submit)(?:\|\w+)*\s*=\s*\{\s*(?:delete|remove|destroy)[A-Z]\w*\s*\}
+  | (?:@|\bv-on:)(?:click|submit)(?:\.\w+)*\s*=\s*["'](?:delete|remove|destroy)[A-Z]\w*["']
+  # A server action given its row id.
+  | \b(?:delete|remove|destroy)[A-Z]\w*\.bind\(
   # A fetch that sends DELETE, inline or on its own line.
   | \bmethod\s*:\s*["'](?i:delete)["']
 '''
-unless = '''(?i)confirm|undo(?!ne)|alertdialog|<dialog|showModal'''
+unless = '''(?i)confirm|\bundo(?!ne)|undo\b|alertdialog|<dialog|showModal'''
 say = "This component deletes with no confirm or undo in the file, so one click destroys it. Build a confirm naming what goes, or an undo window, by default and say so in your reply, even when the request names only the button. If this flow already asks first, here or in another file, resend or add `practices-allow: UX-63 <reason>`. A call that deletes nothing a user would miss is a false match: resend."
