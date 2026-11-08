@@ -8,6 +8,7 @@ export default function Page() {
   const [later, setLater] = useState(false);
 
   useEffect(() => {
+    (window as unknown as { sawFirst: unknown }).sawFirst = (window as unknown as { ranFirst: unknown }).ranFirst;
     const el = document.createElement("script");
     el.textContent = "window.ranEffect = (window.ranEffect || 0) + 1;";
     document.body.appendChild(el);

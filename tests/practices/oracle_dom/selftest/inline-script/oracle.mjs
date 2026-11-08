@@ -10,6 +10,7 @@ await oracle(async (t) => {
   try {
     await dom.settle();
     t.functional("the first render's inline script ran once", (await dom.eval("window.ranFirst")) === 1, String(await dom.eval("window.ranFirst")));
+    t.functional("an effect sees what the inline script set", (await dom.eval("window.sawFirst")) === 1, String(await dom.eval("window.sawFirst")));
     t.functional("an effect's script ran once", (await dom.eval("window.ranEffect")) === 1, String(await dom.eval("window.ranEffect")));
     await dom.click("button");
     await dom.settle();

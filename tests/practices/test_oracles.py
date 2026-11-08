@@ -5441,7 +5441,9 @@ class ClientCodeCases(unittest.TestCase):
 
     @unittest.skipUnless(DOM_OK, NO_DOM)
     def test_delete_row_other_confirm_shapes(self):
-        self.assert_overlays("delete-row", "pass", "good-plain-modal", "good-continue", "good-negated-undo", "good-prompt-name", "good-prompt-delete")
+        self.assert_overlays("delete-row", "pass", "good-plain-modal", "good-continue", "good-negated-undo", "good-prompt-name", "good-prompt-delete",
+                             "good-native-dialog", "good-hidden-attr", "good-not-able-to-undo")
+        self.assert_overlays("delete-row", "broken", "broken-native-dialog")  # the confirm's own button has to send it
 
     @unittest.skipUnless(DOM_OK, NO_DOM)
     def test_save_state_other_error_shapes(self):
@@ -5449,8 +5451,8 @@ class ClientCodeCases(unittest.TestCase):
 
     @unittest.skipUnless(NODE, "node is not installed")
     def test_fonts_brand_loaders(self):
-        self.assert_overlays("fonts-brand", "pass", "good-local", "good-trailing-comment")
-        self.assert_overlays("fonts-brand", "broken", "broken-bare", "broken-no-file")
+        self.assert_overlays("fonts-brand", "pass", "good-local", "good-trailing-comment", "good-next-local")
+        self.assert_overlays("fonts-brand", "broken", "broken-bare", "broken-no-file", "broken-local-no-file")
 
     def test_fonts_brand_prompt_names_no_file(self):
         self.assertEqual((CASES / "fonts-brand/prompt.md").read_text().strip(), "Use Inter as the app's font.")
