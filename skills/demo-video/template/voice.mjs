@@ -65,6 +65,8 @@ const THIN_DB = 16; // A voice less than this over the room's noise is found, bu
 const RUN = 3; // Loud windows in a row that start or end the speech: a short word fills 3, a click under 0.05 s at most 2.
 const MARGIN_S = 0.1; // Kept around the speech.
 const SIDECAR = /:Zone\.Identifier$/; // Windows writes one beside a downloaded file copied to a Linux disk.
+const PARTS = '.parts.json'; // What each added part was recorded for, so a later take can't silently reuse it.
+const MOVED_S = 0.5; // A part whose beat moved or changed length more than this no longer fits.
 const FADE_S = 0.01; // Keeps a cut from clicking.
 const SLACK_S = 0.05;
 const LENGTH_SLACK_S = 0.1;
@@ -128,11 +130,9 @@ function speechIn(file) {
   const windows = windowsOf(file);
   const duration = windows.reduce((sum, window) => sum + window.Number_of_samples, 0) / RATE;
   if (!duration) throw new Error(`${shown(file)} has no audio in it`);
-  const peak = windows.reduce((most, window) => Math.max(most, window.Peak_level), -Infinity); // A spread fails past about an hour.
-  if (peak < TOO_QUIET_DB) {
-    throw new Error(`${shown(file)} is too quiet to be a voice (peak ${peak.toFixed(1)} dB): check the input device, its mute and its level`);
+  if (!windows.some(window => window.Peak_level >= TOO_QUIET_DB)) {
+    throw new Error(`${shown(file)} is too quiet to be a voice: check the input device, its mute and its level`);
   }
-  if (peak >= CLIPPED_DB) console.warn(`warning: ${shown(file)} clipped (peak ${peak.toFixed(1)} dB): turn the input down, or back off the microphone`);
   const levels = windows.map(window => window.RMS_level);
   // The room's noise, from windows with any sound in them: a recorder's opening zeros (-inf) aren't the room.
   const heard = levels.filter(Number.isFinite).sort((one, other) => one - other);
@@ -156,6 +156,12 @@ function speechIn(file) {
   // Grow outwards over soft sound joined to the speech, which the bar alone would cut.
   while (first > 0 && levels[first - 1] > softBar) first -= 1;
   while (last < levels.length - 1 && levels[last + 1] > softBar) last += 1;
+  // Judged on the speech kept, so a loud click that's trimmed off can't pass a voice that's too quiet.
+  const peak = windows.slice(first, last + 1).reduce((most, window) => Math.max(most, window.Peak_level), -Infinity);
+  if (peak < TOO_QUIET_DB) {
+    throw new Error(`${shown(file)} is too quiet to be a voice (peak ${peak.toFixed(1)} dB): check the input device, its mute and its level`);
+  }
+  if (peak >= CLIPPED_DB) console.warn(`warning: ${shown(file)} clipped (peak ${peak.toFixed(1)} dB): turn the input down, or back off the microphone`);
   if ((last + 1) * WINDOW_S >= duration - CUT_OFF_S) {
     console.warn(`warning: ${shown(file)} ends while the voice is still going: if the recording was cut off, record it again`);
   }
@@ -180,6 +186,29 @@ function voiceDir() {
   return path.join(path.dirname(OUT), 'voice' + name.slice('out'.length));
 }
 
+// What a part was recorded for: a clip, its beat's caption and length; a read, every caption and start.
+function fitFor(key, beats) {
+  if (key === 'all') return { captions: beats.map(beat => beat.caption), starts: beats.map(beat => beat.start) };
+  const { caption, start, end } = beats[key - 1];
+  return { caption, length: end - start };
+}
+
+function misfit(key, was, beats) {
+  const now = fitFor(key, beats);
+  if (key === 'all') {
+    if (JSON.stringify(was.captions) !== JSON.stringify(now.captions)) return 'the beats changed';
+    const moved = Math.max(...now.starts.map((start, index) => Math.abs(start - was.starts[index])));
+    return moved > MOVED_S ? `a beat moved ${moved.toFixed(1)} s` : null;
+  }
+  if (was.caption !== now.caption) return `beat ${key}'s caption changed`;
+  const change = now.length - was.length;
+  return Math.abs(change) > MOVED_S ? `beat ${key} is ${Math.abs(change).toFixed(1)} s ${change > 0 ? 'longer' : 'shorter'}` : null;
+}
+
+function readFits(dir) {
+  try { return JSON.parse(fs.readFileSync(path.join(dir, PARTS), 'utf8')); } catch { return {}; }
+}
+
 function readVoices(beats) {
   const dir = voiceDir();
   const names = fs.existsSync(dir) ? fs.readdirSync(dir, { withFileTypes: true }) : [];
@@ -198,6 +227,15 @@ function readVoices(beats) {
     voices.set(key, { name: entry.name, file: path.join(dir, entry.name) });
   }
   if (!voices.size) throw new Error(`no voice files in ${shown(dir)}: \`node ${shown(fileURLToPath(import.meta.url))} cues\` lists what to record`);
+  const fits = readFits(dir);
+  const stale = [];
+  for (const [key, voice] of voices) {
+    if (!fits[key]) console.warn(`warning: ${voice.name} wasn't added with add, so nothing says which take it was recorded for: listen`);
+    else if (misfit(key, fits[key], beats)) stale.push(`${voice.name} (${misfit(key, fits[key], beats)})`);
+  }
+  if (stale.length) {
+    throw new Error(`recorded for an earlier take: ${stale.join(', ')}. Record them again, or add the same file again to keep it as it is`);
+  }
   for (const voice of voices.values()) Object.assign(voice, speechIn(voice.file));
   return voices;
 }
@@ -285,9 +323,10 @@ async function build() {
   console.log(`${shown(RESULT)}: ${[...voices.values()].map(voice => voice.name).join(', ')} on ${length.toFixed(1)} s of take`);
 }
 
-// The app writes steps.json, so a caption is printed with no control characters: it can't move the
-// cursor, clear a line or start a line that passes for something else.
-const plain = text => String(text).replace(/[\u0000-\u001f\u007f-\u009f]+/g, ' ');
+// The app writes steps.json, so a caption is printed with no control, line-separator or direction
+// characters: it can't move the cursor, clear a line, reorder text or start a line that passes for
+// something else.
+const plain = text => String(text).replace(/[\u0000-\u001f\u007f-\u009f\u200e\u200f\u2028\u2029\u202a-\u202e\u2066-\u2069]+/g, ' ');
 
 // Prints no shell command. The person speaking runs the recording line outside the sandbox, and this
 // file sits in the project, where the sandboxed session or the app could change it, so the line lives
@@ -316,8 +355,7 @@ function add(part, file) {
   if (key === null || (key !== 'all' && (key < 1 || key > beats.length))) {
     throw new Error(`part is all, or a beat from 1 to ${beats.length}, not "${part}"`);
   }
-  const extension = path.extname(file).toLowerCase();
-  if (!extension) throw new Error(`${file} has no extension, so its format can't be told from its name`);
+  const extension = path.extname(file).toLowerCase() || '.audio'; // ffmpeg reads a file by its content.
   speechIn(path.resolve(file)); // Refuses a silent file now, not at the build.
   const sound = fs.readFileSync(file); // Read first: the file may be the one about to move aside.
   const dir = voiceDir();
@@ -329,6 +367,9 @@ function add(part, file) {
   }
   const target = path.join(dir, `${key}${extension}`);
   fs.writeFileSync(target, sound);
+  const fits = readFits(dir);
+  fits[key] = fitFor(key, beats);
+  fs.writeFileSync(path.join(dir, PARTS), JSON.stringify(fits, null, 1));
   console.log(`${shown(target)}: added, from ${file}`);
 }
 

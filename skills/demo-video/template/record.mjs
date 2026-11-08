@@ -312,7 +312,7 @@ function publish() {
   const voiced = path.join(OUT, 'demo-voice.mp4');
   if (fs.existsSync(voiced)) {
     fs.renameSync(voiced, path.join(OUT, 'demo-voice.prev.mp4'));
-    console.warn('this take replaced the one the voice was made for: moved it to demo-voice.prev.mp4, so run voice.mjs again');
+    console.warn('this take replaced the one the voice was made for: moved it to demo-voice.prev.mp4. Run voice.mjs again: it says which recordings no longer fit');
   }
 }
 
