@@ -1,6 +1,6 @@
 ---
 name: demo-video
-description: Record the product's scripted demo video once it is frozen. One command starts the app, drives it with human pacing, records and encodes. It makes the submission asset and the backup for a live demo, never the live demo itself.
+description: Record the product's scripted demo video once it is frozen. One command starts the app, drives it with human pacing, records and encodes, then can put a recorded voice on it. It makes the submission asset and the backup for a live demo, never the live demo itself.
 argument-hint: "[what the demo shows]"
 disable-model-invocation: true
 ---
@@ -40,7 +40,7 @@ Read `EVENT.md` at the project root: whether video is required, its length and f
 
 ## Run it
 
-Run `node demo/record.mjs` from the project root. Output lands in `demo/out/`: `demo.mp4`, `captions.srt` (a sidecar for players and upload forms) and `steps.json`.
+Run `node demo/record.mjs` from the project root. Output lands in `demo/out/`: `demo.mp4`, `captions.srt` (a sidecar for players and upload forms) and `steps.json`. A voiceover, if you add one, goes beside them as `demo-voice.mp4`.
 
 | Env | Does |
 |---|---|
@@ -50,7 +50,7 @@ Run `node demo/record.mjs` from the project root. Output lands in `demo/out/`: `
 | `OUT` | Output dir. Wins over all of these defaults. |
 | `SIZE=1280x720`, `FPS=24` | Override `beats.mjs` for one take; both size numbers even |
 
-A clip or a rehearsal never touches the full take in `demo/out/`. A good take replaces the last one in its own output dir and moves it to `demo.prev.mp4`, `captions.prev.srt` and `steps.prev.json`, one generation only, so copy a take you want to keep, or give each take its own `OUT`. A failed take leaves the last good one in place and says so.
+A clip or a rehearsal never touches the full take in `demo/out/`. A good take replaces the last one in its own output dir and moves it to `demo.prev.mp4`, `captions.prev.srt` and `steps.prev.json`, one generation only, so copy a take you want to keep, or give each take its own `OUT`. It also moves a `demo-voice.mp4` made for the old take to `demo-voice.prev.mp4`, replacing the one there. A failed take leaves the last good one in place and says so.
 
 ## Believe it only after looking
 
