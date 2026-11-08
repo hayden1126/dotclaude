@@ -1486,7 +1486,7 @@ def agent_diff(fixture, base, text=False):
 SUSPECT_WORDS = ("verdict", "stepResult", 'process.on("exit"', "process.on('exit'", "writeSync(1", "process.stdout.write",
                  "__oracleRecord", "__oracleLog", "__takeControls", "__actions", "__fetches", "__fonts", "__navigations",
                  "__errors", "__quiet", "__config", "__require", "__serverAction", "__mounted", "__mount", "__setActionMode",
-                 "__addFetchRule", "oracle.page.invalid", "oracle.actions.invalid", "oracle.log.invalid")
+                 "__addFetchRule", "__sent", "oracle.page.invalid", "oracle.actions.invalid", "oracle.log.invalid")
 
 
 def suspect_words(diff):

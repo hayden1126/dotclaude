@@ -7257,7 +7257,7 @@ class DomHarness(unittest.TestCase):
         self.assert_verdict(out, "broken")
         self.assertFalse(self.check(out, "functional: app/dom/page.tsx renders")["ok"])
 
-    def test_a_redirect_leaves_nothing_in_flight(self):
+    def test_a_request_to_an_hsts_host_ends(self):
         self.assert_verdict(self.dom_run("redirect"), "pass")
 
     def test_actions_read_right_after_a_click(self):

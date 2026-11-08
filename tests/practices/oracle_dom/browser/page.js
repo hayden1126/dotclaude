@@ -55,6 +55,7 @@
   var lastChange = now();
   var errors = [];
   var mountStatus = null;
+  var sent = 0; // requests post() started: only how long the oracle waits for them, never a count
 
   function deepFreeze(value) {
     if (value && typeof value === "object") {
@@ -118,6 +119,7 @@
     }
   }
   function post(url, text) {
+    sent++;
     var init = create(null);
     init.method = "POST";
     init.body = text;
@@ -141,6 +143,10 @@
     push(errors, "unhandled rejection: " + describe(e.reason));
   });
   defineProperty(window, "__errors", { get: function () { return parse(stringify(errors)); }, configurable: false, enumerable: false });
+
+  expose("__sent", function () {
+    return sent;
+  });
 
   // What settle() reads here: the time since the DOM last changed. What's in flight it knows itself.
   expose("__quiet", function () {

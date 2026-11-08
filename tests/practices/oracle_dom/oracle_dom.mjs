@@ -56,9 +56,16 @@ const POLYFILLED = new Set(["assert", "buffer", "constants", "crypto", "domain",
 
 const IMAGE = /\.(png|jpe?g|gif|webp|avif|ico|svg)$/i;
 const CLIENT = /^(?:\s|\/\/[^\n]*\n|\/\*[\s\S]*?\*\/)*["']use client["']/;
+// The React APIs Next refuses in a module with no "use client" above it, from memory of its
+// build rule (react_server_components in SWC), not read from its source, which isn't in this tree.
+const CLIENT_ONLY_REACT = new Set(["useState", "useEffect", "useLayoutEffect", "useInsertionEffect", "useReducer",
+  "useRef", "useImperativeHandle", "useDeferredValue", "useTransition", "useSyncExternalStore", "useOptimistic",
+  "useActionState", "createContext", "Component", "PureComponent"]);
 const MODES = new Set(["ok", "fail", "hang"]);
+const DIALOG_MODES = new Set(["accept", "dismiss"]);
 const DELAY_MS = 300; // a stubbed action's or fetch's round trip: long enough to see a pending state
 const STEP_MS = 5000; // the cap on any one wait; the whole oracle gets 60 s (run.py ORACLE_TIMEOUT)
+const WAIT_CAP_MS = 20000; // dom.wait(): room for an undo window, inside that budget
 const CHROME_FLAGS = [
   "--headless", "--no-sandbox", "--disable-gpu", "--disable-dev-shm-usage", "--remote-debugging-pipe",
   "--no-first-run", "--no-default-browser-check", "--host-resolver-rules=MAP * ~NOTFOUND",
@@ -217,6 +224,20 @@ function exportNames(file, src) {
   return names;
 }
 
+// The first client-only React API `src` imports by name, or null.
+// limit: a namespace import (React.useState) isn't seen, so such a page renders where Next refuses it.
+function clientOnlyImport(file, src) {
+  const sf = ts.createSourceFile(file, src, ts.ScriptTarget.ES2020, false, file.endsWith("x") ? ts.ScriptKind.TSX : ts.ScriptKind.TS);
+  for (const s of sf.statements) {
+    if (!ts.isImportDeclaration(s) || s.moduleSpecifier.text !== "react" || s.importClause?.isTypeOnly) continue;
+    const named = s.importClause?.namedBindings;
+    if (!named || !ts.isNamedImports(named)) continue;
+    const hit = named.elements.find((e) => !e.isTypeOnly && CLIENT_ONLY_REACT.has((e.propertyName ?? e.name).text));
+    if (hit) return (hit.propertyName ?? hit.name).text;
+  }
+  return null;
+}
+
 function isUseServer(file, src) {
   const first = ts.createSourceFile(file, src, ts.ScriptTarget.ES2020, false).statements[0];
   return Boolean(first && ts.isExpressionStatement(first) && ts.isStringLiteral(first.expression) && first.expression.text === "use server");
@@ -271,6 +292,8 @@ class Bundle {
       }));
     }
     const inClient = client || CLIENT.test(src);
+    const refused = inClient ? null : clientOnlyImport(file, src);
+    if (refused) throw new Missing(`${rel(file)} imports ${refused} from react with no "use client" above it: Next refuses to build this`);
     return this.add(`${inClient ? "client" : "server"}:${file}`, rel(file),
       () => this.scanned(transpile(file, src), (spec) => this.resolve(spec, file, inClient)));
   }
@@ -579,6 +602,9 @@ class DomSession {
   #hung = new Set(); // network ids of requests "hang" never answers
   #internal = []; // requests the oracle itself couldn't answer: its bug, not the page's
   #loaded = false; // the first document has been served
+  #dialogs = [];
+  #received = 0; // page.js's own requests that have reached the pause
+  #modeRules = []; // actionMode(RegExp), newest first
 
   constructor(chrome, sessionId, { targetId, token, served, opts, t, what }) {
     this.chrome = chrome;
@@ -593,13 +619,20 @@ class DomSession {
     this.actionResults = opts.actionResults ?? {};
     this.fetchRules = (opts.fetchModes ?? []).map(([match, spec]) => fetchRule(match, spec));
     this.delayMs = opts.delayMs ?? DELAY_MS;
+    this.dialog = { mode: opts.dialogMode ?? "dismiss", promptText: opts.promptText };
     this.cdp.on(({ method, params, sessionId: from }) => {
       if (from !== sessionId) return;
+      if (method === "Page.javascriptDialogOpening") {
+        // Chrome holds the renderer until this answer, which is what a click or an eval waits on
+        this.#dialogs.push({ type: params.type, message: params.message });
+        const { mode, promptText } = this.dialog;
+        this.send("Page.handleJavaScriptDialog", { accept: mode === "accept", ...(promptText === undefined ? {} : { promptText }) })
+          .catch((e) => this.#failed(e, null));
+        return;
+      }
       if (method === "Fetch.requestPaused") {
         this.#paused(params);
       } else if (method === "Network.requestWillBeSent") {
-        const redirected = params.redirectResponse && this.#byId.get(params.requestId);
-        if (redirected) Object.assign(redirected, { status: params.redirectResponse.status, done: true });
         const entry = { id: params.requestId, url: params.request.url, method: params.request.method, type: params.type ?? null, status: null, failed: false, error: null, done: false };
         this.#requests.push(entry);
         this.#byId.set(params.requestId, entry);
@@ -636,6 +669,22 @@ class DomSession {
         this.#lastAnswer = performance.now();
       });
     }, this.delayMs);
+  }
+
+  // A name's own entry, else the newest matching actionMode(RegExp), else "*", else ok.
+  #modeOf(name) {
+    if (Object.hasOwn(this.actionModes, name)) return this.actionModes[name];
+    const rule = this.#modeRules.find(({ pattern }) => {
+      pattern.lastIndex = 0;
+      return pattern.test(name);
+    });
+    if (rule) return rule.mode;
+    return Object.hasOwn(this.actionModes, "*") ? this.actionModes["*"] : "ok";
+  }
+
+  #resultOf(name) {
+    if (Object.hasOwn(this.actionResults, name)) return this.actionResults[name];
+    return Object.hasOwn(this.actionResults, "*") ? this.actionResults["*"] : undefined;
   }
 
   // An answer that failed: nothing to do when the request is gone; otherwise the oracle's own
@@ -686,6 +735,7 @@ class DomSession {
       };
       if (token !== this.token || rest.length || !kind) return tamper("not page.js's request: no token");
       if (frameId !== this.targetId) return tamper(`a request from frame ${frameId}, not the page's`);
+      this.#received++;
       let data;
       try {
         data = decode(JSON.parse(request.postData ?? "null"));
@@ -698,11 +748,11 @@ class DomSession {
         return this.#fulfill(requestId, 204, "", cors(request));
       }
       this.#log.action.push({ name: kind, args: data, t: performance.now() });
-      const mode = this.actionModes[kind] ?? "ok";
+      const mode = this.#modeOf(kind);
       if (mode === "hang") return this.#hung.add(networkId);
       return this.#later(() => (mode === "fail"
         ? this.#fulfill(requestId, 500, "server error", cors(request))
-        : this.#fulfill(requestId, 200, JSON.stringify({ value: this.actionResults[kind] ?? null }), [...cors(request), { name: "Content-Type", value: "application/json" }])));
+        : this.#fulfill(requestId, 200, JSON.stringify({ value: this.#resultOf(kind) }), [...cors(request), { name: "Content-Type", value: "application/json" }])));
     }
     const target = shown(url);
     const rule = this.fetchRules.find((r) => (r.regex ? new RegExp(r.regex, r.flags).test(target) : target.includes(r.match)));
@@ -732,9 +782,18 @@ class DomSession {
     }
   }
 
-  // A log as the oracle has it, after a round trip to the page.
+  // Until every action and report page.js has started has reached the pause: a request comes by
+  // way of the network service, so nothing orders it against an eval's answer. Capped, for a
+  // request that never arrives. It only sets how long a read waits, so a page gains nothing here.
+  // limit: the agent's own fetches have no such count; read fetches() after settle().
+  async #caughtUp() {
+    const deadline = performance.now() + 1000;
+    while (this.#received < await this.eval("window.__sent()") && performance.now() < deadline) await sleep(5);
+  }
+
+  // A log as the oracle has it, once page.js's requests so far have arrived.
   async #read(kind) {
-    await this.eval("0");
+    await this.#caughtUp();
     this.#report();
     return structuredClone(this.#log[kind]);
   }
@@ -771,9 +830,11 @@ class DomSession {
 
   // Until no answer is due and no request in flight (a hanging one excluded, as it never ends),
   // and the DOM has been still, and no answer has gone out, for `quiet` ms; then one more frame
-  // and the same test. Capped at `ms`. True when it settled.
+  // and the same test. Capped at `ms`, at most 5 s (more throws). True when it settled. It doesn't
+  // see the page's timers: a delayed delete or an undo window needs wait().
   async settle({ ms = STEP_MS, quiet = 100 } = {}) {
-    const deadline = performance.now() + Math.min(ms, STEP_MS);
+    if (ms > STEP_MS) throw new Error(`settle: ${ms} ms is over its ${STEP_MS} ms cap; wait() covers a longer delay`);
+    const deadline = performance.now() + ms;
     const still = async () => {
       const { quietMs } = await this.eval("window.__quiet()");
       const inFlight = this.#requests.some((r) => !r.done && /^https?:/.test(r.url) && !this.#hung.has(r.id));
@@ -787,6 +848,12 @@ class DomSession {
       if (performance.now() >= deadline) return false;
       await sleep(25);
     }
+  }
+
+  // A plain delay, for what settle() can't see (a page's timers), up to WAIT_CAP_MS (more throws).
+  async wait(ms) {
+    if (ms > WAIT_CAP_MS) throw new Error(`wait: ${ms} ms is over its ${WAIT_CAP_MS} ms cap`);
+    await sleep(ms);
   }
 
   // Real mouse input at the element's center: count 2 is a double click, two presses and releases
@@ -879,10 +946,30 @@ class DomSession {
     return this.eval("window.__errors");
   }
 
-  // Server action `name` answers by `mode` from now on; the oracle holds it, not the page.
+  // Every confirm, alert and prompt the page opened, answered or not yet: {type, message}.
+  async dialogs() {
+    await this.eval("0");
+    return structuredClone(this.#dialogs);
+  }
+
+  // True when an uncaught render error unmounted the root: errors() non-empty and #root empty.
+  // A page the stub's contract broke (a throw it had no boundary for) can score unresolved.
+  crashed() {
+    return this.eval("window.__errors.length > 0 && !document.getElementById('root').hasChildNodes()");
+  }
+
+  // The server action `name`, or every name a RegExp matches, or "*" (any name without its own
+  // entry) answers by `mode` from now on; the oracle holds it, not the page.
   async actionMode(name, mode) {
     if (!MODES.has(mode)) throw new Error(`actionMode: ${mode} is not one of ${[...MODES].join(", ")}`);
-    this.actionModes[name] = mode;
+    if (name instanceof RegExp) this.#modeRules.unshift({ pattern: name, mode });
+    else this.actionModes[name] = mode;
+  }
+
+  // How the next dialog is answered: "accept" or "dismiss", the default, with `promptText` for a prompt.
+  async dialogMode(mode, promptText = undefined) {
+    if (!DIALOG_MODES.has(mode)) throw new Error(`dialogMode: ${mode} is not one of ${[...DIALOG_MODES].join(", ")}`);
+    this.dialog = { mode, promptText };
   }
 
   // Requests whose URL contains `match` (a string) or matches it (a RegExp) answer by `spec`:
@@ -926,10 +1013,20 @@ const UNRESOLVED_WHY = {
 // doesn't exist or has no default export throws Missing (broken); one that throws on its first
 // render scores broken; an async server component that reaches server-only code, or throws when
 // awaited, scores unresolved. `oracleUrl` (the oracle's import.meta.url) names the scratch dir.
-// Options: props, actionModes {name: mode}, actionResults {name: value}, fetchModes [[match, spec]],
-// pathname, search and params for next/navigation and the page's props, delayMs for a stubbed
-// round trip (default DELAY_MS). The caller closes the session; an exit without that still
-// kills Chrome. ORACLE_CHROME names the headless shell.
+// Options: props, actionModes {name: mode}, actionResults {name: value} (key "*" in either applies
+// to any name without its own entry), fetchModes [[match, spec]], pathname, search and params for
+// next/navigation and the page's props, delayMs for a stubbed round trip (default DELAY_MS),
+// dialogMode ("accept" or "dismiss", the default) and promptText for confirm, alert and prompt
+// (mount included), storage {local: {...}, session: {...}} written before the bundle runs. The
+// caller closes the session; an exit without that still kills Chrome. ORACLE_CHROME names the
+// headless shell.
+//
+// The server action contract: an agent's action body never runs here, only its name and arguments
+// reach the oracle, so a case must pin the action (a fixture-supplied action with a fixed name) or
+// grade over a fetch rule, or use "*" for a name it can't know. `fail` means the promise rejects,
+// as a thrown server action does in Next; a returned-error shape is actionResults[name]. A
+// page with no error boundary for that rejection unmounts: crashed() tells a case so, to score
+// unresolved rather than misjudge a page the stub's contract broke.
 export async function openDom(t, oracleUrl, opts) {
   const entryFile = findFile(path.join(FIXTURE, opts.entry));
   if (!entryFile) throw new Missing(`no ${opts.entry}`);
@@ -938,6 +1035,7 @@ export async function openDom(t, oracleUrl, opts) {
   for (const mode of Object.values(opts.actionModes ?? {})) {
     if (!MODES.has(mode)) throw new Error(`actionModes: ${mode} is not one of ${[...MODES].join(", ")}`);
   }
+  if (opts.dialogMode !== undefined && !DIALOG_MODES.has(opts.dialogMode)) throw new Error(`dialogMode: ${opts.dialogMode} is not one of ${[...DIALOG_MODES].join(", ")}`);
 
   const caseName = path.basename(path.dirname(fileURLToPath(oracleUrl)));
   const dir = mkdtempSync(path.join(process.env.TMPDIR ?? FIXTURE, `oracle-dom-${caseName}-`));
@@ -983,6 +1081,12 @@ export async function openDom(t, oracleUrl, opts) {
     const loaded = cdp.waitFor("load event", ({ method, sessionId: from }) => (method === "Page.loadEventFired" && from === sessionId ? true : undefined));
     await session.send("Page.navigate", { url: `${PAGE_ORIGIN}/index.html` });
     await loaded;
+    if (opts.storage) {
+      await session.call(`(storage) => {
+        for (const [key, value] of Object.entries(storage.local ?? {})) localStorage.setItem(key, String(value));
+        for (const [key, value] of Object.entries(storage.session ?? {})) sessionStorage.setItem(key, String(value));
+      }`, opts.storage);
+    }
     // The control, taken while only config.js and page.js have run; start loads the bundle.
     const { result } = await session.send("Runtime.evaluate", { expression: "window.__takeControls()" });
     session.controls = result.objectId;
