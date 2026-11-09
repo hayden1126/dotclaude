@@ -69,7 +69,7 @@ What would revisit it: an eval of this skill where the deny arrives and the mode
 
 ## Unmeasured
 
-- Whether the skill and the denies improve the results: this file ships before that run.
+- What the denies add on their own. In the eval, the skill took each target from a fail in every no-skill run to 0 fails in 5, on Haiku, Sonnet and Opus 5.5, with and without the hook and after a compaction, and the hook denied nothing.
 - LEG-04's input masking: no hook or oracle reads it, and the skill only says to keep it on.
 - Every tracker form but Google Analytics and Hotjar. The others come from each vendor's documentation, not from a run.
 - Whether "the repo says it has no EU or UK users" is read correctly from a repo's notes.
