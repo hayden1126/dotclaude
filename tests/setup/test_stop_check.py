@@ -31,7 +31,8 @@ OLD = "9e8d7c6b-aaaa-bbbb-cccc-ddddeeeeffff"
 
 
 def load():
-    spec = importlib.util.spec_from_file_location("stop_check", os.path.join(HOOKS, "stop_check.py"))
+    spec = importlib.util.spec_from_file_location("stop_check",
+                                                  os.path.join(HOOKS, "stop_check.py"))
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     return mod

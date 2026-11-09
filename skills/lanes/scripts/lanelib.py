@@ -2181,6 +2181,127 @@ def lane_sid(sid, path: str, files: list[dict]) -> bool:
                for t in glob.glob(os.path.join(config_dir(), "projects", "*", sid + ".jsonl")))
 
 
+# ---- what an idle session last said (lane stop-check) ----------------------------------------
+# The board's `stalled` and `unanswered` flags and `lane asks`'s chat waits read a session's last
+# reply from the stop record hooks/stop_ring.py writes at every Stop (stops/<session>.json, its
+# `replies`), and its transcript's tail. Neither is stored by the lanes CLI (invariant 4).
+STOP_RECORD_MAX = 1024 * 1024      # stop_ring caps replies at 128 KiB; the rest is small
+TRANSCRIPT_TAIL = 256 * 1024       # bytes of a transcript's end read for `unanswered`
+UNANSWERED_GRACE = 120             # seconds a prompt may wait before an idle session's status
+# A wait the reply names: a line opening "Waiting on" or "Waiting for" (after markup), the line
+# hooks/stop_check.py lets a turn end on. One naming Hayden is an ask of his.
+WAIT_LINE = re.compile(r"^[\W_]*waiting (on|for)\b", re.IGNORECASE | re.MULTILINE)
+HAYDEN_WAIT = re.compile(r"^[\W_]*waiting on (you|hayden)\b[\W_]*(.*)$", re.IGNORECASE)
+BULLET = re.compile(r"^\s*(?:[-*+]|\d+[.)])\s+(.*\S)")
+PROMPT_KINDS = ("human", "peer", "task-notification")
+
+
+def stop_record(sid) -> dict | None:
+    """The session's stop record (stops/<sid>.json), or None."""
+    if not isinstance(sid, str) or not SID.fullmatch(sid):
+        return None
+    raw = read_head(os.path.join(state_dir(), "stops", sid + ".json"), STOP_RECORD_MAX)
+    try:
+        rec = json.loads(raw) if raw else None
+    except (ValueError, RecursionError):
+        return None
+    return rec if isinstance(rec, dict) else None
+
+
+def last_reply(rec) -> str | None:
+    """The newest reply's text in a stop record. stop_ring keeps a reply's first 64 KiB, so a
+    longer one loses its end, and any wait line there (a known limit)."""
+    replies = rec.get("replies") if isinstance(rec, dict) else None
+    last = replies[-1] if isinstance(replies, list) and replies else None
+    text = last.get("text") if isinstance(last, dict) else None
+    return text if isinstance(text, str) else None
+
+
+def names_wait(text) -> bool:
+    return isinstance(text, str) and bool(WAIT_LINE.search(text))
+
+
+def hayden_waits(text) -> list[str]:
+    """The items of the reply's last Waiting on you (or Waiting on Hayden) list: the text after
+    the heading on its own line, then each bullet after it, up to the first other line."""
+    lines = text.splitlines() if isinstance(text, str) else []
+    start = next((i for i in range(len(lines) - 1, -1, -1) if HAYDEN_WAIT.match(lines[i])), None)
+    if start is None:
+        return []
+    rest = HAYDEN_WAIT.match(lines[start]).group(2).strip(" *_:")
+    items = [rest] if rest else []
+    for line in lines[start + 1:]:
+        if not line.strip() and not items:
+            continue
+        m = BULLET.match(line)
+        if not m:
+            break
+        items.append(m.group(1).strip())
+    return items
+
+
+def read_tail(path, limit: int) -> bytes | None:
+    """Up to the last limit bytes of a regular file, or None (read_head's rules)."""
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW | os.O_CLOEXEC)
+    except (OSError, TypeError, ValueError):
+        return None
+    try:
+        st = os.fstat(fd)
+        if not stat.S_ISREG(st.st_mode):
+            return None
+        os.lseek(fd, max(0, st.st_size - limit), os.SEEK_SET)
+        chunks, left = [], limit
+        while left > 0 and (chunk := os.read(fd, left)):
+            chunks.append(chunk)
+            left -= len(chunk)
+        data = b"".join(chunks)
+        return data.split(b"\n", 1)[1] if st.st_size > limit and b"\n" in data else data
+    except OSError:
+        return None
+    finally:
+        os.close(fd)
+
+
+def transcript_for(sid, rec) -> str | None:
+    """The session's transcript: the stop record's transcript_path, else the one
+    <config>/projects/*/<sid>.jsonl (a session that never stopped has no stop record)."""
+    tp = rec.get("transcript_path") if isinstance(rec, dict) else None
+    if isinstance(tp, str) and tp:
+        return tp
+    if not isinstance(sid, str) or not SID.fullmatch(sid):
+        return None
+    found = glob.glob(os.path.join(config_dir(), "projects", "*", sid + ".jsonl"))
+    return found[0] if len(found) == 1 else None
+
+
+def unanswered(path, now: float) -> bool:
+    """Whether the transcript's last main-chain user or assistant entry is a prompt (typed, a
+    peer's message, a task notice) at least UNANSWERED_GRACE old, with no reply after it. A
+    compaction summary, a tool result, an interrupt or a local command's echo is no prompt."""
+    raw = read_tail(path, TRANSCRIPT_TAIL)
+    for line in reversed((raw or b"").splitlines()):
+        try:
+            d = json.loads(line)
+        except (ValueError, RecursionError):
+            continue
+        if not isinstance(d, dict) or d.get("isSidechain"):
+            continue
+        if d.get("type") == "system" and d.get("subtype") == "compact_boundary":
+            return False
+        if d.get("type") == "assistant":
+            return False
+        if d.get("type") != "user":
+            continue
+        origin = d.get("origin")
+        if d.get("isCompactSummary") or not isinstance(origin, dict) \
+                or origin.get("kind") not in PROMPT_KINDS:
+            return False
+        when = parse_iso(d.get("timestamp"))
+        return when is not None and now - when >= UNANSWERED_GRACE
+    return False
+
+
 # ---- the lead -------------------------------------------------------------------------------
 # The lead is the main-checkout session that last acted as lead (a bare `lane init`, `new`,
 # `adopt`, `open` or `done`, or `lane lead`), recorded at Repo.lead_path. `lane addr lead`, the
