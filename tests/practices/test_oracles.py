@@ -3609,8 +3609,12 @@ class RunHarness(unittest.TestCase):
         clean = [use("Read", {"file_path": f"{own}/.claude/skills/server-code/SKILL.md"}), use("Grep", {"path": "app/"}),
                  use("Bash", {"command": "cat .claude/skills/auth-secrets/SKILL.md"}),
                  # the fixture's own test dirs (fixture/tests/helpers.ts) never count
-                 use("Bash", {"command": f"ls {tmp}/ledgerly-test-abc123 && sqlite3 {tmp}/ledgerly-test-abc123/test.db .tables"})]
+                 use("Bash", {"command": f"ls {tmp}/ledgerly-test-abc123 && sqlite3 {tmp}/ledgerly-test-abc123/test.db .tables"}),
+                 # a prompt quoted into a subagent ends its sentence on the fixture path
+                 use("Agent", {"prompt": f"Add analytics to the app in {own}."})]
         self.assertEqual(r.contamination([clean], own), [])
+        self.assertEqual(r.contamination([[use("Agent", {"prompt": f"Compare with {tmp}/{p}other."})]], own),
+                         [os.path.join(tmp, f"{p}other")])
         dirty = [use("Read", {"file_path": "/home/someone/.claude/skills/server-code/SKILL.md"}),
                  use("Bash", {"command": f"ls ../{p}other/app && cat {tmp}/{p}third/lib/auth.ts"}),
                  use("Glob", {"pattern": "**/SKILL.md", "path": "/opt/x"})]

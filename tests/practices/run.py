@@ -1537,6 +1537,7 @@ def contamination(events_by_turn, fixture, tmp=None):
                 texts += [os.path.join(inp["path"], inp[k]) for k in ("pattern", "glob") if isinstance(inp.get(k), str)]
             for text in texts:
                 for token in PATH_TOKEN.findall(text):
+                    token = token.rstrip(".:!?")  # a prose path ends a sentence: "... in /tmp/ledgerly-app-x."
                     if not (".claude/skills" in token or "SKILL.md" in token or FIXTURE_PREFIX in token):
                         continue
                     full = os.path.normpath(os.path.join(fixture, os.path.expanduser(token)))
