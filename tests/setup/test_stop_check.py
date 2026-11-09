@@ -112,6 +112,12 @@ class Rules(unittest.TestCase):
         """Drop the block-once record, so the next case of a test may block again."""
         shutil.rmtree(os.path.join(self.state, "dotclaude", "stop-check"), True)
 
+    def payload(self, last="Step 1 is committed.", **extra):
+        return {"session_id": SID, "prompt_id": PID, "transcript_path": self.transcript,
+                "hook_event_name": "Stop", "stop_hook_active": False,
+                "permission_mode": "auto", "last_assistant_message": last,
+                "background_tasks": [], **extra}
+
     def decide(self, last="Step 1 is committed.", lane="alpha", **extra):
         payload = {"session_id": SID, "prompt_id": PID, "transcript_path": self.transcript,
                    "hook_event_name": "Stop", "stop_hook_active": False,
@@ -172,14 +178,20 @@ class Rules(unittest.TestCase):
     def test_a_meta_reminder_ahead_of_the_starting_entry_is_passed_over(self):
         self.entries(reminder(), notice(), say())
         self.assertBlocks(self.decide())
+        self.forget()
         self.entries(reminder(), typed(), say())
-        self.assertIsNone(self.decide())
+        self.assertEqual(sc.explain(self.payload(), "alpha")[1], "hayden")
 
     def test_a_typed_slash_command_is_hayden_s(self):
-        self.entries({"type": "user", "promptId": PID, "message": {"role": "user", "content":
-                      "<command-message>review</command-message>\n<command-name>/review"
-                      "</command-name>"}}, say())
+        slash = {"type": "user", "promptId": PID, "message": {"role": "user", "content":
+                 "<command-message>review</command-message>\n<command-name>/review"
+                 "</command-name>"}}
+        self.entries(slash, say())
         self.assertIsNone(self.decide())
+        # a notice later in the same turn doesn't make it someone else's
+        self.entries(slash, use("t1", "Agent", prompt="x"), result("t1", "launched"), notice(),
+                     say())
+        self.assertEqual(sc.explain(self.payload(), "alpha")[1], "hayden")
 
     def test_only_the_current_turn_counts(self):
         self.entries(typed("go", pid=OLD), use("t0", "SendMessage", to="uds:/tmp/lead.sock",
@@ -322,8 +334,12 @@ class Shim(LanesRepo):
         super().setUp()
         self.lane("new", "alpha")
         self.transcript = os.path.join(self.tmp, SID + ".jsonl")
+        self.launched(self.lane_path("alpha"))
+
+    def launched(self, cwd):
+        """The transcript, its first entry recording the session's launch dir as cwd."""
         with open(self.transcript, "w") as f:
-            for r in (notice(), say()):
+            for r in (dict(notice(), cwd=cwd), say()):
                 f.write(json.dumps(r, separators=(",", ":")) + "\n")
 
     def fire(self, cwd, raw=None, env=None, **extra):
@@ -351,8 +367,17 @@ class Shim(LanesRepo):
         self.assertTrue(out["reason"].startswith(sc.MARKER))
 
     def test_the_main_checkout_and_a_plain_dir_never_block(self):
-        self.assertIsNone(self.fire(self.main))
-        self.assertIsNone(self.fire(self.tmp))
+        for cwd in (self.main, self.tmp):
+            with self.subTest(cwd=cwd):
+                self.launched(cwd)
+                self.assertIsNone(self.fire(cwd))
+
+    def test_the_launch_dir_decides_not_a_later_cd(self):
+        # a Bash `cd` moves the payload's cwd: the lead cd'd into a lane is still the lead
+        self.launched(self.main)
+        self.assertIsNone(self.fire(self.lane_path("alpha")))
+        self.launched(self.lane_path("alpha"))
+        self.assertEqual(self.fire(self.main)["decision"], "block")
 
     def test_an_unattended_session_never_blocks(self):
         self.assertIsNone(self.fire(self.lane_path("alpha"),

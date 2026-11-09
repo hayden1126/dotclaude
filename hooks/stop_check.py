@@ -8,8 +8,9 @@ through the record's Asks and a Waiting on you list, or send the lead `park me`)
 
 The stop passes (prints nothing) when any of these holds, checked in this order:
 1. It isn't a lane's main thread: a subagent's stop (a top-level agent_id), an unattended
-   session (CLAUDE_CODE_SESSION_ATTENDED=0: `claude -p` or `--bg`, which no one reads), or a cwd
-   that lanelib doesn't resolve to a registered lane (the main checkout, a plain dir, any error).
+   session (CLAUDE_CODE_SESSION_ATTENDED=0: `claude -p` or `--bg`, which no one reads), or a
+   launch dir (the transcript's first cwd, not the payload's, which a Bash `cd` moves) that
+   lanelib doesn't resolve to a registered lane (the main checkout, a plain dir, any error).
 2. This turn was blocked already: stop_hook_active, or this hook's record names the payload's
    prompt_id (a blocked stop and the stop of the turn it continues share it). Never loops.
 3. Plan mode: the session can't act until Hayden approves anyway.
@@ -97,14 +98,17 @@ def log(line: str) -> None:
         pass
 
 
-def lane_of(cwd) -> str | None:
-    """The id of the registered lane cwd is in, else None (any failure included)."""
-    if not isinstance(cwd, str) or not os.path.isdir(cwd):
-        return None
+def lane_of(transcript) -> str | None:
+    """The id of the registered lane the session was launched in, else None (any failure
+    included). The launch dir is the transcript's first recorded cwd: the payload's cwd follows
+    a Bash `cd`, so a lead that cd'd into a lane would read as that lane."""
     if SCRIPTS not in sys.path:
         sys.path.insert(0, SCRIPTS)
     try:
         import lanelib
+        cwd = lanelib.transcript_cwd(transcript) if isinstance(transcript, str) else None
+        if not isinstance(cwd, str) or not os.path.isdir(cwd):
+            return None
         repo = lanelib.resolve(cwd)
         if repo is None:
             return None
@@ -182,13 +186,17 @@ def hayden_started(rows, calls) -> bool:
     typed), or the turn starts with a typed slash command, and no plan was approved in it."""
     if any(name == "ExitPlanMode" and ok for name, _, ok in calls):
         return False
-    users = [d for d in rows if d.get("type") == "user" and not blocks(d, "tool_result")]
-    start = next((d for d in users if isinstance(d.get("origin"), dict)), None)
-    if start is not None:
-        return (start["origin"].get("kind") == "human"
-                and not text_of(start).lstrip().startswith(MACHINE_PROMPTS))
-    first = next((d for d in users if not d.get("isMeta")), None)
-    return first is not None and text_of(first).lstrip().startswith(SLASH)
+    # The start: the turn's first user entry that isn't a tool result or an injected
+    # reminder (isMeta with no origin). A typed slash command has no origin, and a task notice
+    # later in the same turn mustn't take its place.
+    start = next((d for d in rows if d.get("type") == "user" and not blocks(d, "tool_result")
+                  and (isinstance(d.get("origin"), dict) or not d.get("isMeta"))), None)
+    if start is None:
+        return False
+    text = text_of(start).lstrip()
+    if isinstance(start.get("origin"), dict):
+        return start["origin"].get("kind") == "human" and not text.startswith(MACHINE_PROMPTS)
+    return text.startswith(SLASH)
 
 
 def waiting_tasks(tasks) -> list:
@@ -286,8 +294,8 @@ def main() -> None:
         payload = json.loads(sys.stdin.read() or "{}")
         if os.environ.get("CLAUDE_CODE_SESSION_ATTENDED") == "0" or not isinstance(payload, dict):
             return
-        out = decide(payload, lane_of(payload.get("cwd")) if not payload.get("agent_id")
-                     else None)
+        out = decide(payload, lane_of(payload.get("transcript_path"))
+                     if not payload.get("agent_id") else None)
         if out is not None:
             print(json.dumps(out), flush=True)
     except Exception:

@@ -2192,7 +2192,7 @@ UNANSWERED_GRACE = 120             # seconds a prompt may wait before an idle se
 # hooks/stop_check.py lets a turn end on. One naming Hayden is an ask of his.
 WAIT_LINE = re.compile(r"^[\W_]*waiting (on|for)\b", re.IGNORECASE | re.MULTILINE)
 HAYDEN_WAIT = re.compile(r"^[\W_]*waiting on (you|hayden)\b[\W_]*(.*)$", re.IGNORECASE)
-BULLET = re.compile(r"^\s*(?:[-*+]|\d+[.)])\s+(.*\S)")
+WAIT_ITEM = re.compile(r"^\s*(?:[-*+]|\d+[.)])\s+(.*\S)")  # never BULLET: next_items has it
 PROMPT_KINDS = ("human", "peer", "task-notification")
 
 
@@ -2209,11 +2209,19 @@ def stop_record(sid) -> dict | None:
 
 
 def last_reply(rec) -> str | None:
-    """The newest reply's text in a stop record. stop_ring keeps a reply's first 64 KiB, so a
-    longer one loses its end, and any wait line there (a known limit)."""
+    """The text of the session's last turn, or None. stop_ring adds no reply for a Stop with no
+    text, so the newest reply is the last turn's only when it carries the record's own time
+    (stop_ring stamps both from one clock read); otherwise it is an earlier turn's, and stale.
+    stop_ring keeps a reply's first 64 KiB, so a longer one loses its end, and any wait line
+    there (a known limit)."""
     replies = rec.get("replies") if isinstance(rec, dict) else None
     last = replies[-1] if isinstance(replies, list) and replies else None
     text = last.get("text") if isinstance(last, dict) else None
+    at, when = rec.get("time") if isinstance(rec, dict) else None, \
+        last.get("time") if isinstance(last, dict) else None
+    if not (isinstance(at, (int, float)) and isinstance(when, (int, float))
+            and abs(at - when) < 1e-3):
+        return None
     return text if isinstance(text, str) else None
 
 
@@ -2233,7 +2241,7 @@ def hayden_waits(text) -> list[str]:
     for line in lines[start + 1:]:
         if not line.strip() and not items:
             continue
-        m = BULLET.match(line)
+        m = WAIT_ITEM.match(line)
         if not m:
             break
         items.append(m.group(1).strip())

@@ -47,9 +47,11 @@ class Idle(LanesRepo):
         with open(path, "w") as f:
             f.write(new)
 
-    def stop_record(self, sid, reply, transcript=None, age=30):
+    def stop_record(self, sid, reply, transcript=None, age=30, later_stop=False):
+        """stop-ring's record; later_stop: its newest Stop came after the reply (a turn that
+        ended with no text, which stop_ring doesn't add to replies)."""
         at = time.time() - age  # wall clock
-        rec = {"session_id": sid, "time": at, "waits": [], "tasks": [],
+        rec = {"session_id": sid, "time": at + (60 if later_stop else 0), "waits": [], "tasks": [],
                "replies": [{"prompt_id": "p1", "text": reply, "time": at}]}
         if transcript:
             rec["transcript_path"] = transcript
@@ -148,6 +150,20 @@ class Stalled(Idle):
         self.git("update-ref", f"refs/remotes/origin/{branch}", head)
         self.assertNotIn("stalled", self.flags()[0])
 
+    def test_a_push_to_another_remote_counts_too(self):
+        branch = self.lane_json(LANE)["branch"]
+        head = self.git("rev-parse", "HEAD", cwd=self.path).strip()
+        self.env["FAKE_GH_OUT"] = json.dumps([{"number": 5, "state": "OPEN",
+                                               "headRefName": branch, "mergedAt": None,
+                                               "createdAt": "2026-11-01T00:00:00Z"}])
+        self.git("update-ref", f"refs/remotes/fork/{branch}", head)
+        self.assertNotIn("stalled", self.flags()[0])
+
+    def test_a_wait_from_an_earlier_turn_does_not_count(self):
+        # turn 1 ended on a wait; turn 2 ended with no text, which stop_ring doesn't record
+        self.stop_record("s-1", "Waiting on lane api-docs: its release.", later_stop=True)
+        self.assertIn("stalled", self.flags()[0])
+
 
 class Unanswered(Idle):
     def setUp(self):
@@ -173,6 +189,9 @@ class Unanswered(Idle):
                            {"type": "user", "isCompactSummary": True, "timestamp":
                             prompt()["timestamp"], "message": {"role": "user",
                                                                "content": "This session is..."}}),
+            "compaction with an origin": (
+                reply(age=900), {"type": "system", "subtype": "compact_boundary"},
+                dict(prompt("This session is being continued..."), isCompactSummary=True)),
             "fresh": (reply(age=900), prompt(age=20)),
             "tool result": (prompt(), {"type": "user", "timestamp": prompt()["timestamp"],
                                        "message": {"role": "user", "content": [
@@ -228,10 +247,29 @@ class ChatAsks(Idle):
         self.stop_record("s-1", self.LIST)
         self.assertIn("no open asks", self.lane("asks"))
 
+    def test_an_ask_from_an_earlier_turn_is_not_shown(self):
+        self.registered({"session_id": "s-1", "startedAt": "x"})
+        self.stop_record("s-1", self.LIST, later_stop=True)
+        self.assertIn("no open asks", self.lane("asks"))
+
     def test_a_single_line_ask_after_the_colon_counts(self):
         self.registered({"session_id": "s-1", "startedAt": "x"})
         self.stop_record("s-1", "Ready.\n\n**Waiting on you:** approve the merge of #5.")
         self.assertIn(f"{LANE}: - approve the merge of #5. (chat, session s-1)", self.lane("asks"))
+
+
+class Helpers(unittest.TestCase):
+    def test_next_items_keeps_its_own_bullet_rule(self):
+        # the wait-list parser's bullet pattern once replaced lanelib.BULLET, merging a bare
+        # marker line into the step before it (pass's approval reads next_items too)
+        self.assertEqual(lanelib.next_items("- step one\n- \n- step two"),
+                         ["- step one", "- ", "- step two"])
+
+    def test_last_reply_is_the_newest_stops(self):
+        rec = {"time": 200.0, "replies": [{"prompt_id": "p", "text": "Done.", "time": 200.0}]}
+        self.assertEqual(lanelib.last_reply(rec), "Done.")
+        rec["time"] = 260.0
+        self.assertIsNone(lanelib.last_reply(rec))
 
 
 if __name__ == "__main__":

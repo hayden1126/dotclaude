@@ -1635,15 +1635,23 @@ def holds_slot(repo: Repo, lane: dict, live: list[dict] | None) -> bool:
 
 def waiting_turn(repo: Repo, base: str, ref: str, branch: str, prs) -> bool:
     """Whether the lane only waits its merge turn: an open PR on its branch, and HEAD the commit
-    the base's remote-tracking ref for that branch holds (pushed, as of the last fetch or push).
-    Local refs only: the board makes no network call for this."""
+    some remote-tracking ref for that branch holds (pushed, as of the last fetch or push, to any
+    remote: a fork's, or one whose name holds a `/`). Local refs only: the board makes no
+    network call for this."""
     if prs is None or not branch or not prs.label.get(branch, "").endswith(" open"):
         return False
-    remote = base[len("refs/remotes/"):].split("/", 1)[0] if base.startswith("refs/remotes/") \
-        else "origin"
-    shas = [git(["rev-parse", "--verify", "-q", "--end-of-options", f"{r}^{{commit}}"],
-                repo.toplevel) for r in (ref, f"refs/remotes/{remote}/{branch}")]
-    return all(p.returncode == 0 for p in shas) and shas[0].stdout.strip() == shas[1].stdout.strip()
+    head = git(["rev-parse", "--verify", "-q", "--end-of-options", f"{ref}^{{commit}}"],
+               repo.toplevel)
+    refs = git(["for-each-ref", "--format=%(objectname) %(refname)", "refs/remotes/"],
+               repo.toplevel)
+    if head.returncode != 0 or refs.returncode != 0:
+        return False
+    sha = head.stdout.strip()
+    for line in refs.stdout.splitlines():
+        obj, _, name = line.partition(" ")
+        if obj == sha and name.endswith("/" + branch):
+            return True
+    return False
 
 
 def stalled_why(repo: Repo, lane: dict, base: str, ref: str, branch: str, prs,
