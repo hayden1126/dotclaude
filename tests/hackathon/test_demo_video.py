@@ -180,6 +180,20 @@ def darkest(frame, left, top, right, bottom):
                for x in range(int(left * width), int(right * width)))
 
 
+def dark_rows(frame, left, right):
+    """The bands of rows, as (top, bottom) fractions of the height, with a caption box between left and right."""
+    width, height, raw = frame
+    dark = [min(raw[y * width + x] for x in range(int(left * width), int(right * width))) < BOX_DARK for y in range(height)]
+    bands, start = [], None
+    for y, is_dark in enumerate([*dark, False]):
+        if is_dark and start is None:
+            start = y
+        elif not is_dark and start is not None:
+            bands.append((start / height, y / height))
+            start = None
+    return bands
+
+
 def video_hash(path):
     result = subprocess.run(["ffmpeg", "-nostdin", "-v", "error", "-i", str(path), "-map", "0:v:0", "-c", "copy",
                              "-f", "md5", "-"], capture_output=True, text=True, check=True)
@@ -326,6 +340,25 @@ class TemplateOffline(unittest.TestCase):
         for needed in ("out-clip", "out-rehearsal", "waitFor({ timeout })"):
             self.assertIn(needed, text)
 
+    def test_skill_records_over_the_playing_video_and_keeps_the_timing(self):
+        text = (SKILL / "SKILL.md").read_text()
+        voiceover = text.split("## Voiceover (optional)\n")[1].split("\n## ")[0]
+        for needed in ("**Record over the playing video.**", "Clipchamp", "add timed", "wslpath -w", "mute the clip",
+                       "never its picture", "**Recording from the prompt.**"):
+            self.assertIn(needed, voiceover)
+        self.assertLess(voiceover.index("**Record over the playing video.**"), voiceover.index("**Recording from the prompt.**"))
+        invideo = text.split("## Edit in invideo\n")[1].split("\n## ")[0]
+        self.assertIn("It records no voice", invideo)
+
+    def test_skill_covers_the_gaps_the_second_shodo_run_found(self):
+        text = (SKILL / "SKILL.md").read_text()
+        self.assertIn("npm i -D --ignore-scripts playwright@<version>", text)
+        self.assertIn("npm i -D --ignore-scripts playwright@<version>", (TEMPLATE / "record.mjs").read_text(), "the hint a missing Playwright prints")
+        self.assertIn("is a manual skill, so it never shows in your own skill list", text)
+        self.assertIn("in plain questions rather than a list to pick from", text)
+        self.assertIn("how it was built and what was hardest", text)
+        self.assertIn("`offCamera: true`. Every take runs it and trims it off", text)
+
     def test_skill_fits_itself_to_the_event(self):
         text = (SKILL / "SKILL.md").read_text()
         for needed in ("EVENT.md", "submission asset, a stage backup or both", "may not apply", "BEATS="):
@@ -411,6 +444,11 @@ class TemplateOffline(unittest.TestCase):
             (f"export const beats = [{beat}, note: 'hello' }}];", "beat 1: note must be"),
             (f"export const beats = [{beat}, note: {{ text: 'x', at: 'middle' }} }}];", "beat 1: note must be"),
             (f"export const beats = [{beat}, note: {{ text: '', at: 'top' }} }}];", "beat 1: note must be"),
+            (f"export const beats = [{beat}, subtitleAt: 'middle' }}];", "beat 1: subtitleAt must be 'top' or 'bottom'"),
+            (f"export const beats = [{beat}, offCamera: 'yes' }}, {beat} }}];", "beat 1: offCamera must be true or false"),
+            (f"export const beats = [{beat} }}, {beat}, offCamera: true }}];", "beat 2: offCamera only on the opening beats"),
+            (f"export const beats = [{beat}, offCamera: true }}];", "every beat is off camera"),
+            (f"export const beats = [{beat}, offCamera: true, say: 'Hi' }}, {beat} }}];", "beat 1: an off-camera beat is never shown"),
             (f"export const labels = 'both';\nexport const beats = [{beat} }}];", "labels must be 'page' or 'after'"),
         ]
         for text, expected in cases:
@@ -504,6 +542,33 @@ class Takes(unittest.TestCase):
         _, duration = ffprobe(clip / "demo.mp4")
         expected = steps[-1]["end"] - steps[0]["start"]
         self.assertLess(abs(duration - expected), 1.5, "the lead-in beats are trimmed off")
+
+    def test_an_off_camera_opening_is_trimmed_from_every_take(self):
+        # Review round 1 of the H fixes: a BEATS range for the setup was lost on the next plain retake.
+        project = self.project(
+            "export const app = { cmd: 'node server.mjs', url: 'http://unused.invalid/' };\n"
+            "export const beats = [\n"
+            "  { caption: '', offCamera: true, act: async ({ page }) => { await page.waitForTimeout(2500); } },\n"
+            "  { caption: 'Shown one', act: async ({ page }) => { await page.waitForTimeout(300); } },\n"
+            "  { caption: 'Shown two', act: async ({ page }) => { await page.waitForTimeout(300); } },\n"
+            "];\n")
+        result = project.take(APP_CMD="node server.mjs")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue((project.out / "demo.mp4").exists(), "a plain take still lands in out/")
+        data = json.loads((project.out / "steps.json").read_text())
+        self.assertEqual(data["first"], 2)
+        self.assertEqual([s["caption"] for s in data["steps"]], ["Shown one", "Shown two"])
+        _, duration = ffprobe(project.out / "demo.mp4")
+        shown = data["steps"][-1]["end"] - data["steps"][0]["start"]
+        self.assertLess(abs(duration - shown), 1.5, "the off-camera beat (2.5 s and its hold) was filmed")  # As the clip test allows.
+
+        clip = project.take(APP_CMD="node server.mjs", BEATS="1-2")
+        self.assertEqual(clip.returncode, 0, clip.stderr)
+        clipped = json.loads((project.root / "demo" / "out-clip" / "steps.json").read_text())
+        self.assertEqual((clipped["first"], [s["caption"] for s in clipped["steps"]]), (2, ["Shown one"]), "a clip from beat 1 filmed the setup")
+        only = project.take(APP_CMD="node server.mjs", BEATS="1")
+        self.assertEqual(only.returncode, 1)
+        self.assertIn("holds only off-camera beats", only.stderr)
 
     def test_a_clip_or_a_rehearsal_leaves_the_full_take_alone(self):
         project = self.project(one_beat("await page.waitForTimeout(100);"))
@@ -1268,6 +1333,84 @@ class Voice(unittest.TestCase):
         self.assertLess(level(self.result, 5.8, 6.3, 440), -50, "the read came back at the wrong place in the file")
         self.assertGreater(level(self.result, 5.8, 7.0, 880), HEARD_DB)
 
+    def export_over_take(self, path, parts, audio_starts=0.0, audio_codec="aac"):
+        """An editor's export: the take's picture with a voice recorded over it as it played."""
+        sequence(self.root / "spoken.wav", parts)
+        subprocess.run(["ffmpeg", "-nostdin", "-y", "-v", "error", "-i", str(self.out / "demo.mp4"),
+                        "-itsoffset", str(audio_starts), "-i", str(self.root / "spoken.wav"),
+                        "-map", "0:v", "-map", "1:a", "-c:v", "copy", "-c:a", audio_codec, str(path)], check=True)
+
+    def test_a_timed_read_whose_sound_starts_before_its_picture_still_builds(self):
+        # Round 3: Opus in Matroska probes its audio at -0.007 s, and speech from the first sample would
+        # have asked ffmpeg for a negative delay.
+        self.export_over_take(self.root / "export.mkv", [(440, 2.0), (None, 6.0)], audio_codec="libopus")
+        self.assertEqual(self.run_voice("add", "timed", str(self.root / "export.mkv")).returncode, 0)
+        self.built()
+        self.assertGreater(level(self.result, 0.1, 1.8), HEARD_DB)
+
+    def test_a_timed_reads_audio_that_starts_late_in_its_file_is_placed_by_the_files_clock(self):
+        # Round 2: the audio stream starts 1.0 s into the export, and its tone 1.0 s after that, so at 2.0 s.
+        self.export_over_take(self.root / "export.mp4", [(None, 1.0), (440, 1.5), (None, 4.5)], audio_starts=1.0)
+        added = self.run_voice("add", "timed", str(self.root / "export.mp4"))
+        self.assertEqual(added.returncode, 0, added.stderr)
+        self.assertNotIn("warning", added.stderr, "the export is the take's length, though its sound starts 1 s in")
+        self.built()
+        self.assertLess(level(self.result, 0.3, 1.8), -60, "placed by the first sample, not the file's clock")
+        self.assertGreater(level(self.result, 2.1, 3.3), HEARD_DB)
+
+    def test_a_timed_read_keeps_its_place_on_the_take(self):
+        # Spoken from 2.0 s over the playing take: an `all` read would be pulled back onto beat 1 at 0.2 s.
+        self.export_over_take(self.root / "export.mp4", [(None, 2.0), (440, 2.0), (None, 4.0)])
+        added = self.run_voice("add", "timed", str(self.root / "export.mp4"))
+        self.assertEqual(added.returncode, 0, added.stderr)
+        self.assertNotIn("warning", added.stderr)
+        self.assertTrue((self.voice_dir / "timed.mp4").exists())
+        self.built()
+        self.assertLess(level(self.result, 0.3, 1.8), -60, "the timed read was moved earlier")
+        self.assertGreater(level(self.result, 2.2, 3.8), HEARD_DB)
+
+    def test_a_retake_replaces_its_beat_of_a_timed_read_which_resumes_in_place(self):
+        # Speech from 2.0 s, and the second tone from 5.5 s, where beat 3 starts on the take. Placed like an
+        # `all` read, everything would move 1.7 s earlier: 440 from 0.3 s, and the read over by 6.3 s.
+        self.export_over_take(self.root / "export.mp4", [(None, 2.0), (440, 3.5), (880, 2.5)])
+        self.assertEqual(self.run_voice("add", "timed", str(self.root / "export.mp4")).returncode, 0)
+        tone(self.voice_dir / "2.wav", 2, frequency=1000)
+        self.built()
+        self.assertLess(level(self.result, 0.3, 1.8), -60, "the timed read was moved earlier")
+        self.assertGreater(level(self.result, 2.1, 2.9, 440), HEARD_DB)
+        self.assertLess(level(self.result, 3.2, 5.2, 440), -50, "the read still plays under the retake")
+        self.assertGreater(level(self.result, 3.2, 4.9, 1000), HEARD_DB)
+        self.assertLess(level(self.result, 5.8, 6.3, 440), -50, "the read came back at the wrong place in the file")
+        self.assertGreater(level(self.result, 6.5, 7.5, 880), HEARD_DB, "the read stopped early")
+
+    def test_a_new_whole_read_moves_the_other_kind_aside(self):
+        tone(self.root / "read.wav", 2)
+        self.export_over_take(self.root / "export.mp4", [(None, 2.0), (440, 2.0), (None, 4.0)])
+        self.assertEqual(self.run_voice("add", "all", str(self.root / "read.wav")).returncode, 0)
+        self.assertEqual(self.run_voice("add", "timed", str(self.root / "export.mp4")).returncode, 0)
+        self.assertEqual(sorted(p.name for p in self.voice_dir.iterdir()), [".all.wav.prev", ".parts.json", "timed.mp4"])
+        self.built()
+
+    def test_a_read_and_a_timed_read_together_are_refused(self):
+        tone(self.voice_dir / "all.wav", 2)
+        tone(self.voice_dir / "timed.wav", 2)
+        self.assert_refused("both a whole read")
+
+    def test_a_timed_read_of_another_length_warns(self):
+        tone(self.root / "short.wav", 2)
+        added = self.run_voice("add", "timed", str(self.root / "short.wav"))
+        self.assertEqual(added.returncode, 0, added.stderr)
+        self.assertIn("the take is 8.0 s", added.stderr)
+
+    def test_a_timed_read_whose_container_does_not_know_its_length_is_measured_by_its_sound(self):
+        piped = subprocess.run(["ffmpeg", "-nostdin", "-v", "error", "-f", "lavfi", "-i",
+                                f"aevalsrc=0.5*sin(2*PI*440*t)*between(t\\,2\\,4):d={self.TAKE_S}", "-c:a", "libopus", "-f", "webm", "-"],
+                               capture_output=True, check=True)
+        (self.root / "export.webm").write_bytes(piped.stdout)
+        added = self.run_voice("add", "timed", str(self.root / "export.webm"))
+        self.assertEqual(added.returncode, 0, added.stderr)
+        self.assertNotIn("warning", added.stderr)
+
     def test_a_clip_after_the_read_has_ended_may_run_on(self):
         tone(self.voice_dir / "all.wav", 2)
         tone(self.voice_dir / "2.wav", 3)
@@ -1825,7 +1968,7 @@ class Captions(unittest.TestCase):
         self.write_beats([{"caption": f"Beat {i}", "say": f"Line {i}"} for i in range(1, 6)], labels="after")
         self.write_steps(captions=("Beat 3", "Beat 4"), first=3)
         out = self.run_captions("lines").stdout
-        for needed in ("beat 3 (voice part 1 of this clip): at 0.2 s", "Line 3", "beat 4 (voice part 2 of this clip): at 3.0 s", "Line 4"):
+        for needed in ("beat 3 (voice part 1 of this take): at 0.2 s", "Line 3", "beat 4 (voice part 2 of this take): at 3.0 s", "Line 4"):
             self.assertIn(needed, out)
         self.assertNotIn("Line 1", out)
         self.built()
@@ -1891,6 +2034,22 @@ class Captions(unittest.TestCase):
         self.acted_take((*self.ACTS, "async () => { /* four */ }"))
         self.assert_refused("beats.mjs has 4 beats, but this take was made from 3")
 
+    def test_a_take_that_filmed_a_beat_now_off_camera_is_refused(self):
+        self.write_beats([{"caption": "Beat 1", "offCamera": True}, {"caption": "Beat 2"}, {"caption": "Beat 3"}], labels="after")
+        self.assert_refused("beat 1 is off camera in beats.mjs, but this take shows it")
+
+    def test_off_camera_beats_are_checked_as_record_checks_them(self):
+        for beats, expected in (([{"caption": "Beat 1"}, {"caption": "Beat 2"}, {"caption": "Beat 3", "offCamera": True}],
+                                 "beat 3: offCamera only on the opening beats"),
+                                ([{"caption": f"Beat {i}", "offCamera": True} for i in range(1, 4)], "every beat is off camera"),
+                                ([{"caption": "", "offCamera": True, "say": "Welcome"}, {"caption": "Beat 2"}, {"caption": "Beat 3"}],
+                                 "beat 1: an off-camera beat is never shown, so it takes no say, note or subtitleAt"),
+                                ([{"caption": "", "offCamera": True, "note": {"text": "x", "at": "top"}}, {"caption": "Beat 2"}, {"caption": "Beat 3"}],
+                                 "beat 1: an off-camera beat is never shown")):
+            with self.subTest(expected=expected):
+                self.write_beats(beats, labels="after")
+                self.assert_refused(expected, "lines")
+
     def test_a_take_with_no_fingerprints_is_still_checked_by_its_captions(self):
         self.write_steps(("", "", ""))
         self.write_beats([{"caption": "", "say": f"Line {i}"} for i in range(3)], labels="after")
@@ -1908,8 +2067,8 @@ class Captions(unittest.TestCase):
         self.write_steps(("Beat 2", "Beat 3"), first=2)
         self.write_beats([{"caption": f"Beat {i}", "say": "Words."} for i in range(1, 4)], labels="after")
         out = self.run_captions("lines").stdout
-        self.assertIn("beat 2 (voice part 1 of this clip):", out)
-        self.assertIn("beat 3 (voice part 2 of this clip):", out)
+        self.assertIn("beat 2 (voice part 1 of this take):", out)
+        self.assertIn("beat 3 (voice part 2 of this take):", out)
 
     def test_bad_fields_are_refused(self):
         cases = [
@@ -1917,6 +2076,8 @@ class Captions(unittest.TestCase):
             ([{"caption": "Beat 1", "note": "x"}], "after", "beat 1: note must be"),
             ([{"caption": "Beat 1", "note": {"text": "x"}}], "after", "beat 1: note must be"),
             ([{"caption": "Beat 1", "note": {"text": "x", "at": "middle"}}], "after", "beat 1: note must be"),
+            ([{"caption": "Beat 1", "subtitleAt": "middle"}], "after", "beat 1: subtitleAt must be 'top' or 'bottom'"),
+            ([{"caption": "Beat 1", "offCamera": "yes"}], "after", "beat 1: offCamera must be true or false"),
             ([{"caption": "Beat 1"}], "both", "labels must be 'page' or 'after'"),
         ]
         for beats, labels, expected in cases:
@@ -2004,6 +2165,46 @@ class Captions(unittest.TestCase):
         self.assertLess(darkest(three, 0.3, 0, 0.7, 0.2), BOX_DARK, "the last beat's label")
         self.assertGreater(darkest(three, 0.2, 0.8, 0.8, 1), PLAIN_WHITE, "this beat says nothing")
 
+    def test_a_beat_can_move_its_subtitles_to_the_top_under_its_label(self):
+        # Beat 1 shows something at the bottom of the frame, so its subtitle goes up, below the label.
+        self.write_steps(captions=("Beat 1", "Beat 2", ""))
+        self.write_beats([
+            {"caption": "Beat 1", "say": "This is line 1.", "subtitleAt": "top"},
+            {"caption": "Beat 2", "say": "This is line 2.", "subtitleAt": "bottom"},
+            {"caption": "", "say": "This is line 3.", "subtitleAt": "top"},
+        ], labels="after")
+        listed = self.run_captions("lines").stdout.split("beat ")[1:]
+        self.assertIn("subtitles at the top, under the label", listed[0])
+        self.assertNotIn("subtitles at the top", listed[1])
+        self.assertIn("subtitles at the top", listed[2])
+        self.assertNotIn("under the label", listed[2], "beat 3 has no label")
+        self.built()
+        one = dark_rows(gray_frame(self.result, 1), 0.2, 0.8)
+        self.assertEqual(len(one), 2, f"a label, then the subtitle below it, apart: {one}")
+        self.assertTrue(all(bottom < 0.4 for _, bottom in one), f"both in the top of the frame: {one}")
+        two = dark_rows(gray_frame(self.result, 4), 0.2, 0.8)
+        self.assertEqual(len(two), 2, two)
+        self.assertGreater(two[1][0], 0.6, "the default stays at the bottom")
+        # Beat 2's top band is its label alone, so beat 1's first band must be the label too, in the same place.
+        for edge in range(2):
+            self.assertAlmostEqual(one[0][edge], two[0][edge], delta=0.01, msg=f"the label didn't keep its place: {one} {two}")
+
+    def test_a_label_that_wraps_stays_above_a_top_subtitle(self):
+        # Round 3: libass moves the later of two colliding events, so the label is placed first.
+        label = "A label long enough that it surely wraps onto a second line, even across the whole frame"
+        self.write_steps(captions=(label, label, "Beat 3"))
+        self.write_beats([{"caption": label, "say": "This is line 1.", "subtitleAt": "top"},
+                          {"caption": label}, {"caption": "Beat 3"}], labels="after")
+        self.built()
+        alone = dark_rows(gray_frame(self.result, 4), 0.05, 0.95)
+        both = dark_rows(gray_frame(self.result, 1), 0.05, 0.95)
+        self.assertAlmostEqual(both[0][0], alone[0][0], delta=0.01, msg=f"the subtitle took the label's place: {both} {alone}")
+        # libass stacks the pushed subtitle right against the label, so the two may read as one band.
+        self.assertGreater(both[-1][1], alone[-1][1] + 0.03, f"the subtitle isn't below the whole label: {both} {alone}")
+        three = dark_rows(gray_frame(self.result, 7), 0.2, 0.8)
+        self.assertEqual(len(three), 1, f"no label on this beat, so the subtitle takes the top: {three}")
+        self.assertLess(three[0][1], 0.2, three)
+
     def test_a_build_with_no_voice_uses_the_silent_take(self):
         self.assertIn("No voice yet", self.built().stdout)
         self.assertEqual(stream_codecs(self.result), ["h264"])
@@ -2068,7 +2269,7 @@ class Captions(unittest.TestCase):
 
     def test_skill_documents_captions(self):
         section = (SKILL / "SKILL.md").read_text().split("## Captions\n")[1].split("\n## ")[0]
-        for needed in ("say", "note", "labels = 'after'", "demo/captions.mjs lines", "2.3 words", "demo-captioned.mp4", "subtitles.srt",
+        for needed in ("say", "note", "subtitleAt: 'top'", "labels = 'after'", "demo/captions.mjs lines", "2.3 words", "demo-captioned.mp4", "subtitles.srt",
                        "libass", "fontconfig", "Believe it only after looking", "the frames first"):
             self.assertIn(needed, section)
         readme = (REPO / "README.md").read_text().split("### The hackathon skills on another machine")[1]

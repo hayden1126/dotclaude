@@ -184,7 +184,18 @@ function checkBeats(project) {
     if (note !== undefined && (typeof note?.text !== 'string' || !note.text.trim() || !NOTE_PLACES.includes(note.at))) {
       throw new Error(`beat ${index + 1}: note must be { text, at }, with text a string and at one of ${NOTE_PLACES.join(', ')}`);
     }
+    if (beat.subtitleAt !== undefined && !['bottom', 'top'].includes(beat.subtitleAt)) {
+      throw new Error(`beat ${index + 1}: subtitleAt must be 'top' or 'bottom'`);
+    }
+    if (beat.offCamera !== undefined && typeof beat.offCamera !== 'boolean') throw new Error(`beat ${index + 1}: offCamera must be true or false`);
+    if (beat.offCamera && index > 0 && !beats[index - 1].offCamera) {
+      throw new Error(`beat ${index + 1}: offCamera only on the opening beats, from beat 1 on, since the video can't skip a stretch in the middle`);
+    }
+    if (beat.offCamera && (beat.say || beat.note || beat.subtitleAt)) {
+      throw new Error(`beat ${index + 1}: an off-camera beat is never shown, so it takes no say, note or subtitleAt`);
+    }
   }
+  if (beats.every(beat => beat.offCamera)) throw new Error('every beat is off camera, so the video would show nothing');
   const labels = project.labels ?? 'page';
   if (!LABELS.includes(labels)) throw new Error(`beats.mjs: labels must be 'page' or 'after', got ${JSON.stringify(labels)}`);
   return labels;
@@ -194,7 +205,7 @@ async function loadChromium() {
   try {
     return (await import('playwright')).chromium;
   } catch (e) {
-    throw new Error(`playwright won't load (${e.code || e.message}). Install a pinned version in demo/: ( cd demo && { [ -e package.json ] || npm init -y >/dev/null; } && npm i -D playwright@<version> )`);
+    throw new Error(`playwright won't load (${e.code || e.message}). Install a pinned version in demo/: ( cd demo && { [ -e package.json ] || npm init -y >/dev/null; } && npm i -D --ignore-scripts playwright@<version> )`);
   }
 }
 
@@ -347,7 +358,11 @@ async function record() {
   const labels = checkBeats(project);
   const size = parseSize(process.env.SIZE || project.size || '1920x1080');
   const fps = parseFps(process.env.FPS || String(project.fps ?? '30'));
-  const [firstBeat, lastBeat] = parseBeatRange(process.env.BEATS, project.beats.length);
+  const [askedFirst, lastBeat] = parseBeatRange(process.env.BEATS, project.beats.length);
+  // Off-camera opening beats run on every take, to reach the state the video opens on, and are trimmed off.
+  const opening = project.beats.findIndex(beat => !beat.offCamera) + 1;
+  if (lastBeat < opening) throw new Error(`BEATS=${process.env.BEATS} holds only off-camera beats: the first beat shown is ${opening}`);
+  const firstBeat = Math.max(askedFirst, opening);
   const chromium = await loadChromium();
   checkFfmpeg();
   const url = process.env.APP_URL || project.app.url;

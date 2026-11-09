@@ -42,14 +42,16 @@ If this scope and `VISION.md` disagree, name it: what each says, and which call 
 
 ## Audience and coverage
 
-**Who judges.** From the event page, `EVENT.md` and the user: the judges' names and backgrounds if published, whether they're technical, and how well they know the product's field. Unknown is a stated guess, marked as one. The answer sets the script's level: a judge new to the field needs the problem shown before the product, and a technical one wants to see what's hard about it.
+**Who judges.** Read the event page and `EVENT.md` for the judges' names and backgrounds first. Then ask the user in plain questions, not a list of options to pick from: who the judges are, whether they build software themselves, and how much they know about the product's field. Unknown is a stated guess, marked as one, made only after asking. The answer sets the script's level: a judge new to the field needs the problem shown before the product, and a technical one wants to see what's hard about it.
+
+**Write for them.** Once the script has its said lines, go through every said line and label with that judge in mind. A term from the field they may not know gets a plain word or a short explanation, and a beat that assumes the problem gets a beat that shows it first. Propose each change with its reason; the user decides.
 
 **What the demo must cover.** List each thing the rules, the judging criteria and the submission form ask the team to show or explain. Common ones: what it does and for whom, how it was built, the most impressive features, the difficulties and how the team got past them, what's next, and anything seeded or recorded. Map each to a beat, or to the written submission when the form has a field for it:
 
 | Must cover | Asked by | Beat or written field |
 |---|---|---|
 
-An item with neither is a gap: the user decides whether it gets a beat, goes in the write-up, or is dropped.
+An item with neither is a gap: the user decides whether it gets a beat, goes in the write-up, or is dropped. Ask the user how it was built and what was hardest, even when the form has a written field for them, and ask again in the Before recording pass, once there's more to tell: a sentence of each, spoken over the beat that shows it, can land better than the form. They decide where each goes.
 
 ## Live-capability check
 
@@ -68,7 +70,7 @@ Fit it to the format in `EVENT.md`. With no length known, say so and use a state
 | Time | On screen | Said | Words | Label | Real or seeded |
 |---|---|---|---|---|---|
 
-The winning moment gets the most time. A feature with no beat is cut by default.
+The winning moment gets the most time. A feature with no beat is cut by default. Once the said lines are written, go over them for the judge, as "Write for them" says.
 
 - **Words.** Speech over a demo runs about 2 to 2.3 words a second, slower than talk, since the viewer is also watching. Count each line against its beat's length: at most one sentence a beat, two at the most, and some beats stay silent so an action can land. A line over budget is cut, or its beat gets longer.
 - **Captions,** on by default, since judges often watch muted. Subtitles repeat the said line word for word, so none needs writing. A label is 6 words or fewer and adds only what speech carries badly: a number, a name, "Recorded AI result". A note box carries extra detail only where the frame has room and the voice pauses, since nobody reads one sentence while hearing another. Write labels and notes into the script.
@@ -84,10 +86,11 @@ Give every decision a review time, so a seeded part can become real, or a real o
 
 At feature freeze, before any video or rehearsal, the user types `/demo-first-scope before recording`. Do only this pass, with the product in front of you:
 
-1. Fill in or update Audience and coverage. A `DEMO.md` from before that section gets it now.
+1. Fill in or update Audience and coverage, asking the user its questions rather than guessing. A `DEMO.md` from before that section gets it now.
 2. Check that each beat still shows what the frozen product does, and add the Said, Words and Label columns if the script lacks them.
 3. Give every beat a said line or mark it silent. Propose the words from what the beat shows; the user decides them.
-4. Recount the words against each beat, and fix a line over budget.
+4. Go over every said line and label for that judge, as "Write for them" says.
+5. Recount the words against each beat, and fix a line over budget.
 
 Don't reopen the idea, the feasibility or the cut list. A problem that needs a product change goes to the user as a choice. Write the line below only when every beat has its said line or a silent mark. Commit any product changes first, with the user's OK, so the hash names what's frozen. Then add one line under the script, replacing any earlier one: `Checked before recording: <date and time>, at commit <hash>`, with the hash from `git rev-parse --short HEAD`. `/demo-video` reads that line to see that the product hasn't moved since. Then suggest `/demo-video` for the user to type, or load it when they ask for the video.
 
@@ -107,4 +110,6 @@ Read back the idea in a sentence, the winning moment, the hours budget and what'
 | "Should be feasible" | Name the number, or the test that gets it. |
 | A seeded part with no mark | Mark it and decide what the team says. |
 | A script written without its audience | Name who judges and what they must see first. |
+| The judges guessed while the user could be asked | Ask the user who judges, in plain questions. |
+| An audience named, but the lines not checked against it | Propose changes for the lines that judge wouldn't follow. |
 | A line longer than its beat | Cut words, or give the beat more time. |

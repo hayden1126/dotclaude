@@ -68,6 +68,7 @@ const PAGE_BOX_PX = 130; // record.mjs's in-page caption box: 48 px off the bott
 const BOX = '&H40000000'; // Black, a quarter see-through (ASS colours are &HAABBGGRR, alpha 00 opaque).
 const LABELS = ['page', 'after'];
 const NOTE_PLACES = ['top-left', 'top', 'top-right', 'left', 'center', 'right', 'bottom-left', 'bottom', 'bottom-right'];
+const SUBTITLE_PLACES = ['bottom', 'top'];
 const ANCHOR = { 'bottom-left': 1, bottom: 2, 'bottom-right': 3, left: 4, center: 5, right: 6, 'top-left': 7, top: 8, 'top-right': 9 };
 const SAFE_PATH = /^[A-Za-z0-9_./-]+$/; // Nothing ffmpeg's filter syntax reads: no : , ; ' \ [ ] = or space.
 const WORD_JOINER = String.fromCharCode(0x2060);
@@ -139,7 +140,19 @@ function checkBeats(project) {
     if (note !== undefined && (typeof note?.text !== 'string' || !note.text.trim() || !NOTE_PLACES.includes(note.at))) {
       throw new Error(`beat ${index + 1}: note must be { text, at }, with text a string and at one of ${NOTE_PLACES.join(', ')}`);
     }
+    if (beat.subtitleAt !== undefined && !SUBTITLE_PLACES.includes(beat.subtitleAt)) {
+      throw new Error(`beat ${index + 1}: subtitleAt must be 'top' or 'bottom'`);
+    }
+    // As record.mjs checks it, so a refusal here never sends the user to a retake record.mjs refuses.
+    if (beat.offCamera !== undefined && typeof beat.offCamera !== 'boolean') throw new Error(`beat ${index + 1}: offCamera must be true or false`);
+    if (beat.offCamera && index > 0 && !beats[index - 1].offCamera) {
+      throw new Error(`beat ${index + 1}: offCamera only on the opening beats, from beat 1 on, since the video can't skip a stretch in the middle`);
+    }
+    if (beat.offCamera && (beat.say || beat.note || beat.subtitleAt)) {
+      throw new Error(`beat ${index + 1}: an off-camera beat is never shown, so it takes no say, note or subtitleAt`);
+    }
   }
+  if (beats.every(beat => beat.offCamera)) throw new Error('every beat is off camera, so the video would show nothing');
   const labels = project.labels ?? 'page';
   if (!LABELS.includes(labels)) throw new Error(`beats.mjs: labels must be 'page' or 'after', got ${JSON.stringify(labels)}`);
   return labels;
@@ -171,6 +184,9 @@ async function readProject() {
     const number = first + index;
     const beat = project.beats[number - 1];
     // A label drawn only here can be fixed with no retake, once the action shows it's the same beat.
+    if (beat?.offCamera) {
+      throw new Error(`beat ${number} is off camera in beats.mjs, but this take shows it: take it again, and record.mjs trims it off`);
+    }
     const free = labels === 'after' && step.action !== undefined;
     if (!beat || (beat.caption !== step.caption && !free)) {
       const now = beat ? `has the caption "${plain(beat.caption)}"` : 'is gone';
@@ -180,7 +196,8 @@ async function readProject() {
     if (step.action !== undefined && actionPrint(beat.act) !== step.action) {
       throw new Error(`beat ${number}'s action changed in beats.mjs since the take, so its text would land on the wrong picture. Take it again, or put the beat back`);
     }
-    return { number, start: step.start - trim, end: step.end - trim, label: beat.caption, say: beat.say ?? '', note: beat.note };
+    return { number, start: step.start - trim, end: step.end - trim, label: beat.caption, say: beat.say ?? '', note: beat.note,
+      subtitleAt: beat.subtitleAt ?? 'bottom' };
   });
   return { beats, labels };
 }
@@ -191,7 +208,7 @@ function lines(beats, labels) {
   for (const [index, beat] of beats.entries()) {
     const seconds = beat.end - beat.start;
     // voice.mjs counts a clip's beats from 1, so its add takes this number, not the beat's own.
-    const part = beat.number === index + 1 ? '' : ` (voice part ${index + 1} of this clip)`;
+    const part = beat.number === index + 1 ? '' : ` (voice part ${index + 1} of this take)`;
     console.log(`beat ${beat.number}${part}: at ${beat.start.toFixed(1)} s, ${seconds.toFixed(1)} s long`);
     const labelWords = words(beat.label).length;
     const long = labelWords > LABEL_WORDS ? `   (${labelWords} words: keep a label to ${LABEL_WORDS})` : '';
@@ -200,6 +217,9 @@ function lines(beats, labels) {
     if (over) crowded += 1;
     const flag = over ? `   TOO MANY: ${over} over the ${fit} that fit at ${WORDS_PER_SECOND} words a second` : '';
     console.log(`  says:  ${count ? plain(beat.say) : '(nothing)'} (${count} words)${flag}`);
+    if (count && beat.subtitleAt === 'top') {
+      console.log(`  subtitles at the top${labels === 'after' && labelWords ? ', under the label' : ''}`);
+    }
     if (beat.note) console.log(`  note, ${beat.note.at}: ${plain(beat.note.text)}`);
   }
   console.log(crowded
@@ -219,23 +239,33 @@ const assTime = seconds => {
   return `${Math.floor(cs / 360000)}:${two(Math.floor(cs / 6000) % 60)}:${two(Math.floor(cs / 100) % 60)}.${two(cs % 100)}`;
 };
 
-// Subtitles bottom centre, labels top centre, notes at their anchors, each on a translucent dark box,
-// sized from the video's height. libass moves apart events that would overlap.
+// Subtitles bottom centre, or top centre under the label for a beat with subtitleAt 'top', labels top
+// centre, notes at their anchors, each on a translucent dark box, sized from the video's height. libass
+// moves apart events that would overlap.
 export function assScript(beats, labels, width, height) {
   const size = share => Math.max(8, Math.round(height * share));
   const margin = size(0.04);
   const pad = size(0.012);
   // With labels in the page, the page's caption box holds the bottom edge, so subtitles sit above it.
   const subtitleMargin = labels === 'page' ? PAGE_BOX_PX + size(0.015) : margin;
+  // A top subtitle clears the label above it: the label's line, then a gap.
+  const underLabel = margin + Math.round(size(0.05) * 1.3) + size(0.015);
   const style = (name, fontSize, bold, alignment, marginV) => `Style: ${name},sans-serif,${fontSize},&H00FFFFFF,&H00FFFFFF,`
     + `${BOX},${BOX},${bold},0,0,0,100,100,0,0,3,${pad},0,${alignment},${margin},${margin},${marginV},1`;
   const events = [];
   // Boxes are padded sideways only: each line gets its own box, and a vertical pad would overlap the
   // next line's box in a darker band.
-  const event = (start, end, name, text, tags = '') => events.push(`Dialogue: 0,${assTime(start)},${assTime(end)},${name},,0,0,0,,{\\xbord${pad}\\ybord0${tags}}${text}`);
+  // A marginV of 0 keeps the style's.
+  const event = (start, end, name, text, tags = '', marginV = 0) => events.push(`Dialogue: 0,${assTime(start)},${assTime(end)},${name},,0,0,${marginV},,{\\xbord${pad}\\ybord0${tags}}${text}`);
   for (const beat of beats) {
-    for (const cue of subtitleCues(beat.say, beat.start, beat.end)) event(cue.start, cue.end, 'Subtitle', cue.lines.map(assText).join('\\N'));
-    if (labels === 'after' && words(beat.label).length) event(beat.start, beat.end, 'Label', assText(beat.label));
+    const labelled = labels === 'after' && words(beat.label).length > 0;
+    const top = beat.subtitleAt === 'top';
+    // The label first: libass moves the later of two colliding events, so a label that wraps pushes a top
+    // subtitle down rather than landing under it.
+    if (labelled) event(beat.start, beat.end, 'Label', assText(beat.label));
+    for (const cue of subtitleCues(beat.say, beat.start, beat.end)) {
+      event(cue.start, cue.end, top ? 'SubtitleTop' : 'Subtitle', cue.lines.map(assText).join('\\N'), '', top && labelled ? underLabel : 0);
+    }
     if (beat.note) event(beat.start, beat.end, 'Note', wrap(beat.note.text, NOTE_CHARS).map(assText).join('\\N'), `\\an${ANCHOR[beat.note.at]}`);
   }
   return [
@@ -244,6 +274,7 @@ export function assScript(beats, labels, width, height) {
     'Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, '
       + 'ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding',
     style('Subtitle', size(0.045), 0, 2, subtitleMargin),
+    style('SubtitleTop', size(0.045), 0, 8, margin),
     style('Label', size(0.05), -1, 8, margin),
     style('Note', size(0.035), 0, 5, margin),
     '', '[Events]', 'Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text',

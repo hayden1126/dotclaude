@@ -115,7 +115,13 @@ class EventProfile(unittest.TestCase):
                        "how it was built", "the difficulties", "| Must cover | Asked by | Beat or written field |",
                        "2 to 2.3 words a second", "| Time | On screen | Said | Words | Label | Real or seeded |",
                        "6 words or fewer", "## Before recording", "`/demo-first-scope before recording`",
-                       "do only the Before recording section", "Don't reopen the idea", "`Checked before recording: <date and time>, at commit <hash>`"):
+                       "do only the Before recording section", "Don't reopen the idea", "`Checked before recording: <date and time>, at commit <hash>`",
+                       # The second Shodo run (2026-11-08) took the judges from a pick-list, changed no line for
+                       # them, and never raised how it was built or what was hard.
+                       "ask the user in plain questions, not a list of options", "**Write for them.**",
+                       "Ask the user how it was built and what was hardest", "asking the user its questions rather than guessing",
+                       "Propose each change with its reason; the user decides.",
+                       'Once the said lines are written, go over them for the judge, as "Write for them" says.'):
             with self.subTest(needle):
                 self.assertIn(needle, scope)
         video = read(skill_path("demo-video", "SKILL.md"))

@@ -25,13 +25,15 @@
 //
 //   node demo/voice.mjs                builds demo/out/demo-voice.mp4 from the files in demo/voice/
 //   node demo/voice.mjs cues           lists each part to record and for how long
-//   node demo/voice.mjs add <part> <file>   copies a recording in as all or beat N, checking it first
+//   node demo/voice.mjs add <part> <file>   copies a recording in as all, timed or beat N, checking it first
 //   node demo/voice.mjs check <file>   compares an editor's export with the take
 //
 // demo/voice/ holds any mix of all.<ext>, one continuous read, and <N>.<ext>, a clip for beat N. A clip
 // starts on its beat. Beside a read, it replaces the read across that beat, which is how one part of a
 // read gets redone. Silence before the first word is dropped, so a voice lands on its caption however
-// late it started.
+// late it started. timed.<ext> takes the place of all.<ext> for a read already lined up with the take,
+// such as an editor's export recorded over it as it played: it keeps its own timing from the take's
+// first frame.
 //
 // Env: OUT is the take's dir, by default out/ beside this file. VOICE is the voice files' dir, by
 // default named after OUT (out/ pairs with voice/, out-clip/ with voice-clip/), since a beat number
@@ -53,7 +55,9 @@ const PREVIOUS = path.join(OUT, 'demo-voice.prev.mp4');
 const BUILDING = path.join(OUT, `.demo-voice.${process.pid}.mp4`);
 const CAPTIONED = path.join(OUT, 'demo-captioned.mp4');
 const CAPTIONED_PREVIOUS = path.join(OUT, 'demo-captioned.prev.mp4');
-const FILE_NAME = /^(all|\d+)\.[^.]+$/i;
+const FILE_NAME = /^(all|timed|\d+)\.[^.]+$/i;
+const READS = ['all', 'timed']; // A whole read: at most one of these, beside any clips.
+const keyOf = name => (READS.includes(name.toLowerCase()) ? name.toLowerCase() : Number(name)); // 02.wav is beat 2.
 const TOO_QUIET_DB = -25; // A real microphone gave -31 dB on a room with nobody talking, and 0 dB on a voice.
 const CLIPPED_DB = -0.1;
 const RATE = 48000;
@@ -82,7 +86,7 @@ const rateOf = text => { const [top, bottom] = text.split('/').map(Number); retu
 
 function probe(file) {
   const result = spawnSync('ffprobe', ['-v', 'error', '-show_entries',
-    'stream=codec_type,codec_name,width,height,avg_frame_rate:format=duration', '-of', 'json', file], { encoding: 'utf8' });
+    'stream=codec_type,codec_name,width,height,avg_frame_rate,start_time:format=duration', '-of', 'json', file], { encoding: 'utf8' });
   if (result.status !== 0) throw new Error(`can't read ${shown(file)}: ${result.error?.message || result.stderr.trim()}`);
   const { streams = [], format = {} } = JSON.parse(result.stdout);
   return {
@@ -92,6 +96,16 @@ function probe(file) {
     audios: streams.filter(stream => stream.codec_type === 'audio').length,
     duration: Number(format.duration) || 0, // An empty file reads N/A.
   };
+}
+
+// Where a file's sound starts on its own clock, from its picture's start when it has one. Lengths and
+// speech come from counting decoded samples, which start at 0, so a timed read adds this back: an
+// export whose audio track starts late would otherwise play early by that much.
+function soundStartOf(file) {
+  const { audio, video } = probe(file);
+  const sound = Number(audio?.start_time);
+  const picture = Number(video?.start_time);
+  return Number.isFinite(sound) ? sound - (Number.isFinite(picture) ? picture : 0) : 0;
 }
 
 function analyse(file, filter) {
@@ -167,7 +181,7 @@ function speechIn(file) {
   if ((last + 1) * WINDOW_S >= duration - CUT_OFF_S) {
     console.warn(`warning: ${shown(file)} ends while the voice is still going: if the recording was cut off, record it again`);
   }
-  return { from: Math.max(0, first * WINDOW_S - MARGIN_S), to: Math.min(duration, (last + 1) * WINDOW_S + MARGIN_S) };
+  return { from: Math.max(0, first * WINDOW_S - MARGIN_S), to: Math.min(duration, (last + 1) * WINDOW_S + MARGIN_S), duration };
 }
 
 function readTake() {
@@ -190,14 +204,14 @@ function voiceDir() {
 
 // What a part was recorded for: a clip, its beat's caption and length; a read, every caption and start.
 function fitFor(key, beats) {
-  if (key === 'all') return { captions: beats.map(beat => beat.caption), starts: beats.map(beat => beat.start) };
+  if (READS.includes(key)) return { captions: beats.map(beat => beat.caption), starts: beats.map(beat => beat.start) };
   const { caption, start, end } = beats[key - 1];
   return { caption, length: end - start };
 }
 
 function misfit(key, was, beats) {
   const now = fitFor(key, beats);
-  if (key === 'all') {
+  if (READS.includes(key)) {
     if (JSON.stringify(was.captions) !== JSON.stringify(now.captions)) return 'the beats changed';
     const moved = Math.max(...now.starts.map((start, index) => Math.abs(start - was.starts[index])));
     return moved > MOVED_S ? `a beat moved ${moved.toFixed(1)} s` : null;
@@ -222,11 +236,14 @@ function readVoices(beats) {
     if (stat.isDirectory()) continue;
     if (!stat.isFile()) throw new Error(`${entry.name} is not a file`);
     const found = FILE_NAME.exec(entry.name);
-    if (!found) throw new Error(`${entry.name}: name it all.<ext> for a whole read, or <beat>.<ext> for one beat`);
-    const key = found[1].toLowerCase() === 'all' ? 'all' : Number(found[1]);
-    if (key !== 'all' && (key < 1 || key > beats.length)) throw new Error(`${entry.name}: this take has beats 1 to ${beats.length}`);
+    if (!found) throw new Error(`${entry.name}: name it all.<ext> for a whole read, timed.<ext> for one timed in an editor, or <beat>.<ext> for one beat`);
+    const key = keyOf(found[1]);
+    if (!READS.includes(key) && (key < 1 || key > beats.length)) throw new Error(`${entry.name}: this take has beats 1 to ${beats.length}`);
     if (voices.has(key)) throw new Error(`${entry.name}: ${voices.get(key).name} is already that part, so remove one`);
     voices.set(key, { name: entry.name, file: path.join(dir, entry.name) });
+  }
+  if (voices.has('all') && voices.has('timed')) {
+    throw new Error(`${voices.get('all').name} and ${voices.get('timed').name} are both a whole read, so remove one`);
   }
   if (!voices.size) throw new Error(`no voice files in ${shown(dir)}: \`node ${shown(fileURLToPath(import.meta.url))} cues\` lists what to record`);
   const fits = readFits(dir);
@@ -239,16 +256,22 @@ function readVoices(beats) {
     throw new Error(`recorded for an earlier take: ${stale.join(', ')}. Record them again, or add the same file again to keep it as it is`);
   }
   for (const voice of voices.values()) Object.assign(voice, speechIn(voice.file));
+  if (voices.has('timed')) voices.get('timed').soundStart = soundStartOf(voices.get('timed').file);
   return voices;
 }
 
 // The stretch of each file to play, and when. Beside a read, a clip stays inside its beat, or it would
 // talk over the read coming back.
 function placeVoices(voices, beats, length) {
-  const read = voices.get('all');
-  const opening = beats[0].start;
-  const closing = read ? opening + read.to - read.from : 0;
-  const clips = [...voices.keys()].filter(key => key !== 'all').sort((one, other) => one - other);
+  const read = voices.get('all') ?? voices.get('timed');
+  // How far the read moves: a read's first word onto the first caption, a timed read to where its sound
+  // starts on its own clock.
+  const shift = !read ? 0 : voices.has('timed') ? read.soundStart : beats[0].start - read.from;
+  // A timed read's sound can start a few ms before its picture (Opus in Matroska reads -0.007 s); the take
+  // starts at 0, so the read does too.
+  const opening = read ? Math.max(0, read.from + shift) : 0;
+  const closing = read ? read.to + shift : 0;
+  const clips = [...voices.keys()].filter(key => !READS.includes(key)).sort((one, other) => one - other);
   const parts = clips.map((beat, index) => {
     const clip = voices.get(beat);
     const { start, end } = beats[beat - 1];
@@ -275,7 +298,7 @@ function placeVoices(voices, beats, length) {
     const stop = Math.min(end, closing);
     // Beats can sit a millisecond apart, which would let a tick of the read play between two clips.
     if (stop - start < 2 * FADE_S) continue;
-    parts.push({ voice: read, from: read.from + start - opening, to: read.from + stop - opening, at: start });
+    parts.push({ voice: read, from: start - shift, to: stop - shift, at: start });
   }
   const last = Math.max(...parts.map(part => part.at + part.to - part.from));
   if (last > length + SLACK_S) {
@@ -348,6 +371,7 @@ function cues() {
     if (record > LONG_LINE_S) console.log('    (over 2 minutes: run its line in your own terminal, since a ! line may be stopped at 2 minutes)');
   };
   part('all', length, 'The whole read.');
+  console.log('  part timed: the whole read, recorded over the take in an editor as it played, from its first frame. It keeps its timing.');
   beats.forEach(({ caption, start, end }, index) => {
     part(String(index + 1), end - start, `At ${start.toFixed(1)} s, ${(end - start).toFixed(1)} s long: ${plain(caption)}`);
   });
@@ -357,20 +381,29 @@ function cues() {
 // Copies a recording in, from inside the sandbox, so a link in the voice dir can only redirect a write
 // the sandbox allows anyway. The part's last file stays beside it, hidden, until the next add.
 function add(part, file) {
-  if (!part || !file) throw new Error('add needs a part and a file: node demo/voice.mjs add <all or beat> <file>');
-  const { beats } = readTake();
-  const key = part.toLowerCase() === 'all' ? 'all' : /^\d+$/.test(part) ? Number(part) : null;
-  if (key === null || (key !== 'all' && (key < 1 || key > beats.length))) {
-    throw new Error(`part is all, or a beat from 1 to ${beats.length}, not "${part}"`);
+  if (!part || !file) throw new Error('add needs a part and a file: node demo/voice.mjs add <all, timed or beat> <file>');
+  const { beats, length } = readTake();
+  const key = READS.includes(part.toLowerCase()) || /^\d+$/.test(part) ? keyOf(part) : null;
+  if (key === null || (!READS.includes(key) && (key < 1 || key > beats.length))) {
+    throw new Error(`part is all, timed, or a beat from 1 to ${beats.length}, not "${part}"`);
   }
   const extension = path.extname(file).toLowerCase() || '.audio'; // ffmpeg reads a file by its content.
-  speechIn(path.resolve(file)); // Refuses a silent file now, not at the build.
+  // Refuses a silent file now, not at the build. The length is the decoded sound's, since a container
+  // may not know its own.
+  const { duration } = speechIn(path.resolve(file));
+  // For a timed read, the export's own length when its container knows it, since an editor's sound may
+  // stop where the recording does. Otherwise the decoded sound, from where it starts.
+  const runs = key === 'timed' ? probe(path.resolve(file)).duration || soundStartOf(path.resolve(file)) + duration : duration;
+  if (key === 'timed' && Math.abs(runs - length) > MOVED_S) {
+    console.warn(`warning: ${plain(file)} runs ${runs.toFixed(1)} s and the take is ${length.toFixed(1)} s. A timed read keeps its place from the file's first second, so it must be an export of the whole take, started at 0: if the editor's timeline was trimmed or shifted, the voice is off by that much`);
+  }
   const sound = fs.readFileSync(file); // Read first: the file may be the one about to move aside.
   const dir = voiceDir();
   fs.mkdirSync(dir, { recursive: true });
   for (const entry of fs.readdirSync(dir)) {
     const found = FILE_NAME.exec(entry);
-    const same = found && (found[1].toLowerCase() === 'all' ? 'all' : Number(found[1])) === key; // 02.wav is beat 2.
+    // A new whole read replaces the last one of either kind, since a build takes only one.
+    const same = found && (READS.includes(key) ? READS.includes(keyOf(found[1])) : keyOf(found[1]) === key);
     if (same) fs.renameSync(path.join(dir, entry), path.join(dir, `.${entry}.prev`));
   }
   const target = path.join(dir, `${key}${extension}`);

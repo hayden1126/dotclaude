@@ -37,6 +37,10 @@ export const requiredHosts = [];
 //   note   a note box for extra detail, { text, at }, with `at` one of top-left, top, top-right,
 //          left, center, right, bottom-left, bottom, bottom-right. Put it where this beat's frame
 //          has room.
+//   subtitleAt  'top' moves this beat's subtitles to the top, under its label, for a beat that shows
+//          something at the bottom of the frame. The default is 'bottom'.
+//   offCamera  true runs this beat on every take but trims it off the video: for opening beats that
+//          reach the state the video starts in. Only beats from beat 1 on, before any shown beat.
 // Keep a caption to 6 words or fewer: it is the beat's label.
 //
 // labels: 'page' (the default) draws each caption in the page during the take. 'after' draws none
