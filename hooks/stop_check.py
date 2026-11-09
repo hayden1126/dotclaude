@@ -286,6 +286,9 @@ def prune(d: str, now: float) -> None:
     except OSError:
         pass
     try:
+        with open(stamp, "a"):  # first: whatever follows, the next try waits a day
+            pass
+        os.utime(stamp, (now, now))
         if SCRIPTS not in sys.path:
             sys.path.insert(0, SCRIPTS)
         import lanelib
@@ -293,9 +296,6 @@ def prune(d: str, now: float) -> None:
         if scan.unread:  # outside the sandbox, a file still unread after the reread is a live
             return       # pid's (session_scan), whose record must stay: prune nothing
         keep = {s.get("sessionId") for s in scan.files}
-        with open(stamp, "a"):
-            pass
-        os.utime(stamp, (now, now))
     except Exception:
         return
     for path in glob.glob(os.path.join(d, "*.json")):

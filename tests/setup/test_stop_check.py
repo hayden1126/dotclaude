@@ -404,9 +404,11 @@ class Rules(unittest.TestCase):
             f.write('{"why": "block"}')
         os.utime(path, (1, 1))
         scan = lanelib.Sessions([], ["/x/123.json"])
-        with mock.patch.object(lanelib, "session_scan", return_value=scan):
+        with mock.patch.object(lanelib, "session_scan", return_value=scan) as scanned:
             self.decide("Waiting on you: x")
+            self.decide("Waiting on you: y")
         self.assertTrue(os.path.exists(path))
+        self.assertEqual(scanned.call_count, 1)  # the day's stamp holds either way
 
     def test_wait_items(self):
         cases = {
