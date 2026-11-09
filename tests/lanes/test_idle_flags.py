@@ -259,6 +259,11 @@ class ChatAsks(Idle):
         self.verdict("s-1", "waiting-list", self.LIST)
         self.assertIn("no open asks", self.lane("asks"))
 
+    def test_a_lone_surrogate_in_an_old_record_breaks_nothing(self):
+        self.registered({"session_id": "s-1", "startedAt": "x"})
+        self.verdict("s-1", "waiting-list", ["a\ud800b"])
+        self.assertIn(f"{LANE}: - a?b (chat, session s-1)", self.lane("asks"))
+
     def test_junk_in_the_record_shows_nothing_and_breaks_nothing(self):
         self.registered({"session_id": "s-1", "startedAt": "x"})
         self.verdict("s-1", "waiting-list", [3, None, "real ask\x1b[2J"])

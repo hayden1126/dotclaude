@@ -60,6 +60,7 @@ HERE = os.path.dirname(os.path.realpath(__file__))
 sys.path.insert(0, HERE)
 import autopass_state as aps  # noqa: E402
 import context_watch  # noqa: E402
+import stop_ring  # noqa: E402
 
 SCRIPTS = os.path.join(os.path.dirname(HERE), "skills", "lanes", "scripts")
 
@@ -243,7 +244,8 @@ def hayden_waits(text) -> list[str]:
         if not m:
             break
         items.append(m.group(1).strip())
-    return [item[:ITEM_MAX] for item in items[:ITEMS_MAX]]
+    # A lone surrogate would raise when `lane asks` prints it: make it "?", as stop_ring does.
+    return [stop_ring.utf8(item[:ITEM_MAX]) for item in items[:ITEMS_MAX]]
 
 
 def record_path(sid) -> str:
@@ -266,6 +268,7 @@ def write_record(sid, rec: dict) -> None:
     with open(tmp, "w") as f:
         json.dump(rec, f)
     os.replace(tmp, record_path(sid))
+    stop_ring.prune(d, time.time())  # wall clock: a week-old record goes, once a day
 
 
 def verdict(payload, sid, prompt_id, lane, rows) -> str:
@@ -316,10 +319,15 @@ def explain(payload, lane, rows=None) -> tuple:
     why = verdict(payload, sid, prompt_id, lane, rows)
     last = payload.get("last_assistant_message")
     waits = hayden_waits(last)
-    if not (isinstance(last, str) and last.strip()) and prev.get("prompt_id") == prompt_id:
-        waits = prev.get("waits") if isinstance(prev.get("waits"), list) else []
-        if why == "block" and prev.get("why") == "waiting-list":
-            why = "waiting-list"
+    # The same turn going on: a stop with no text, or one that a block (any Stop hook's)
+    # continued, keeps the list and the waiting-list verdict its earlier stop recorded, unless
+    # it names a wait of its own.
+    same = prev.get("prompt_id") == prompt_id and (
+        payload.get("stop_hook_active") or not (isinstance(last, str) and last.strip()))
+    if same and why == "block" and prev.get("why") == "waiting-list":
+        why = "waiting-list"
+    if same and not waits and isinstance(prev.get("waits"), list):
+        waits = prev["waits"]
     blocked = prev.get("blocked") if isinstance(prev.get("blocked"), str) else None
     again = why == "block" and (payload.get("stop_hook_active") or blocked == prompt_id)
     if why == "block" and not again:

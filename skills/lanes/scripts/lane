@@ -2152,7 +2152,10 @@ def chat_asks(lane: dict, files: list[dict]) -> tuple[str | None, list[str]]:
     if best is None:
         return None, []
     waits = best[2].get("waits")
-    return best[1], [w for w in waits if isinstance(w, str)] if isinstance(waits, list) else []
+    # "replace": a lone surrogate (stop_check makes one "?", an older record may not) would
+    # raise when printed
+    return best[1], [w.encode("utf-8", "replace").decode("utf-8") for w in waits
+                     if isinstance(w, str)] if isinstance(waits, list) else []
 
 
 def cmd_asks(args) -> None:

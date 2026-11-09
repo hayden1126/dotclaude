@@ -345,6 +345,36 @@ class Rules(unittest.TestCase):
         self.assertEqual((self.record()["why"], self.record()["waits"]),
                          ("waiting-list", ["approve the push", "pick A or B"]))
 
+    def test_a_continuation_without_a_list_keeps_the_turns_list(self):
+        # a sibling hook (context-watch, watch-guard) blocks a stop that ended on the list,
+        # and the continuation ends on other text
+        self.entries(notice(), say())
+        self.decide("Pushed.\n\nWaiting on you:\n- approve the push")
+        self.assertIsNone(self.decide("Noted.", stop_hook_active=True))
+        self.assertEqual((self.record()["why"], self.record()["waits"]),
+                         ("waiting-list", ["approve the push"]))
+
+    def test_a_fresh_prompt_blocks_after_an_earlier_one_was_blocked(self):
+        self.entries(notice(pid=OLD), say(), turn_end(), notice(), say())
+        self.assertBlocks(sc.explain(self.payload(prompt_id=OLD), "alpha")[0])
+        self.assertBlocks(self.decide())
+        self.assertEqual(self.record()["blocked"], PID)
+
+    def test_a_lone_surrogate_in_an_item_becomes_a_question_mark(self):
+        self.assertEqual(sc.hayden_waits("Waiting on you:\n- a\ud800b"), ["a?b"])
+
+    def test_old_records_are_pruned(self):
+        self.entries(notice(), say())
+        d = os.path.join(self.state, "dotclaude", "stop-check")
+        os.makedirs(d)
+        old = os.path.join(d, "gone-session.json")
+        with open(old, "w") as f:
+            f.write("{}")
+        os.utime(old, (1, 1))
+        self.decide("Waiting on you: x")
+        self.assertFalse(os.path.exists(old))
+        self.assertTrue(os.path.exists(os.path.join(d, SID + ".json")))
+
     def test_wait_items(self):
         cases = {
             "Ready.\n\n**Waiting on you:** approve the merge of #5.": ["approve the merge of #5."],
