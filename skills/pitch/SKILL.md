@@ -14,7 +14,7 @@ This covers an expo table as well as a stage: read "on stage" below as wherever 
 Two things, kept apart:
 
 - **The live demo:** the team runs the actual product in front of the judges.
-- **The backup,** if `EVENT.md`'s Video section or the user wants one: the video made with `/demo-video`, which the user types. Without that skill, any clean screen recording of the product works. It's never passed off as live.
+- **The backup,** if `EVENT.md`'s Video section or the user wants one: the video made with `/demo-video`, which the user asks for. Without that skill, any clean screen recording of the product works. It's never passed off as live.
 
 ## Start
 
@@ -35,7 +35,7 @@ Give each part a time. The parts fill the slot and don't overrun. If it runs lon
 
 ## Video only
 
-The video is the pitch, so effort goes there: ask the user to type `/demo-video`, and fit it to the length and format in `EVENT.md`. Skip the rest of this skill, keeping Q&A and slides only if the event has them.
+The video is the pitch, so effort goes there: load `/demo-video`, and fit it to the length and format in `EVENT.md`. Skip the rest of this skill, keeping Q&A and slides only if the event has them.
 
 ## Q&A and slides
 

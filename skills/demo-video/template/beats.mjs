@@ -29,15 +29,36 @@ export const requiredHosts = [];
 // take, so end an action by waiting for what the viewer should see. A step that is genuinely slow
 // gets a longer wait on that one line: `.waitFor({ timeout: 15000 })`. A beat that runs longer than
 // 60 s in total fails too: add `limit: <seconds>` to allow more. An empty caption hides the box.
+//
+// For captions.mjs, which burns subtitles, labels and note boxes onto the finished video, a beat may
+// also have:
+//   say    the line spoken over this beat, a string. It becomes the subtitles, and `node
+//          demo/captions.mjs lines` lists it as the sheet to read the voiceover from.
+//   note   a note box for extra detail, { text, at }, with `at` one of top-left, top, top-right,
+//          left, center, right, bottom-left, bottom, bottom-right. Put it where this beat's frame
+//          has room.
+//   subtitleAt  'top' moves this beat's subtitles to the top, under its label, for a beat that shows
+//          something at the bottom of the frame. The default is 'bottom'.
+//   offCamera  true runs this beat on every take but trims it off the video: for opening beats that
+//          reach the state the video starts in. Only beats from beat 1 on, before any shown beat.
+// Keep a caption to 6 words or fewer: it is the beat's label.
+//
+// labels: 'page' (the default) draws each caption in the page during the take. 'after' draws none
+// there, and captions.mjs draws it as a label at the top of the finished video instead. Use 'after'
+// with captions.mjs, so a label is never drawn twice.
+export const labels = 'after';
+
 export const beats = [
   {
-    caption: 'A plain to-do list, kept on a real server',
+    caption: 'A plain to-do list',
+    say: 'A plain to-do list.',
     act: async ({ page }) => {
       await page.waitForTimeout(1500);
     },
   },
   {
     caption: 'Add an item',
+    say: 'Type an item and add it.',
     act: async ({ page, type, click }) => {
       await type('#new-item', 'Buy stamps');
       await click('button');
@@ -45,14 +66,17 @@ export const beats = [
     },
   },
   {
-    caption: 'Tick it off, and the count follows',
+    caption: 'Tick it off',
+    say: 'Tick it off.',
+    note: { text: 'The count updates without a reload', at: 'top-right' },
     act: async ({ page, click }) => {
       await click('li input');
       await page.locator('li.done').waitFor();
     },
   },
   {
-    caption: 'Reload: the server kept it',
+    caption: 'Reload: it stays',
+    say: 'It survives a reload.',
     act: async ({ page }) => {
       await page.reload();
       await page.locator('li.done').waitFor();
