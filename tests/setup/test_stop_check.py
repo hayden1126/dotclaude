@@ -258,6 +258,15 @@ class Rules(unittest.TestCase):
                      say())
         self.assertBlocks(self.decide())
 
+    def test_a_pass_respawn_command_ends_free(self):
+        # the pass skill's compact mode runs it from Bash; the Skill call may be turns back
+        self.entries(notice(), use("t1", "Bash", command="pass-respawn -C /x/lane --compact"),
+                     result("t1", "ok"), say("The pane compacts after this turn."))
+        self.assertIsNone(self.decide("The pane compacts after this turn."))
+        self.entries(notice(), use("t1", "Bash", command="grep -n pass-respawn README.md"),
+                     result("t1", "ok"), say())
+        self.assertBlocks(self.decide())
+
     def test_a_pending_pass_ends_free(self):
         self.entries(notice(), say())
         d = os.path.join(self.state, "dotclaude", "pass-pending")

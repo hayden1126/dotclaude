@@ -18,8 +18,9 @@ The stop passes (prints nothing) when any of these holds, checked in this order:
    Monitor watch), workflow, cloud session or teammate. The Artifact tool's live watch (a
    `monitor`) and a `dream` are not waits.
 6. The turn sent a message to the lead or a lane (a successful SendMessage to a `uds:` address,
-   what `lane addr` prints: `park me`, `merged #N`, a question), invoked the pass skill, or a
-   pass is pending (context_watch.pass_pending).
+   what `lane addr` prints: `park me`, `merged #N`, a question), invoked the pass skill, ran
+   pass-respawn from Bash (context_watch.runs_pass_respawn: the pass skill's own step, whose
+   Skill call may sit turns back), or a pass is pending (context_watch.pass_pending).
 7. Hayden started the turn: its first entry with an origin is his typed prompt (origin.kind
    human), or it starts with a typed slash command, and no ExitPlanMode in the turn came back
    approved. He reads the reply before anything moves on (Hayden's pick, 2026-11-09). The
@@ -226,42 +227,52 @@ def record_block(sid, prompt_id) -> None:
     os.replace(tmp, record_path(sid))
 
 
-def decide(payload, lane) -> dict | None:
-    """The block to print, or None to let the stop through. lane is lane_of(cwd)."""
+def explain(payload, lane, rows=None) -> tuple:
+    """(the block to print or None, the rule that decided, as a short tag). lane is
+    lane_of(cwd); rows, when given, are the turn's entries (the replay passes them), else they
+    are read from the transcript."""
     if not isinstance(payload, dict) or payload.get("agent_id") or not lane:
-        return None
+        return None, "not-lane"
     sid, prompt_id = payload.get("session_id"), payload.get("prompt_id")
     if not (isinstance(sid, str) and SID.fullmatch(sid) and isinstance(prompt_id, str)):
-        return None
+        return None, "bad-payload"
     if payload.get("stop_hook_active") or blocked_before(sid, prompt_id):
-        return None
+        return None, "continued"
     if payload.get("permission_mode") == "plan":
-        return None
+        return None, "plan-mode"
     last = payload.get("last_assistant_message")
     if isinstance(last, str) and WAITING.search(last):
-        return None
+        return None, "waiting-list"
     if waiting_tasks(payload.get("background_tasks")):
-        return None
+        return None, "background"
     transcript = payload.get("transcript_path")
-    rows = turn(transcript, prompt_id)
+    if rows is None:
+        rows = turn(transcript, prompt_id)
     if rows is None:
         log(f"pass {sid} {lane}: no turn start for prompt {prompt_id} in the transcript")
-        return None
+        return None, "no-turn"
     calls = tool_calls(rows)
     for name, inp, ok in calls:
         if not ok:
             continue
         if name == "SendMessage" and str(inp.get("to", "")).startswith("uds:"):
-            return None
+            return None, "message"
         if name == "Skill" and inp.get("skill") == "pass":
-            return None
+            return None, "pass-skill"
+        if name == "Bash" and context_watch.runs_pass_respawn(str(inp.get("command", ""))):
+            return None, "pass-skill"
     if context_watch.pass_pending(sid):
-        return None
+        return None, "pass-pending"
     if hayden_started(rows, calls):
-        return None
+        return None, "hayden"
     record_block(sid, prompt_id)
     log(f"block {sid} {lane} prompt {prompt_id}")
-    return {"decision": "block", "reason": REASON.format(ctx=ctx_line(sid, transcript))}
+    return {"decision": "block", "reason": REASON.format(ctx=ctx_line(sid, transcript))}, "block"
+
+
+def decide(payload, lane) -> dict | None:
+    """The block to print, or None to let the stop through (explain() without the tag)."""
+    return explain(payload, lane)[0]
 
 
 def main() -> None:
