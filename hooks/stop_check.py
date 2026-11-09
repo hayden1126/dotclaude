@@ -13,7 +13,11 @@ The stop passes (prints nothing) when any of these holds, checked in this order:
 2. This turn was blocked already: stop_hook_active, or this hook's record names the payload's
    prompt_id (a blocked stop and the stop of the turn it continues share it). Never loops.
 3. Plan mode: the session can't act until Hayden approves anyway.
-4. The last reply has a line opening "Waiting on you" (after any markup): it asks Hayden.
+4. The last reply has a line opening "Waiting on" or "Waiting for" (after any markup): a
+   Waiting on you list, or `Waiting on <who>: <what>` for a wait on a lane, the lead, a person
+   or a job. Lanes are taught that line at session start (hooks/lane_identity.py) and in the
+   block's reason. Hayden asked for the false blocks to be tuned (2026-11-09): in the replay
+   they were fair waits on someone else, which no phrase match told apart (best: 3 of 9).
 5. A background task the turn waits on is running: a subagent, shell (a background Bash or a
    Monitor watch), workflow, cloud session or teammate. The Artifact tool's live watch (a
    `monitor`) and a `dream` are not waits.
@@ -56,7 +60,7 @@ SCRIPTS = os.path.join(os.path.dirname(HERE), "skills", "lanes", "scripts")
 
 MARKER = "[stop-check]"
 WAIT_KINDS = {"subagent", "shell", "workflow", "cloud session", "teammate"}
-WAITING = re.compile(r"^[\W_]*waiting on you\b", re.IGNORECASE | re.MULTILINE)
+WAITING = re.compile(r"^[\W_]*waiting (on|for)\b", re.IGNORECASE | re.MULTILINE)
 MACHINE_PROMPTS = ("Read your lane record ", "You are lane `")
 SLASH = "<command-message>"
 PROMPT_ID = re.compile(r"[A-Za-z0-9-]{1,64}")
@@ -70,6 +74,8 @@ REASON = (MARKER + " This lane turn ends with nothing to wait on: no Waiting on 
           "and end your reply with a Waiting on you list.\n"
           "- If the lane is pushed and only waits its merge turn, send the lead `park me` "
           "(to what a bare `lane addr lead` prints).\n"
+          "- If you wait on another lane, the lead's reply, a person or a job outside this "
+          "session, end with a line `Waiting on <who>: <what>` and stop.\n"
           "- If none applies, say so in one line and stop: this check blocks once per turn.")
 CTX_PAST = ("Context is {n}, past the auto-pass soft tier ({soft}): run the pass skill instead "
             "of starting new work.")

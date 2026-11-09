@@ -215,9 +215,25 @@ class Rules(unittest.TestCase):
             with self.subTest(last=last):
                 self.assertIsNone(self.decide(last))
 
+    def test_a_wait_line_on_anyone_else_ends_free(self):
+        self.entries(notice(), say())
+        for last in ("Pushed.\n\nWaiting on lane themes: its release, then I run the guardrail.",
+                     "Waiting on the lead: its reply about the install.",
+                     "- **Waiting for** Victor's answers on #433.",
+                     "Waiting on Hayden: approval to push."):
+            with self.subTest(last=last):
+                self.forget()
+                self.assertIsNone(self.decide(last))
+
+    def test_the_reason_teaches_the_wait_line(self):
+        self.entries(notice(), say())
+        self.assertIn("`Waiting on <who>: <what>`", self.assertBlocks(self.decide()))
+
     def test_the_words_mid_line_are_no_list(self):
         self.entries(notice(), say())
         self.assertBlocks(self.decide("Nothing is waiting on you now."))
+        self.forget()
+        self.assertBlocks(self.decide("I'm done here; no longer waiting for the review."))
 
     # ---- background work (rule 5) ----
     def test_running_background_work_ends_free(self):
