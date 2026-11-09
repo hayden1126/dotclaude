@@ -277,7 +277,8 @@ def prune(d: str, now: float) -> None:
     """Delete records older than PRUNE_AGE, at most once per PRUNE_EVERY (the .pruned stamp's
     mtime), except one whose session still has a session file (lanelib.session_files, live or
     stale): a lane idle past a week is the one stalled longest, and the board needs its
-    verdict. Best-effort: any error, lanelib's import included, prunes nothing."""
+    verdict. Best-effort, and closed: a session file that won't read, or any error (lanelib's
+    import included), prunes nothing."""
     stamp = os.path.join(d, ".pruned")
     try:
         if now - os.path.getmtime(stamp) < PRUNE_EVERY:
@@ -288,7 +289,10 @@ def prune(d: str, now: float) -> None:
         if SCRIPTS not in sys.path:
             sys.path.insert(0, SCRIPTS)
         import lanelib
-        keep = {s.get("sessionId") for s in lanelib.session_files()}
+        scan = lanelib.session_scan()
+        if scan.unread:  # outside the sandbox, a file still unread after the reread is a live
+            return       # pid's (session_scan), whose record must stay: prune nothing
+        keep = {s.get("sessionId") for s in scan.files}
         with open(stamp, "a"):
             pass
         os.utime(stamp, (now, now))

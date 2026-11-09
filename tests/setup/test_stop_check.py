@@ -23,7 +23,7 @@ REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)
 HOOKS = os.path.join(REPO, "hooks")
 SHIM = os.path.join(HOOKS, "stop-check.sh")
 sys.path.insert(0, os.path.join(REPO, "tests", "lanes"))
-from _fixture import LanesRepo  # noqa: E402  (on sys.path from the line above)
+from _fixture import LanesRepo, lanelib  # noqa: E402  (on sys.path from the line above)
 
 SID = "7a2b3c4d-1111-2222-3333-444455556666"
 PID = "0f1e2d3c-aaaa-bbbb-cccc-ddddeeeeffff"
@@ -100,6 +100,7 @@ class Rules(unittest.TestCase):
                                 HOME=os.path.join(self.tmp, "home"))
         patch.start()
         self.addCleanup(patch.stop)
+        os.environ.pop("CLAUDE_CONFIG_DIR", None)  # lanelib.config_dir prefers it; patch restores
         self.transcript = os.path.join(self.tmp, SID + ".jsonl")
 
     def entries(self, *rows):
@@ -392,6 +393,20 @@ class Rules(unittest.TestCase):
         self.decide("Waiting on you: x")
         self.assertTrue(os.path.exists(os.path.join(d, "idle-a-week.json")))
         self.assertFalse(os.path.exists(os.path.join(d, "long-gone.json")))
+
+    def test_an_unreadable_session_file_prunes_nothing(self):
+        # outside the sandbox an unread file left after the reread is a live pid's
+        self.entries(notice(), say())
+        d = os.path.join(self.state, "dotclaude", "stop-check")
+        os.makedirs(d)
+        path = os.path.join(d, "maybe-live.json")
+        with open(path, "w") as f:
+            f.write('{"why": "block"}')
+        os.utime(path, (1, 1))
+        scan = lanelib.Sessions([], ["/x/123.json"])
+        with mock.patch.object(lanelib, "session_scan", return_value=scan):
+            self.decide("Waiting on you: x")
+        self.assertTrue(os.path.exists(path))
 
     def test_wait_items(self):
         cases = {
