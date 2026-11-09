@@ -48,6 +48,7 @@ as that lane, as it does to the lane-identity hook. Two blocking Stop hooks both
 error passes the stop, and its traceback goes to stderr, which the shim appends to
 stop-check.err.
 """
+import glob
 import json
 import mmap
 import os
@@ -70,6 +71,7 @@ WAITING = re.compile(r"^[\W_]*waiting (on|for)\b", re.IGNORECASE | re.MULTILINE)
 HAYDEN_WAIT = re.compile(r"^[\W_]*waiting on (you|hayden)\b[\W_]*(.*)$", re.IGNORECASE)
 WAIT_ITEM = re.compile(r"^\s*(?:[-*+]|\d+[.)])\s+(.*\S)")
 ITEMS_MAX, ITEM_MAX = 20, 300   # the record keeps at most this many items, each this long
+PRUNE_AGE, PRUNE_EVERY = 7 * 86400, 86400
 MACHINE_PROMPTS = ("Read your lane record ", "You are lane `")
 SLASH = "<command-message>"
 PROMPT_ID = re.compile(r"[A-Za-z0-9-]{1,64}")
@@ -268,7 +270,37 @@ def write_record(sid, rec: dict) -> None:
     with open(tmp, "w") as f:
         json.dump(rec, f)
     os.replace(tmp, record_path(sid))
-    stop_ring.prune(d, time.time())  # wall clock: a week-old record goes, once a day
+    prune(d, time.time())  # wall clock: file mtimes
+
+
+def prune(d: str, now: float) -> None:
+    """Delete records older than PRUNE_AGE, at most once per PRUNE_EVERY (the .pruned stamp's
+    mtime), except one whose session still has a session file (lanelib.session_files, live or
+    stale): a lane idle past a week is the one stalled longest, and the board needs its
+    verdict. Best-effort: any error, lanelib's import included, prunes nothing."""
+    stamp = os.path.join(d, ".pruned")
+    try:
+        if now - os.path.getmtime(stamp) < PRUNE_EVERY:
+            return
+    except OSError:
+        pass
+    try:
+        if SCRIPTS not in sys.path:
+            sys.path.insert(0, SCRIPTS)
+        import lanelib
+        keep = {s.get("sessionId") for s in lanelib.session_files()}
+        with open(stamp, "a"):
+            pass
+        os.utime(stamp, (now, now))
+    except Exception:
+        return
+    for path in glob.glob(os.path.join(d, "*.json")):
+        try:
+            if (os.path.basename(path)[:-len(".json")] not in keep
+                    and now - os.path.getmtime(path) > PRUNE_AGE):
+                os.unlink(path)
+        except OSError:
+            pass
 
 
 def verdict(payload, sid, prompt_id, lane, rows) -> str:
@@ -308,8 +340,9 @@ def explain(payload, lane, rows=None) -> tuple:
     the transcript. Every lane stop, a continued one too, writes the session's record:
     {prompt_id, time, why (the verdict, before block-once), waits (the last reply's Waiting on
     you items), blocked (the prompt last blocked)}. The board's `stalled` flag and `lane asks`
-    read it. A stop with no reply text keeps the same prompt's earlier wait list: stop-ring
-    likewise keeps no empty reply."""
+    read it. A stop of the same prompt that has no reply text, or that a block (any Stop
+    hook's) continued, keeps the earlier stop's wait list, and its waiting-list verdict, unless
+    it names a wait of its own."""
     if not isinstance(payload, dict) or payload.get("agent_id") or not lane:
         return None, "not-lane"
     sid, prompt_id = payload.get("session_id"), payload.get("prompt_id")

@@ -375,6 +375,24 @@ class Rules(unittest.TestCase):
         self.assertFalse(os.path.exists(old))
         self.assertTrue(os.path.exists(os.path.join(d, SID + ".json")))
 
+    def test_pruning_keeps_a_record_whose_session_still_has_its_file(self):
+        # a lane idle for over a week is the one stalled longest: its record must stay
+        self.entries(notice(), say())
+        d = os.path.join(self.state, "dotclaude", "stop-check")
+        sessions = os.path.join(self.tmp, "home", ".claude", "sessions")
+        os.makedirs(d)
+        os.makedirs(sessions)
+        with open(os.path.join(sessions, f"{os.getpid()}.json"), "w") as f:
+            json.dump({"pid": os.getpid(), "sessionId": "idle-a-week"}, f)
+        for sid in ("idle-a-week", "long-gone"):
+            path = os.path.join(d, sid + ".json")
+            with open(path, "w") as f:
+                f.write('{"why": "block"}')
+            os.utime(path, (1, 1))
+        self.decide("Waiting on you: x")
+        self.assertTrue(os.path.exists(os.path.join(d, "idle-a-week.json")))
+        self.assertFalse(os.path.exists(os.path.join(d, "long-gone.json")))
+
     def test_wait_items(self):
         cases = {
             "Ready.\n\n**Waiting on you:** approve the merge of #5.": ["approve the merge of #5."],
