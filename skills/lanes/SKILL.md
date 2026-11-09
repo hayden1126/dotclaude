@@ -478,7 +478,7 @@ resend passes.
 | `lane who 42` | the lane that claims #42, or "unclaimed" (with a warning while a left-out record may hold it) |
 | `lane claim 42` / `lane release 42` | claim or drop a request for your lane |
 | `lane note "<text>"` | append a timestamped line to your record's State |
-| `lane asks` | every lane's open "Asks for Hayden", one list, then the Waiting on you list in the last reply of each lane's newest session not marked ended, marked `(chat, session <id>)` (read from stop-ring's stop record; runs sandboxed) |
+| `lane asks` | every lane's open "Asks for Hayden", one list, then the Waiting on you list in the last reply of each lane's newest session not marked ended, marked `(chat, session <id>)` (read from the stop-check hook's record; runs sandboxed) |
 | `lane open <id>` | the lane's session in a new tmux window, in plan mode; `--model`/`--effort` override init's defaults for the launch; `--focus` switches to it, or to the live session's window; `--print` shows the tmux command |
 | `lane addr <id>` / `lane addr lead` | `uds:<socket>`, the SendMessage address of the lane's (or the lead's) one live session; refuses on none or several, except that `lead` picks the recorded lead or its resume among several (and refuses with the way to pick when none is). A stopped session (Ctrl+Z) is never an address: the refusal names its window to `fg` it in. `--repo PATH` looks in the lanes repo whose main checkout holds PATH instead of the cwd's, from any dir: a session in another repo reports a dotclaude bug to what `lane addr --repo ~/dotclaude lead` prints. Bare: it must see other processes |
 | `lane lead` | makes the session that runs it the lead (from the main checkout only; Hayden: `! lane lead` at its prompt). Bare |
@@ -496,8 +496,9 @@ and main changed a file the lane changes: merge main now, or at its turn when pa
 committed or not, since each left the base; the lines under the board name them), `orphan` (no
 live session), `stopped` (a session
 there is stopped with Ctrl+Z: `fg` it in its window; it still holds the lane), `stalled` (its
-live sessions are all idle, its record's Next has a step, its Asks for Hayden is empty, its last
-reply names no wait, and it isn't only waiting its merge turn: nothing will wake it; `--json`
+live sessions are all idle, the stop-check hook found their last Stops with nothing to wait on,
+its record's Next has a step, its Asks for Hayden is empty, and it isn't only waiting its merge
+turn: nothing will wake it; `--json`
 `stalled_why` names the step), `unanswered` (an idle session's transcript ends on a prompt,
 typed, a peer's or a task notice, over two minutes old with no reply; `--json` `unanswered`
 lists the sessions), `handoff?` (the

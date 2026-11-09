@@ -2181,26 +2181,22 @@ def lane_sid(sid, path: str, files: list[dict]) -> bool:
                for t in glob.glob(os.path.join(config_dir(), "projects", "*", sid + ".jsonl")))
 
 
-# ---- what an idle session last said (lane stop-check) ----------------------------------------
-# The board's `stalled` and `unanswered` flags and `lane asks`'s chat waits read a session's last
-# reply from the stop record hooks/stop_ring.py writes at every Stop (stops/<session>.json, its
-# `replies`), and its transcript's tail. Neither is stored by the lanes CLI (invariant 4).
+# ---- what an idle session waits for (lane stop-check) ----------------------------------------
+# The board's `stalled` flag and `lane asks`'s chat waits read the record hooks/stop_check.py
+# writes at every lane Stop (stop-check/<session>.json: the hook's verdict and the last reply's
+# Waiting on you items), so the hook, the flag and the list never disagree on what a lane waits
+# for. The `unanswered` flag reads the transcript's tail, found through stop-ring's stop record
+# (stops/<session>.json). The lanes CLI stores none of it (invariant 4).
 STOP_RECORD_MAX = 1024 * 1024      # stop_ring caps replies at 128 KiB; the rest is small
 TRANSCRIPT_TAIL = 256 * 1024       # bytes of a transcript's end read for `unanswered`
 UNANSWERED_GRACE = 120             # seconds a prompt may wait before an idle session's status
-# A wait the reply names: a line opening "Waiting on" or "Waiting for" (after markup), the line
-# hooks/stop_check.py lets a turn end on. One naming Hayden is an ask of his.
-WAIT_LINE = re.compile(r"^[\W_]*waiting (on|for)\b", re.IGNORECASE | re.MULTILINE)
-HAYDEN_WAIT = re.compile(r"^[\W_]*waiting on (you|hayden)\b[\W_]*(.*)$", re.IGNORECASE)
-WAIT_ITEM = re.compile(r"^\s*(?:[-*+]|\d+[.)])\s+(.*\S)")  # never BULLET: next_items has it
 PROMPT_KINDS = ("human", "peer", "task-notification")
 
 
-def stop_record(sid) -> dict | None:
-    """The session's stop record (stops/<sid>.json), or None."""
+def _state_json(kind: str, sid) -> dict | None:
     if not isinstance(sid, str) or not SID.fullmatch(sid):
         return None
-    raw = read_head(os.path.join(state_dir(), "stops", sid + ".json"), STOP_RECORD_MAX)
+    raw = read_head(os.path.join(state_dir(), kind, sid + ".json"), STOP_RECORD_MAX)
     try:
         rec = json.loads(raw) if raw else None
     except (ValueError, RecursionError):
@@ -2208,44 +2204,16 @@ def stop_record(sid) -> dict | None:
     return rec if isinstance(rec, dict) else None
 
 
-def last_reply(rec) -> str | None:
-    """The text of the session's last turn, or None. stop_ring adds no reply for a Stop with no
-    text, so the newest reply is the last turn's only when it carries the record's own time
-    (stop_ring stamps both from one clock read); otherwise it is an earlier turn's, and stale.
-    stop_ring keeps a reply's first 64 KiB, so a longer one loses its end, and any wait line
-    there (a known limit)."""
-    replies = rec.get("replies") if isinstance(rec, dict) else None
-    last = replies[-1] if isinstance(replies, list) and replies else None
-    text = last.get("text") if isinstance(last, dict) else None
-    at, when = rec.get("time") if isinstance(rec, dict) else None, \
-        last.get("time") if isinstance(last, dict) else None
-    if not (isinstance(at, (int, float)) and isinstance(when, (int, float))
-            and abs(at - when) < 1e-3):
-        return None
-    return text if isinstance(text, str) else None
+def stop_record(sid) -> dict | None:
+    """stop-ring's record for the session (stops/<sid>.json), or None."""
+    return _state_json("stops", sid)
 
 
-def names_wait(text) -> bool:
-    return isinstance(text, str) and bool(WAIT_LINE.search(text))
-
-
-def hayden_waits(text) -> list[str]:
-    """The items of the reply's last Waiting on you (or Waiting on Hayden) list: the text after
-    the heading on its own line, then each bullet after it, up to the first other line."""
-    lines = text.splitlines() if isinstance(text, str) else []
-    start = next((i for i in range(len(lines) - 1, -1, -1) if HAYDEN_WAIT.match(lines[i])), None)
-    if start is None:
-        return []
-    rest = HAYDEN_WAIT.match(lines[start]).group(2).strip(" *_:")
-    items = [rest] if rest else []
-    for line in lines[start + 1:]:
-        if not line.strip() and not items:
-            continue
-        m = WAIT_ITEM.match(line)
-        if not m:
-            break
-        items.append(m.group(1).strip())
-    return items
+def stop_check(sid) -> dict | None:
+    """The stop-check hook's record for the session (stop-check/<sid>.json): `why` is its
+    verdict at the session's last Stop ("block" when that Stop had nothing to wait on), `waits`
+    the last reply's Waiting on you items, `time` the Stop's. None when it never ran there."""
+    return _state_json("stop-check", sid)
 
 
 def read_tail(path, limit: int) -> bytes | None:

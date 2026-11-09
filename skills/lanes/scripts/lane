@@ -1633,12 +1633,14 @@ def holds_slot(repo: Repo, lane: dict, live: list[dict] | None) -> bool:
     return bool(sessions_in(live, os.path.realpath(lane["path"])))
 
 
-def waiting_turn(repo: Repo, base: str, ref: str, branch: str, prs) -> bool:
+def waiting_turn(repo: Repo, base: str, ref: str, branch: str, prs) -> bool | None:
     """Whether the lane only waits its merge turn: an open PR on its branch, and HEAD the commit
     some remote-tracking ref for that branch holds (pushed, as of the last fetch or push, to any
     remote: a fork's, or one whose name holds a `/`). Local refs only: the board makes no
-    network call for this."""
-    if prs is None or not branch or not prs.label.get(branch, "").endswith(" open"):
+    network call for this. None when gh couldn't list the PRs."""
+    if prs is None:
+        return None  # unknown: gh couldn't list PRs
+    if not branch or not prs.label.get(branch, "").endswith(" open"):
         return False
     head = git(["rev-parse", "--verify", "-q", "--end-of-options", f"{ref}^{{commit}}"],
                repo.toplevel)
@@ -1657,20 +1659,21 @@ def waiting_turn(repo: Repo, base: str, ref: str, branch: str, prs) -> bool:
 def stalled_why(repo: Repo, lane: dict, base: str, ref: str, branch: str, prs,
                 here: list[dict], gone: bool) -> str | None:
     """The record's next step when the lane is stalled, else None. Stalled: live sessions, all
-    idle; a Next item (lanelib.first_item: a `Keep open:` line is no step); an empty Asks for
-    Hayden; no session's last reply naming a wait (lanelib.WAIT_LINE: a Waiting on you list, or
-    `Waiting on <who>:`); and not only waiting its merge turn (waiting_turn), which `park me`
-    answers instead. gone: parked or stale."""
+    idle, each whose last Stop the stop-check hook found with nothing to wait on (its record's
+    why is "block": no Waiting on you or `Waiting on <who>:` line, no waited-on task, no message
+    to the lead or a lane, no pass, not Hayden's own turn); a Next item (lanelib.first_item: a
+    `Keep open:` line is no step); an empty Asks for Hayden; and not only waiting its merge turn
+    (waiting_turn), which `park me` answers instead. Anything unknown (no hook record, gh down)
+    is not stalled. gone: parked or stale."""
     if gone or not here or any(status_of(s) != "idle" for s in here):
+        return None
+    if any((lanelib.stop_check(s.get("sessionId")) or {}).get("why") != "block" for s in here):
         return None
     text, _ = record_text(repo, lane)
     item = lanelib.first_item(lanelib.next_block(text or ""))
     if not item or lanelib.section(text, "Asks for Hayden", "Asks"):
         return None
-    if any(lanelib.names_wait(lanelib.last_reply(lanelib.stop_record(s.get("sessionId"))))
-           for s in here):
-        return None
-    if waiting_turn(repo, base, ref, branch, prs):
+    if waiting_turn(repo, base, ref, branch, prs) is not False:
         return None
     return item
 
@@ -2131,24 +2134,25 @@ def cmd_note(args) -> None:
 
 
 def chat_asks(lane: dict, files: list[dict]) -> tuple[str | None, list[str]]:
-    """(session id, items): the Waiting on you list of the last reply of the lane's newest
-    session that hasn't ended, by its stop record's time. The candidates come from lane.json's
-    sessions[], which sandboxed Bash can write, so each must also be placed in the lane by
-    Claude Code's own records (lanelib.lane_sid). Derived on each call, never stored: the next
-    turn's reply replaces it. Runs sandboxed: it reads files only."""
+    """(session id, items): the Waiting on you items the stop-check hook recorded at the last
+    Stop of the lane's newest session not marked ended, by that record's time. The candidates
+    come from lane.json's sessions[], which sandboxed Bash can write, so each must also be
+    placed in the lane by Claude Code's own records (lanelib.lane_sid). The next Stop's record
+    replaces it. Runs sandboxed: it reads files only."""
     best = None
     for entry in lane.get("sessions", []) if isinstance(lane.get("sessions"), list) else []:
         sid = entry.get("session_id") if isinstance(entry, dict) else None
         if not isinstance(sid, str) or entry.get("endedAt"):
             continue
-        rec = lanelib.stop_record(sid)
+        rec = lanelib.stop_check(sid)
         at = rec.get("time") if isinstance(rec, dict) else None
         if isinstance(at, (int, float)) and (best is None or at > best[0]) \
                 and lanelib.lane_sid(sid, lane["path"], files):
             best = (at, sid, rec)
     if best is None:
         return None, []
-    return best[1], lanelib.hayden_waits(lanelib.last_reply(best[2]))
+    waits = best[2].get("waits")
+    return best[1], [w for w in waits if isinstance(w, str)] if isinstance(waits, list) else []
 
 
 def cmd_asks(args) -> None:

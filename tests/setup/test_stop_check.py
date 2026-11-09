@@ -311,6 +311,53 @@ class Rules(unittest.TestCase):
         self.assertIsNone(self.decide(lane=None))
         self.assertIsNone(self.decide(agent_id="a1"))
 
+    # ---- the record the board and `lane asks` read ----
+    def record(self):
+        with open(os.path.join(self.state, "dotclaude", "stop-check", SID + ".json")) as f:
+            return json.load(f)
+
+    def test_every_lane_stop_records_its_verdict(self):
+        self.entries(notice(), use("t1", "SendMessage", to="uds:/tmp/lead.sock", message="q"),
+                     result("t1", "sent"), say("Asked the lead."))
+        self.assertIsNone(self.decide("Asked the lead."))
+        rec = self.record()
+        self.assertEqual((rec["prompt_id"], rec["why"], rec["waits"], rec["blocked"]),
+                         (PID, "message", [], None))
+        self.assertIsNone(self.decide(lane=None))  # outside a lane: nothing written
+        self.assertEqual(self.record()["why"], "message")
+
+    def test_a_continued_stop_records_the_full_verdict(self):
+        self.entries(notice(), say())
+        self.assertBlocks(self.decide())
+        self.assertEqual(sc.explain(self.payload(stop_hook_active=True), "alpha")[1], "continued")
+        self.assertEqual((self.record()["why"], self.record()["blocked"]), ("block", PID))
+        last = "Nothing applies.\n\nWaiting on lane api-docs: its release."
+        self.assertEqual(sc.explain(self.payload(last, stop_hook_active=True), "alpha")[1],
+                         "waiting-list")
+        self.assertEqual((self.record()["why"], self.record()["blocked"]), ("waiting-list", PID))
+
+    def test_the_waiting_on_you_items_are_recorded_and_kept_over_an_empty_stop(self):
+        self.entries(notice(), say())
+        self.decide("Pushed.\n\n**Waiting on you:**\n- approve the push\n- pick A or B\n")
+        self.assertEqual(self.record()["waits"], ["approve the push", "pick A or B"])
+        # a sibling hook's block continues the turn, which then ends with no text
+        self.assertIsNone(self.decide("", stop_hook_active=True))
+        self.assertEqual((self.record()["why"], self.record()["waits"]),
+                         ("waiting-list", ["approve the push", "pick A or B"]))
+
+    def test_wait_items(self):
+        cases = {
+            "Ready.\n\n**Waiting on you:** approve the merge of #5.": ["approve the merge of #5."],
+            "Waiting on you:\n\n- a\n- b\nThanks.\n- not this": ["a", "b"],
+            "## Waiting on Hayden\n1. merge\n2) push": ["merge", "push"],
+            "Waiting on lane x: its release.": [],
+            "No list here.": [],
+        }
+        for text, items in cases.items():
+            with self.subTest(text=text[:20]):
+                self.assertEqual(sc.hayden_waits(text), items)
+        self.assertEqual(len(sc.hayden_waits("Waiting on you:\n" + "- x\n" * 50)), sc.ITEMS_MAX)
+
     # ---- the reason ----
     def test_the_reason_names_the_soft_tier_once_past_it(self):
         self.entries(notice(), say())

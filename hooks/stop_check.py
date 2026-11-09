@@ -11,8 +11,9 @@ The stop passes (prints nothing) when any of these holds, checked in this order:
    session (CLAUDE_CODE_SESSION_ATTENDED=0: `claude -p` or `--bg`, which no one reads), or a
    launch dir (the transcript's first cwd, not the payload's, which a Bash `cd` moves) that
    lanelib doesn't resolve to a registered lane (the main checkout, a plain dir, any error).
-2. This turn was blocked already: stop_hook_active, or this hook's record names the payload's
-   prompt_id (a blocked stop and the stop of the turn it continues share it). Never loops.
+2. This turn was blocked already (checked last, so the record holds the full verdict):
+   stop_hook_active, or this hook's record names the payload's prompt_id as blocked (a blocked
+   stop and the stop of the turn it continues share it). Never loops.
 3. Plan mode: the session can't act until Hayden approves anyway.
 4. The last reply has a line opening "Waiting on" or "Waiting for" (after any markup): a
    Waiting on you list, or `Waiting on <who>: <what>` for a wait on a lane, the lead, a person
@@ -38,8 +39,11 @@ Code stamps it on every user entry of the turn) to the end; that entry's line is
 byte search. When the prompt_id isn't in the transcript, the turn can't be read, so the stop
 passes and a line is logged: blocking blind would miss a message or a pass.
 
-Otherwise it blocks, records the prompt_id in $XDG_STATE_HOME/dotclaude/stop-check/<sid>.json
-first, and logs one line to stop-check.log. Two blocking Stop hooks both reach the model (probe,
+Otherwise it blocks and logs one line to stop-check.log. Every lane stop writes
+$XDG_STATE_HOME/dotclaude/stop-check/<sid>.json first (explain()), which the board's `stalled`
+flag and `lane asks` read, so the three never disagree on what a lane waits for. Known limit:
+a lead session that cd'd into a lane and then ran /clear starts a transcript there, so it reads
+as that lane, as it does to the lane-identity hook. Two blocking Stop hooks both reach the model (probe,
 2.1.319, 2026-11-09), so it needs no yielding to context-watch or watch-guard. Fails open: any
 error passes the stop, and its traceback goes to stderr, which the shim appends to
 stop-check.err.
@@ -62,6 +66,9 @@ SCRIPTS = os.path.join(os.path.dirname(HERE), "skills", "lanes", "scripts")
 MARKER = "[stop-check]"
 WAIT_KINDS = {"subagent", "shell", "workflow", "cloud session", "teammate"}
 WAITING = re.compile(r"^[\W_]*waiting (on|for)\b", re.IGNORECASE | re.MULTILINE)
+HAYDEN_WAIT = re.compile(r"^[\W_]*waiting on (you|hayden)\b[\W_]*(.*)$", re.IGNORECASE)
+WAIT_ITEM = re.compile(r"^\s*(?:[-*+]|\d+[.)])\s+(.*\S)")
+ITEMS_MAX, ITEM_MAX = 20, 300   # the record keeps at most this many items, each this long
 MACHINE_PROMPTS = ("Read your lane record ", "You are lane `")
 SLASH = "<command-message>"
 PROMPT_ID = re.compile(r"[A-Za-z0-9-]{1,64}")
@@ -220,67 +227,111 @@ def ctx_line(sid, transcript) -> str:
         return CTX_ANY
 
 
+def hayden_waits(text) -> list[str]:
+    """The items of the reply's last Waiting on you (or Waiting on Hayden) list: the text after
+    the heading on its own line, then each bullet after it, up to the first other line."""
+    lines = text.splitlines() if isinstance(text, str) else []
+    start = next((i for i in range(len(lines) - 1, -1, -1) if HAYDEN_WAIT.match(lines[i])), None)
+    if start is None:
+        return []
+    rest = HAYDEN_WAIT.match(lines[start]).group(2).strip(" *_:")
+    items = [rest] if rest else []
+    for line in lines[start + 1:]:
+        if not line.strip() and not items:
+            continue
+        m = WAIT_ITEM.match(line)
+        if not m:
+            break
+        items.append(m.group(1).strip())
+    return [item[:ITEM_MAX] for item in items[:ITEMS_MAX]]
+
+
 def record_path(sid) -> str:
     return os.path.join(state_dir(), "stop-check", sid + ".json")
 
 
-def blocked_before(sid, prompt_id) -> bool:
+def load_record(sid) -> dict:
     try:
         with open(record_path(sid)) as f:
-            return json.load(f).get("prompt_id") == prompt_id
-    except (OSError, ValueError, AttributeError):
-        return False
+            rec = json.load(f)
+    except (OSError, ValueError, RecursionError):
+        return {}
+    return rec if isinstance(rec, dict) else {}
 
 
-def record_block(sid, prompt_id) -> None:
+def write_record(sid, rec: dict) -> None:
     d = os.path.dirname(record_path(sid))
     os.makedirs(d, exist_ok=True)
     tmp = record_path(sid) + ".%d.tmp" % os.getpid()
     with open(tmp, "w") as f:
-        json.dump({"prompt_id": prompt_id, "time": time.time()}, f)
+        json.dump(rec, f)
     os.replace(tmp, record_path(sid))
 
 
-def explain(payload, lane, rows=None) -> tuple:
-    """(the block to print or None, the rule that decided, as a short tag). lane is
-    lane_of(cwd); rows, when given, are the turn's entries (the replay passes them), else they
-    are read from the transcript."""
-    if not isinstance(payload, dict) or payload.get("agent_id") or not lane:
-        return None, "not-lane"
-    sid, prompt_id = payload.get("session_id"), payload.get("prompt_id")
-    if not (isinstance(sid, str) and SID.fullmatch(sid) and isinstance(prompt_id, str)):
-        return None, "bad-payload"
-    if payload.get("stop_hook_active") or blocked_before(sid, prompt_id):
-        return None, "continued"
+def verdict(payload, sid, prompt_id, lane, rows) -> str:
+    """Rules 3 to 7: the tag of the first that lets the stop through, else "block"."""
     if payload.get("permission_mode") == "plan":
-        return None, "plan-mode"
+        return "plan-mode"
     last = payload.get("last_assistant_message")
     if isinstance(last, str) and WAITING.search(last):
-        return None, "waiting-list"
+        return "waiting-list"
     if waiting_tasks(payload.get("background_tasks")):
-        return None, "background"
-    transcript = payload.get("transcript_path")
+        return "background"
     if rows is None:
-        rows = turn(transcript, prompt_id)
+        rows = turn(payload.get("transcript_path"), prompt_id)
     if rows is None:
         log(f"pass {sid} {lane}: no turn start for prompt {prompt_id} in the transcript")
-        return None, "no-turn"
+        return "no-turn"
     calls = tool_calls(rows)
     for name, inp, ok in calls:
         if not ok:
             continue
         if name == "SendMessage" and str(inp.get("to", "")).startswith("uds:"):
-            return None, "message"
+            return "message"
         if name == "Skill" and inp.get("skill") == "pass":
-            return None, "pass-skill"
+            return "pass-skill"
         if name == "Bash" and context_watch.runs_pass_respawn(str(inp.get("command", ""))):
-            return None, "pass-skill"
+            return "pass-skill"
     if context_watch.pass_pending(sid):
-        return None, "pass-pending"
+        return "pass-pending"
     if hayden_started(rows, calls):
-        return None, "hayden"
-    record_block(sid, prompt_id)
+        return "hayden"
+    return "block"
+
+
+def explain(payload, lane, rows=None) -> tuple:
+    """(the block to print or None, the tag of the rule that decided). lane is lane_of()'s;
+    rows, when given, are the turn's entries (the replay passes them), else they are read from
+    the transcript. Every lane stop, a continued one too, writes the session's record:
+    {prompt_id, time, why (the verdict, before block-once), waits (the last reply's Waiting on
+    you items), blocked (the prompt last blocked)}. The board's `stalled` flag and `lane asks`
+    read it. A stop with no reply text keeps the same prompt's earlier wait list: stop-ring
+    likewise keeps no empty reply."""
+    if not isinstance(payload, dict) or payload.get("agent_id") or not lane:
+        return None, "not-lane"
+    sid, prompt_id = payload.get("session_id"), payload.get("prompt_id")
+    if not (isinstance(sid, str) and SID.fullmatch(sid) and isinstance(prompt_id, str)):
+        return None, "bad-payload"
+    prev = load_record(sid)
+    why = verdict(payload, sid, prompt_id, lane, rows)
+    last = payload.get("last_assistant_message")
+    waits = hayden_waits(last)
+    if not (isinstance(last, str) and last.strip()) and prev.get("prompt_id") == prompt_id:
+        waits = prev.get("waits") if isinstance(prev.get("waits"), list) else []
+        if why == "block" and prev.get("why") == "waiting-list":
+            why = "waiting-list"
+    blocked = prev.get("blocked") if isinstance(prev.get("blocked"), str) else None
+    again = why == "block" and (payload.get("stop_hook_active") or blocked == prompt_id)
+    if why == "block" and not again:
+        blocked = prompt_id
+    write_record(sid, {"prompt_id": prompt_id, "time": time.time(), "why": why,
+                       "waits": waits, "blocked": blocked})
+    if why != "block":
+        return None, why
+    if again:
+        return None, "continued"
     log(f"block {sid} {lane} prompt {prompt_id}")
+    transcript = payload.get("transcript_path")
     return {"decision": "block", "reason": REASON.format(ctx=ctx_line(sid, transcript))}, "block"
 
 

@@ -718,25 +718,31 @@ sessions only:
   plan mode, or a turn Hayden's own typed prompt started without approving a plan in it (he
   reads that reply first; the prompts pass-respawn and `lane open` type don't count as his).
   Its rules are in the module's docstring. Two blocking Stop hooks both reach the model, so it
-  sits beside context-watch and watch-guard with no ordering.
-- **The board's `stalled` and `unanswered` flags**: an idle lane with a Next step, no Asks and
-  no wait named in its last reply, and an idle session whose transcript ends on an unanswered
-  prompt. A compaction summary at the end is no prompt: Claude Code compacts idle sessions
-  itself ("Compacted while idle").
-- **`lane asks`'s chat waits**, read from the stop record stop-ring writes at every Stop, for
-  the lane's newest session that `lane.json` doesn't mark ended and that Claude Code's own
-  records place in the lane (`lane.json`'s `sessions[]`, which sandboxed Bash can write, proves
-  nothing). It reads files only, so it runs sandboxed and can't see whether that session still
-  runs: a session killed before its SessionEnd keeps its list showing until a newer one stops.
-  A reply counts only when it is the newest Stop's (stop-ring records no reply for a Stop with
-  no text), so an answered ask doesn't linger.
+  sits beside context-watch and watch-guard with no ordering. At every lane Stop, a continued
+  one too, it writes `stop-check/<session>.json` in the state dir: its verdict (`why`, before
+  block-once), the last reply's Waiting on you items and the prompt it last blocked. The next
+  two parts read only that record, so the hook, the flag and the list never disagree on what a
+  lane waits for.
+- **The board's `stalled` and `unanswered` flags**: `stalled` is an idle lane whose sessions'
+  last Stops the hook found with nothing to wait on (`why` is `block`), with a Next step, no
+  Asks, and not only waiting its merge turn; no record, or gh down, is not stalled.
+  `unanswered` is an idle session whose transcript ends on an unanswered prompt. A compaction
+  summary at the end is no prompt: Claude Code compacts idle sessions itself ("Compacted while
+  idle").
+- **`lane asks`'s chat waits**: the Waiting on you items the hook recorded for the lane's
+  newest session that `lane.json` doesn't mark ended and that Claude Code's own records place
+  in the lane (`lane.json`'s `sessions[]`, which sandboxed Bash can write, proves nothing). It
+  reads files only, so it runs sandboxed and can't see whether that session still runs: a
+  session killed before its SessionEnd keeps its list showing until a newer one stops. A Stop
+  with no reply text keeps the same prompt's earlier list.
 
 A replay over 30 days of lane transcripts (6463 stops, 143 lanes) would have blocked 4.3% of
 stops. Of 60 sampled blocks, the false ones were fair waits on someone other than Hayden, which no
 phrase match told from a stall, so lanes are taught the `Waiting on <who>:` line at session start
 (the lane-identity text) and in the block's reason. Known limits: a lane that writes a wait line
-instead of working passes; stop-ring keeps only a reply's first 64 KiB, so a longer reply loses
-its wait line; the `stalled` check reads "waiting its merge turn" from local refs (an open PR whose
+instead of working passes; a lead that ran `cd` into a lane and then /clear starts a
+transcript there and reads as that lane (to the lane-identity hook too); the `stalled` check
+reads "waiting its merge turn" from local refs (an open PR whose
 head the remote-tracking ref holds), so a push from elsewhere shows only after a fetch.
 
 ## Merge turns (lane lanes-turn, 2026-11-07)

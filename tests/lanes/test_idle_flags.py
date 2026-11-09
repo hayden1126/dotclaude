@@ -47,16 +47,22 @@ class Idle(LanesRepo):
         with open(path, "w") as f:
             f.write(new)
 
-    def stop_record(self, sid, reply, transcript=None, age=30, later_stop=False):
-        """stop-ring's record; later_stop: its newest Stop came after the reply (a turn that
-        ended with no text, which stop_ring doesn't add to replies)."""
+    def stop_record(self, sid, reply, transcript=None, age=30):
+        """stop-ring's record, which names the session's transcript."""
         at = time.time() - age  # wall clock
-        rec = {"session_id": sid, "time": at + (60 if later_stop else 0), "waits": [], "tasks": [],
+        rec = {"session_id": sid, "time": at, "waits": [], "tasks": [],
                "replies": [{"prompt_id": "p1", "text": reply, "time": at}]}
         if transcript:
             rec["transcript_path"] = transcript
         self.write(os.path.join(self.env["XDG_STATE_HOME"], "dotclaude", "stops", sid + ".json"),
                    json.dumps(rec))
+
+    def verdict(self, sid, why="block", waits=(), age=30):
+        """The stop-check hook's record of the session's last Stop (hooks/stop_check.py)."""
+        self.write(os.path.join(self.env["XDG_STATE_HOME"], "dotclaude", "stop-check",
+                                sid + ".json"),
+                   json.dumps({"prompt_id": "p1", "time": time.time() - age,  # wall clock
+                               "why": why, "waits": list(waits), "blocked": None}))
 
     def transcript(self, sid, *rows):
         d = os.path.join(self.home, ".claude", "projects", "-proj-lanes-" + LANE)
@@ -103,6 +109,8 @@ class Stalled(Idle):
         super().setUp()
         self.section("Next", "- Step 2: build the axis labels, tests first.")
         self.session(os.getpid(), "s-1")
+        self.verdict("s-1")
+        self.env["FAKE_GH_OUT"] = "[]"  # gh answers: no PR
 
     def test_an_idle_lane_with_work_in_next_and_no_asks_is_stalled(self):
         flags, cell = self.flags()
@@ -130,14 +138,24 @@ class Stalled(Idle):
         self.section("Asks for Hayden", "<!-- -->\n- pick the chip row or the dropdown")
         self.assertNotIn("stalled", self.flags()[0])
 
-    def test_a_last_reply_naming_a_wait_is_not_stalled(self):
-        for text in ("Pushed.\n\n**Waiting on you:**\n- approve the PR",
-                     "Rebased.\n\nWaiting on lane api-docs: its release."):
-            with self.subTest(text=text[:12]):
-                self.stop_record("s-1", text)
+    def test_a_stop_the_hook_let_through_is_not_stalled(self):
+        # the hook's own verdict: a wait line, a message to the lead, a running agent, a
+        # pass, Hayden's own turn
+        for why in ("waiting-list", "message", "background", "pass-pending", "hayden",
+                    "no-turn"):
+            with self.subTest(why=why):
+                self.verdict("s-1", why)
                 self.assertNotIn("stalled", self.flags()[0])
-        self.stop_record("s-1", "Step 1 is committed.")
+        self.verdict("s-1", "block")
         self.assertIn("stalled", self.flags()[0])
+
+    def test_no_hook_record_or_no_gh_answer_is_not_stalled(self):
+        os.unlink(os.path.join(self.env["XDG_STATE_HOME"], "dotclaude", "stop-check",
+                               "s-1.json"))
+        self.assertNotIn("stalled", self.flags()[0])
+        self.verdict("s-1")
+        del self.env["FAKE_GH_OUT"]  # gh fails: whether it waits its merge turn is unknown
+        self.assertNotIn("stalled", self.flags()[0])
 
     def test_a_lane_waiting_its_merge_turn_is_not_stalled(self):
         branch = self.lane_json(LANE)["branch"]
@@ -158,11 +176,6 @@ class Stalled(Idle):
                                                "createdAt": "2026-11-01T00:00:00Z"}])
         self.git("update-ref", f"refs/remotes/fork/{branch}", head)
         self.assertNotIn("stalled", self.flags()[0])
-
-    def test_a_wait_from_an_earlier_turn_does_not_count(self):
-        # turn 1 ended on a wait; turn 2 ended with no text, which stop_ring doesn't record
-        self.stop_record("s-1", "Waiting on lane api-docs: its release.", later_stop=True)
-        self.assertIn("stalled", self.flags()[0])
 
 
 class Unanswered(Idle):
@@ -210,13 +223,13 @@ class Unanswered(Idle):
 
 
 class ChatAsks(Idle):
-    LIST = "Pushed.\n\n**Waiting on you:**\n- approve the push\n- pick A or B\n"
+    LIST = ("approve the push", "pick A or B")
 
     def test_the_newest_live_sessions_waiting_list_is_listed(self):
         self.registered({"session_id": "s-old", "startedAt": "2026-11-08T01:00:00Z"},
                         {"session_id": "s-new", "startedAt": "2026-11-09T01:00:00Z"})
-        self.stop_record("s-old", "Old.\n\nWaiting on you:\n- stale ask", age=3600)
-        self.stop_record("s-new", self.LIST)
+        self.verdict("s-old", "waiting-list", ["stale ask"], age=3600)
+        self.verdict("s-new", "waiting-list", self.LIST)
         out = self.lane("asks")
         self.assertIn(f"{LANE}: - approve the push (chat, session s-new)", out)
         self.assertIn(f"{LANE}: - pick A or B (chat, session s-new)", out)
@@ -226,36 +239,31 @@ class ChatAsks(Idle):
     def test_record_asks_come_first_and_both_show(self):
         self.section("Asks for Hayden", "- merge #5")
         self.registered({"session_id": "s-1", "startedAt": "2026-11-09T01:00:00Z"})
-        self.stop_record("s-1", self.LIST)
+        self.verdict("s-1", "waiting-list", self.LIST)
         lines = self.lane("asks").strip().splitlines()
         self.assertEqual(lines[0], f"{LANE}: - merge #5")
         self.assertEqual(len(lines), 3)
 
-    def test_an_ended_session_a_reply_without_the_list_or_a_wait_on_others_shows_nothing(self):
+    def test_an_ended_session_or_a_stop_with_no_list_shows_nothing(self):
         cases = (({"session_id": "s-1", "startedAt": "x", "endedAt": "y"}, self.LIST),
-                 ({"session_id": "s-1", "startedAt": "x"}, "Step 1 is committed."),
-                 ({"session_id": "s-1", "startedAt": "x"}, "Waiting on lane api-docs: release"))
-        for entry, text in cases:
-            with self.subTest(text=text[:10], ended="endedAt" in entry):
+                 ({"session_id": "s-1", "startedAt": "x"}, ()))
+        for entry, waits in cases:
+            with self.subTest(ended="endedAt" in entry):
                 self.registered(entry)
-                self.stop_record("s-1", text)
+                self.verdict("s-1", "waiting-list", waits)
                 self.assertIn("no open asks", self.lane("asks"))
 
     def test_a_session_claude_code_doesnt_place_in_the_lane_is_ignored(self):
         # sandboxed Bash can write lane.json's sessions[]: a forged entry proves nothing
         self.registered({"session_id": "s-1", "startedAt": "x"}, proof=False)
-        self.stop_record("s-1", self.LIST)
+        self.verdict("s-1", "waiting-list", self.LIST)
         self.assertIn("no open asks", self.lane("asks"))
 
-    def test_an_ask_from_an_earlier_turn_is_not_shown(self):
+    def test_junk_in_the_record_shows_nothing_and_breaks_nothing(self):
         self.registered({"session_id": "s-1", "startedAt": "x"})
-        self.stop_record("s-1", self.LIST, later_stop=True)
-        self.assertIn("no open asks", self.lane("asks"))
-
-    def test_a_single_line_ask_after_the_colon_counts(self):
-        self.registered({"session_id": "s-1", "startedAt": "x"})
-        self.stop_record("s-1", "Ready.\n\n**Waiting on you:** approve the merge of #5.")
-        self.assertIn(f"{LANE}: - approve the merge of #5. (chat, session s-1)", self.lane("asks"))
+        self.verdict("s-1", "waiting-list", [3, None, "real ask\x1b[2J"])
+        out = self.lane("asks")
+        self.assertIn(f"{LANE}: - real ask?[2J (chat, session s-1)", out)
 
 
 class Helpers(unittest.TestCase):
@@ -265,11 +273,6 @@ class Helpers(unittest.TestCase):
         self.assertEqual(lanelib.next_items("- step one\n- \n- step two"),
                          ["- step one", "- ", "- step two"])
 
-    def test_last_reply_is_the_newest_stops(self):
-        rec = {"time": 200.0, "replies": [{"prompt_id": "p", "text": "Done.", "time": 200.0}]}
-        self.assertEqual(lanelib.last_reply(rec), "Done.")
-        rec["time"] = 260.0
-        self.assertIsNone(lanelib.last_reply(rec))
 
 
 if __name__ == "__main__":
