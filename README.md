@@ -270,6 +270,7 @@ sees it.
 | `hooks/delegation-due.sh` | SessionStart hook: runs the cheap delegation checks in the background (the quick canary on a new Claude Code version, a daily audit) and shows a line only when something is due, or when a watch needs Hayden: one whose waiter's exit reaches nobody, or one that ended while no Claude process listened; fails open | symlink `~/.claude/hooks/delegation-due.sh` |
 | `hooks/subagent-policy.sh` | PreToolUse(*) policy for delegated agents only (rules in `skills/delegation/policy.toml`): no leaving the sandbox, no destructive git, no MCP writes, protected paths, the researcher allowlist, writers held to their worktree; fails closed | symlink `~/.claude/hooks/subagent-policy.sh` |
 | `hooks/watch-guard.sh` | Stop hook (main thread): blocks a stop once when a `delegation-ledger wait` watch has lapsed or a background command was killed at its time limit, with the re-arm command (`skills/delegation/scripts/watch-guard`); fails open | symlink `~/.claude/hooks/watch-guard.sh` |
+| `hooks/stop-check.sh` | Stop hook (lane sessions only): blocks a turn's end once when it ends with nothing to wait on (no Waiting on you or `Waiting on <who>:` line, no background job, no message to the lead or a lane, no pass) and Hayden's own prompt didn't start it; a shim over `hooks/stop_check.py`; fails open, with errors in `stop-check.err` and each block in `stop-check.log` in the state dir | symlink `~/.claude/hooks/stop-check.sh` and `stop_check.py` |
 | `hooks/report-check.sh` | PreToolUse(SubagentHandback)/SubagentStop hook: sends a delegated role's malformed report back, at most twice; fails open | symlink `~/.claude/hooks/report-check.sh` |
 | `hooks/handoff-reminder.sh` | UserPromptSubmit hook: on a wrap-up / handoff / clear-memory signal, reminds me to invoke the `handoff` skill instead of improvising it, or the `pass` skill on a terse "... and pass"; a shim over `hooks/handoff_reminder.py`, which holds the classifier | symlink `~/.claude/hooks/handoff-reminder.sh` and `handoff_reminder.py` |
 | `hooks/session-title.sh` | UserPromptSubmit hook: sets the terminal tab title to `<repo> · <label>` via `sessionTitle`, so tabs are tellable apart (the repo is the one the session launched in, so a Bash `cd` doesn't rename it); the label comes from the Stop-hook Haiku cache (`.title.txt`), falling back to the current prompt's first line | symlink `~/.claude/hooks/session-title.sh` |
@@ -421,6 +422,12 @@ need nothing extra.
   (`docs/delegation.md`, "Long waits"). Needs python3 3.11 or newer (it imports `tomllib`
   through `delegation_checks`); with an older one the guard is off, and the error shows in
   `delegation-ledger.err` and the quick canary.
+- **Stop: `stop-check.sh`** (in this repo), lane sessions only. A lane turn that ends with
+  nothing to wait on (no Waiting on you list or `Waiting on <who>: <what>` line, no waited-on
+  background task, no message to the lead or a lane, no pass, not plan mode) is blocked once,
+  with its ways out: continue the record's Next, pass, put the decision in Asks for Hayden, or
+  send the lead `park me`. A turn Hayden's own typed prompt started passes unless he approved a
+  plan in it. `docs/lanes.md` ("Idle lanes") has the why and the replay numbers. Fails open.
 - **PreToolUse(`SubagentHandback`) and SubagentStop: `report-check.sh`** (in this repo). It sends a
   report from `Explore`, `researcher`, `reviewer` or `writer` back when it doesn't match
   `report.schema.json`, at most twice. **Fails open**: a broken checker never swallows a report.

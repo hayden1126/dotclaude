@@ -68,8 +68,12 @@ an unregistered worktree: `lane whoami` tells you which.
    parent covers its subdirs, so trust the lanes root once (`lane init` prints the line);
    otherwise each new window waits at that dialog and `lane ls` shows it `orphan`.
 3. **Work.** Commit on the lane branch. Keep the record current (`lane note "<line>"` adds a
-   timestamped State line). Put evidence under `.lane/artifacts/` and cite it in Decisions.
-   Copy it in, don't link it: the mirror and the archive keep a symlink as a link, never what
+   timestamped State line). End each turn on what it waits for: a Waiting on you list (its
+   decision also in Asks for Hayden), a line `Waiting on <who>: <what>` for a lane, the lead, a
+   person or a job, a running background job, or `park me` to the lead once the lane only
+   waits its merge turn. The stop-check hook blocks a lane turn that ends with none of these
+   once, unless Hayden's own prompt started it (docs/lanes.md, "Idle lanes"). Put evidence
+   under `.lane/artifacts/` and cite it in Decisions. Copy it in, don't link it: the mirror and the archive keep a symlink as a link, never what
    it points at, so a linked shot is gone once its target is. When `lane ls` flags your lane
    `overlap`, the lines under the board name the other lane and the files you both change:
    tell that lane (`lane addr <id>`, a nudge), note it in your record, and run
@@ -411,7 +415,9 @@ no session left (step 5).
 
 Auto-pass is on by default in every lane and in the lead's main checkout, so each passes itself;
 `lane init --autopass` or `--no-autopass` seeds it for the repo. A lane idle past soft (`lane ls`
-CTX `*`, STATE `idle`) gets a message from the lead, by hand: "context N k, run /pass".
+CTX `*`, STATE `idle`) gets a message from the lead, by hand: "context N k, run /pass". A lane
+flagged `stalled` gets "idle with `<its stalled_why>` next: continue it, or put the decision in
+your Asks for Hayden", and one flagged `unanswered` gets "your last prompt has no reply".
 
 **Writers in lanes.** A lane-rooted session's `writer` subagent gets a worktree under the main
 checkout's `.claude/worktrees/`, but branched from the lane's HEAD (live probe, 2026-10-11). The
@@ -472,7 +478,7 @@ resend passes.
 | `lane who 42` | the lane that claims #42, or "unclaimed" (with a warning while a left-out record may hold it) |
 | `lane claim 42` / `lane release 42` | claim or drop a request for your lane |
 | `lane note "<text>"` | append a timestamped line to your record's State |
-| `lane asks` | every lane's open "Asks for Hayden", one list |
+| `lane asks` | every lane's open "Asks for Hayden", one list, then the Waiting on you list in the last reply of each lane's newest session not marked ended, marked `(chat, session <id>)` (read from stop-ring's stop record; runs sandboxed) |
 | `lane open <id>` | the lane's session in a new tmux window, in plan mode; `--model`/`--effort` override init's defaults for the launch; `--focus` switches to it, or to the live session's window; `--print` shows the tmux command |
 | `lane addr <id>` / `lane addr lead` | `uds:<socket>`, the SendMessage address of the lane's (or the lead's) one live session; refuses on none or several, except that `lead` picks the recorded lead or its resume among several (and refuses with the way to pick when none is). A stopped session (Ctrl+Z) is never an address: the refusal names its window to `fg` it in. `--repo PATH` looks in the lanes repo whose main checkout holds PATH instead of the cwd's, from any dir: a session in another repo reports a dotclaude bug to what `lane addr --repo ~/dotclaude lead` prints. Bare: it must see other processes |
 | `lane lead` | makes the session that runs it the lead (from the main checkout only; Hayden: `! lane lead` at its prompt). Bare |
@@ -489,7 +495,12 @@ and main changed a file the lane changes: merge main now, or at its turn when pa
 `conflict` (two live lanes claim one request), `overlap` (two live lanes change one file,
 committed or not, since each left the base; the lines under the board name them), `orphan` (no
 live session), `stopped` (a session
-there is stopped with Ctrl+Z: `fg` it in its window; it still holds the lane), `handoff?` (the
+there is stopped with Ctrl+Z: `fg` it in its window; it still holds the lane), `stalled` (its
+live sessions are all idle, its record's Next has a step, its Asks for Hayden is empty, its last
+reply names no wait, and it isn't only waiting its merge turn: nothing will wake it; `--json`
+`stalled_why` names the step), `unanswered` (an idle session's transcript ends on a prompt,
+typed, a peer's or a task notice, over two minutes old with no reply; `--json` `unanswered`
+lists the sessions), `handoff?` (the
 record may be behind, as The lead step 5 spells out: a PR merged after its last write, a commit
 is newer, or a session that started after it has ended; on whenever one of those can't be read),
 `setup-failed` (half made: it still holds its ports, claims and a cap slot; finish it with
