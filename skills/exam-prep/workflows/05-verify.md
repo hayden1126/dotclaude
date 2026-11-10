@@ -1,6 +1,6 @@
 # 05 Verify
 
-Baseline as of 2026-10-20; changes only via `12-retro`.
+Baseline as of 2026-11-10; changes only via `12-retro`.
 
 Nothing reaches the student unverified. Verification has three parts: a checker that computes
 every value the notes print, reviewers who read every section against its sources, and fixes
@@ -62,13 +62,31 @@ Spawn one `reviewer` per section file, all at once (FB-102), each from
 2. **Coverage:** every row the backbone gives the section, and every extract block the coverage
    matrix maps into it.
 3. **Direction and causation:** which condition guarantees which result (S5).
-4. **STYLE:** the rest of `_build/STYLE.md`.
+4. **STYLE:** the rest of `_build/STYLE.md`, each subsection's depth label (S33) among it.
 
 Each brief names the answer sets the student hasn't attempted: the notes quote none of them, and
 a quote is a blocker. Findings come back ranked blocker, major, minor, in at most 700 words.
 Reviewers never open `practice/` (FB-105). Give each reviewer the diagram slides of its section
 that no checker trace covers (`02-extract` listed them in STATUS), to compare with the extract and
 the page image (FB-104).
+
+## Step 3b: Cold read
+
+A section reviewer reads with the sources open, so a term the section never defines still reads
+as clear to it. One fresh `reviewer` per two or three sections, spawned with step 3's, from
+`<skill>/templates/agent-briefs.md`, section "Cold read" (FB-109). It sees only its sections'
+notes files: no extract, no source, no checker output, and never `practice/`. It reads as a
+student who skipped the lectures, and lists by line:
+
+- each term or symbol used before it is defined (S14, S15);
+- each sentence that can't be understood alone (S18);
+- each pitfall or table cell without its exact condition and a mini-instance (S23);
+- each pair of look-alike notions (marks, operators, variants) with no single comparison table
+  (S31);
+- each optional notation without when it is required, when it is allowed, and whether leaving it
+  out costs marks (S28).
+
+Its findings are majors, settled and applied in step 5 like the section reviewers'.
 
 ## Step 4: Audit the condensations
 

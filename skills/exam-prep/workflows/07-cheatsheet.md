@@ -1,6 +1,6 @@
 # 07 Cheat sheet
 
-Baseline as of 2026-10-20; changes only via `12-retro`.
+Baseline as of 2026-11-10; changes only via `12-retro`.
 
 The sheet the student may bring into the exam: one HTML document printed to PDF, built only when
 the exam rules allow it (FB-130). It condenses the verified notes, organized by task, the way the
@@ -13,8 +13,10 @@ attempt ("The final sheet" below, which 08 runs). Without a mock there is one sh
 ## Step 1: Check the inputs
 
 - CLAUDE.md's rules allow a sheet. Quote the rule in STATUS: its size, one side or two, whether
-  it is collected and whether it must carry a name (FB-130). Not allowed: skip this stage and log
-  it (as the build's last stage, or run alone, removing the `Build running` line).
+  it is collected and whether it must carry a name (FB-130). Not allowed: when PLAN.md includes a
+  condensed review page (intake offered it, FB-143), build that instead, as "The condensed review
+  page" below says, in place of steps 2 to 6. Otherwise skip this stage and log it (as the build's
+  last stage, or run alone, removing the `Build running` line).
 - `05-verify` is done. The sheet derives from the notes and the checker's output
   (`_build/verify/examples.out.md`) only: never from a key, the mock, or a source MANIFEST marks
   `reserved`, and never an answer from a set it doesn't mark `yes, attempted`.
@@ -156,8 +158,40 @@ when it was built: it fills like any sheet. So the final sheet makes room for it
 - Space a later scope cut frees stays blank for the final sheet's items. Check which sections it
   would help, list them in STATUS, and ask the student when they are next here (FB-140).
 
+## The condensed review page (no sheet allowed)
+
+When the exam allows no sheet, the student still needs a recall layer shorter than the notes
+(FB-143). Its length is the number of printed pages PLAN.md records (asked once, at intake). It
+derives from the verified notes and `examples.out.md` only, under step 1's rules for a sheet, and
+nothing on it is new teaching.
+
+1. **Order and rows.** Cram-ordered: the sections in the order `08-practice` step 7 ranks them
+   (points per minute; before the cram order exists, the backbone's How it's tested weights). Each
+   row is one point: a worked example (fresh numbers from `examples.out.md`, S7) and the trap that
+   goes with it, its depth label (S33), and a link to its subsection on the notes page
+   (`<notes URL>#<id>`, the URL in STATUS). Cut rows from the last tier up until it fits the length.
+2. **The opening.** It says what the page is (a recall layer over the notes), what it leaves out
+   (proofs, background, anything under a `Not on <exam>` banner, any point it had no room for),
+   and when to go to the notes instead (a row that doesn't come back from memory, a point it
+   omits).
+3. **Build it on the notes chassis**, in a root of its own, `_build/review/`, laid out the way
+   `assemble.py` reads a hub: its Markdown in `_build/review/notes/NN-<slug>.md` (a file per tier),
+   a copy of `_build/chassis.html` and `_build/CHASSIS.md` in `_build/review/_build/` (its title,
+   heading and `.lede` refilled for the review page, the `.lede` holding the opening), each file
+   converted by the "Convert" brief (`06-site` step 3) into `_build/review/_build/frag/`, an
+   exam-day map fragment there too (`06-site` step 4), and a copy of `MANIFEST.md` in
+   `_build/review/` when it cites a source. Then `python3 -I <skill>/scripts/assemble.py --root
+   _build/review`, and `06-site` step 5's checks on `_build/review/_build/notes.html`. Count its
+   printed pages (a print to PDF of the page) against the length.
+4. **Audit** with fresh reviewers, as step 5 audits a sheet (FB-105): every row against the notes
+   it links.
+5. **Publish** it privately, as `06-site` step 6 publishes the notes, its URL in STATUS, then
+   commit and hand off as step 6 does for a sheet (the `Build running` line removed in that commit
+   when this stage ends the build). A later change follows "After shipping" like a sheet's.
+
 ## Done when
 
 `check_pdf.py` passes on each sheet with every warning judged; the audit's findings are applied;
 the page images look right; the published sheet's URL is in STATUS (an HTML sheet); it is
-committed.
+committed. Or, with no sheet allowed, the condensed review page when PLAN.md includes it: built,
+checked, audited, within its length, published privately with its URL in STATUS, and committed.

@@ -1,6 +1,6 @@
 # STYLE: how the notes are written
 
-Baseline as of 2026-10-20; changes only via `12-retro`.
+Baseline as of 2026-11-10; changes only via `12-retro`.
 
 Content only: pedagogy, wording and structure. The look (layout, palette, components, how figures
 are drawn) is `CHASSIS.md`'s, since the two change at different speeds. A hub keeps a copy in
@@ -103,3 +103,9 @@ from later corrections. A retired rule is struck through and keeps its number. A
 - **S31. Confusable pairs** get an explicit comparison table.
 - **S32. One reconciliation.** Where the slides' convention and the answer keys' convention differ,
   reconcile them in one place and link there.
+- **S33. Depth labels.** Each subsection states its depth: Know cold (written from memory), Use
+  (applied with the definition given), Recognize, or Not on <exam>, citing the instructor's
+  memorization or format statement, or marked inferred with the reason. Each section's Must-know
+  list ends with a "Written from memory:" line and a "Provided on the exam:" line where the
+  exam-format statement says which is which. The notes, the cram order and any condensed page
+  carry the same label.

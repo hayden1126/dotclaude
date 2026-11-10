@@ -1,6 +1,6 @@
 # 11 Next exam
 
-Baseline as of 2026-10-20; changes only via `12-retro`.
+Baseline as of 2026-11-10; changes only via `12-retro`.
 
 The next exam of a course whose hub this skill built. The hub is reused, never forked: the
 finished exam's mocks, keys and sheets are archived, the hub's copies of the skill's templates are
@@ -166,7 +166,11 @@ In this order, each item logged as it lands:
    files differ, the usual case, so a `&&` after it would skip the copy. Then `cmp` each copy
    with its template. Then the chassis: its diff the same way, then `cat
    <skill>/templates/notes-chassis.html > _build/chassis.html`, its placeholders filled for this
-   exam as `06-site` step 1 says. Add any of `00-intake` step 1's `.gitignore` lines the hub lacks.
+   exam as `06-site` step 1 says. A hub-local source key goes: a `source_key.py`, the key fragment
+   or notes file it wrote, and the hrefs it wrote into `a.slink`s, each removed (`git rm` the files,
+   the hrefs taken out of their fragments), logged; `assemble.py` now builds the key from
+   MANIFEST.md and refuses a citation with an href of its own. Add any of `00-intake` step 1's
+   `.gitignore` lines the hub lacks.
    Then list in the log the STYLE rules the diff adds (their `S` numbers): the old sections may
    miss them, and the report offers a `10-polish` pass. The diff is for `12-retro`, which tells the
    skill's own changes from a hub-local edit; hubs never keep their own copy.

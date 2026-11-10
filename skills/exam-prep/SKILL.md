@@ -5,7 +5,7 @@ description: Use when a student is preparing for a course exam (midterm, final, 
 
 # Exam prep
 
-Baseline as of 2026-10-20; changes only via `12-retro`.
+Baseline as of 2026-11-10; changes only via `12-retro`.
 
 ## Overview
 
@@ -154,6 +154,10 @@ names (00 runs 01's Ed pull; 02 starts 05's checker).
     applied, never from an old hub's copies (FB-010). Copy one with `cat <src> > <dest>`, never
     `cp`: the skill's folder is a symlink outside the hub, and `cp`'s source read through it counts
     as a write target (L71).
+13. **Hub fixes flow back.** The skill's files change only through `12-retro`, so a bug found in a
+    hub that lives in a skill file (a template, the chassis, a script, a brief) is fixed in the hub,
+    then logged in `_build/logs/skill-fixes.md` (what, where, the hub's diff) for the retro, and the
+    session offers to relay the fix to the other open hubs that use that file (FB-014).
 
 Browser checks run Playwright from a script, not chrome-devtools MCP (L20).
 

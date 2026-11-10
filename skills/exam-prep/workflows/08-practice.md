@@ -1,6 +1,6 @@
 # 08 Practice
 
-Baseline as of 2026-10-20; changes only via `12-retro`.
+Baseline as of 2026-11-10; changes only via `12-retro`.
 
 The mock exams, their quarantined keys, the mock page and the cram order. A mock is a dress
 rehearsal: it reads and scores like the real exam, so the student finds what they can't do yet
@@ -210,8 +210,8 @@ The night before, the student gets a reading list into the verified notes, never
 - Rank the notes' sections by points per minute: the points `_build/mock-plan.md` gives the
   questions a section prepares (a clone's go to the subsection its source's How it's tested row
   names; with full coverage, a question's split evenly over its section's subsections), over the
-  minutes it takes to read. Group them into tiers with minute budgets, each row naming the one
-  thing to take from it, in the notes' own words.
+  minutes it takes to read. Group them into tiers with minute budgets, each row naming its
+  section's depth label (S33) and the one thing to take from it, in the notes' own words.
 - Each row links `<notes URL>#<id>`, the published notes page from STATUS (plain-text notes: it
   names `§x.y Title` as text).
 - A mock the student hasn't taken yet gets its line after the tier that prepares it, the harder
@@ -240,7 +240,12 @@ Then:
    FB-105): every row's one thing against the section it links. A finding on a row is fixed in
    the cram order; one on the notes goes through "Changing the notes or a sheet". Then 1 and 2
    again.
-4. The cram order isn't published. Hand off and commit (Done when's list, up to here) as this
+4. The cram order is published at the top of the notes page (K02): write its tiers into the
+   exam-day map as `06-site` step 4 says, then run "Changing the notes or a sheet" items 1 and 3 to
+   5 for the page (its compare against the keys, the rebuild and checks, the republish to the same
+   URL). Plain-text notes have no page: the cram order stays a file. Each later change to the cram
+   order (step 8.4, `11-next-exam`'s source added) rewrites the map's copy the same way. Hand off
+   and commit (Done when's list, up to here) as this
    stage's opening says, the next-step line kept as step 4 set it. The student acts on the new
    line, so it comes last, after the handoff's own STATUS edits and just before its commit: set
    the next-step line to `08 step 8, the cram night`, with the cram order's path, and replace the
@@ -256,8 +261,21 @@ Then:
 The student types `/clear` when step 7.4's last line asks, before reading anything else on that
 screen, so nothing on it shows a key they haven't reached; this fresh session reads STATUS, commits
 what step 7.4 left uncommitted (an early `/clear` can cut its commit short; `git status` and `git
-diff --stat` only), gives them the cram order's path, and then dispatches the patches the build held
-and offers the checks it held (`09-tutor` step 1's Patches and Waiting checks bullets). One tab runs
+diff --stat` only), opens the night (FB-158, FB-159), and then dispatches the patches the build held
+and offers the checks it held (`09-tutor` step 1's Patches and Waiting checks bullets). The opening:
+
+- First, on a course with Ed, offer a re-pull, `ed-pull pull` (`01-ingest`, "Ed Discussion"): staff
+  answer late questions the night before. A new staff answer that bears on the exam goes through
+  `11-next-exam`'s "A source added to this exam", its `Source added:` STATUS line and source log
+  included, and that path also checks each mock key part the answer touches, as step 4's rerun
+  clause says (while the mock is untaken, the part is logged for a recheck).
+- Then the links: the notes page's URL from STATUS, whose top now holds the cram order (step 7.4),
+  each mock page's URL, and the cram order's path. One line defines a tier: a block of reading rows
+  with a minute budget, ranked by points per minute, read in order until time runs out.
+- Ask what the student has already read, and start from there: a row or a tier they say is read is
+  skipped tonight, not deleted.
+
+One tab runs
 the cram night: any later session that resumes it first asks the student whether another tab still
 runs it, and if one does, stops before any commit, since two would commit each other's half-done
 steps (a step 8.4 that has deleted a mock's line but not yet moved its rows) and dispatch patches
@@ -307,7 +325,7 @@ merge, as that step says.
    there (the next line is another mock's, or the list ends), they go in a new tier in that place,
    `## Tier <n>: Misses (<M> min)`, the tiers after it renumbered and the intro's tier count up by
    one. Then step 7's item 1 again, and while a mock is untaken item 2 with the untaken mocks'
-   keys.
+   keys; then the notes page's copy, as step 7.4 says.
 5. Commit and hand off as this stage's opening says, then clear each `held: mock first` mark
    (`09-tutor` step 5.5.9), its fields kept, and dispatch the oldest pending patch (`09-tutor` step
    1's Patches bullet).

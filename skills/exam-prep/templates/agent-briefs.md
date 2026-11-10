@@ -1,6 +1,6 @@
 # Agent briefs
 
-Baseline as of 2026-10-20; changes only via `12-retro`.
+Baseline as of 2026-11-10; changes only via `12-retro`.
 
 One brief per role the pipeline spawns. Fill the `{{...}}` slots per agent and keep the rest as
 written. Each brief follows the delegation skill's shape (purpose, end state, scope, hard
@@ -189,8 +189,18 @@ These are the Markdown forms the page's converter reads (06-site); use them exac
   for their conventions only, never quoted. No mock key appears in the notes.
 - Depth: {{concise | full}}, as the backbone marks it. A slide-only derivation that no practice
   question asks for goes in a Background quote (Format).
+- Depth label (STYLE.md S33): each subsection opens, under its heading, with `**Depth:** <Know
+  cold | Use | Recognize | Not on {{EXAM}}>`, then the instructor's memorization or format
+  statement it rests on, cited, or `(inferred: <why>)`. {{FORMAT STATEMENT: the exam-format
+  statement's lines on what is memorized and what is provided, quoted from CLAUDE.md with their
+  source | NONE: no statement says; mark each label inferred}}.
+- Names in a trace or a state (nodes, states, variables, table rows) go in backticks in worked
+  examples: CONVERT.md keeps them as code, and the notes-to-checker comparison counts a name only
+  in backticks.
 - The last subsection is `## {{N}}.K Must know {#sec-{{N}}-must-know}`: one line per point, each
-  ending with a link into this section, `([§{{N}}.2](#<id>))`.
+  ending with a link into this section, `([§{{N}}.2](#<id>))`. {{FORMAT STATEMENT: It ends with a
+  `Written from memory:` line and a `Provided on the exam:` line, each naming this section's
+  points as the statement sorts them. | NONE: drop this sentence.}}
 - {{PLAIN TEXT: the student reads in a plain-text tool, so no LaTeX (plain Unicode math), pipe
   tables, no `{#id}` anchors, and cross-references and Must-know pointers as text naming the
   section ("§{{M}}.K <its title>").}}
@@ -234,7 +244,8 @@ main session checks each finding and applies the fixes.
      coverage matrix maps to it, except the official answers of the sets named below.
   3. Direction and causation: which condition guarantees which result, which proof needs which
      property; no ambiguous implication.
-  4. STYLE: the rest of STYLE.md.
+  4. STYLE: the rest of STYLE.md, S33 among it: each subsection states its depth, citing the
+     instructor's statement or marked inferred with the reason.
 - Answers: the notes quote an answer only from a set MANIFEST.md marks `yes, attempted`.
   {{UNATTEMPTED: The student hasn't attempted <those sets>: their official answers sit in the
   extracts for their conventions only, a quote from one in the notes is a blocker, and no finding
@@ -268,6 +279,48 @@ often than any other. Every line must be true, carry its conditions, and point w
   there (never a `*-key.md` file or the mock), not {{ROOT}}/_build/verify/mock_key.py, and no file
   MANIFEST.md marks `reserved`. A search (Grep, Glob) stays inside the notes, the extracts and
   {{CONDENSATION}}: one over {{ROOT}} returns key lines.
+```
+
+## Cold read (stage 05)
+
+Role: `reviewer`: it reads and reports; the main session checks each finding and applies the
+fixes (`05-verify` step 3b, FB-109). One per two or three section files, spawned with the section
+reviewers. It sees the notes alone, so what it can't follow is what a student who skipped the
+lectures can't follow.
+
+```text
+# Brief: read §{{SECTIONS}} of the notes cold, as a student who skipped the lectures
+
+## Purpose
+The student may learn these sections from the notes alone, with no lecture behind them. A section
+reviewer reads with the sources open and fills a gap without noticing it. You read only the notes,
+so each place you can't follow is a place the student can't either. You report; the main session
+checks each finding and applies the fixes.
+
+## End state
+- Done means: every finding below, each with its line in the notes file, the words quoted, and
+  what is missing. Each is a major.
+- Artifact path: report only.
+- Report: at most 700 words, then the JSON block (status, summary, artifacts, blocked_actions).
+
+## Scope
+- Work in: {{ROOT}}, read only.
+- Read {{ROOT}}/notes/{{FILES}} in order, and nothing else: no extract, no source, no checker
+  output, no backbone. A term another section defines counts as defined only when the text links
+  to it.
+- List, by line:
+  1. each term or symbol used before it is defined (STYLE S14, S15);
+  2. each sentence that can't be understood alone, without the lecture (S18);
+  3. each pitfall or table cell that doesn't state its exact condition and give a mini-instance
+     (S23);
+  4. each pair of look-alike notions (marks, operators, variants of one procedure) with no single
+     table comparing them (S31);
+  5. each optional notation that doesn't say when it is required, when it is allowed, and whether
+     leaving it out costs marks (S28).
+- Don't flag: whether a fact is correct, typos, rendering and citations. Other reviews own those.
+- Out of scope: never open anything under {{ROOT}}/practice/, which holds answer keys,
+  {{ROOT}}/_build/, {{ROOT}}/sources/, or a file MANIFEST.md marks `reserved`. A search (Grep,
+  Glob) stays inside {{ROOT}}/notes/: one over {{ROOT}} returns key lines.
 ```
 
 ## Mock writer (stage 08)
@@ -661,7 +714,8 @@ Cite timestamps and the workflow step.
 ### 4. The hub's records
 {{RECORDS: One line per record you read, saying what it holds for the retro and which C or G items
 cite it: the tutor log's tables and every `## Patterns` line, quoted; each polish log's pass and
-approved list; the reopen log; each hunk of the hub-local edits (the hub's copy against the skill's)
+approved list; each `_build/logs/skill-fixes.md` entry (a skill-file bug fixed in the hub, FB-014:
+what, where, the hub's diff); the reopen log; each hunk of the hub-local edits (the hub's copy against the skill's)
 that looks like an edit made in the hub, not a change the skill made since the hub copied it
 ({{SKILL}}/references/CHANGELOG.md lists those); each source-added log; STATUS's judgment calls;
 PLAN.md's Decisions. A record that is missing or empty says so. | NONE: "Another reader has the
@@ -688,8 +742,8 @@ Stage tags: `00-intake`, `01-ingest`, `02-extract`, `03-backbone`, `04-write`, `
   clipped`). Don't open the full transcript: it holds whole tool calls and results, a key's among
   them.
 - {{RECORDS: The hub's records, under {{ROOT}}: STATUS.md, PLAN.md, MANIFEST.md, CLAUDE.md, and
-  {{ROOT}}/_build/logs/ (`tutor.md`, `polish-*.md`, `source-*.md`, and any other log there but the
-  `reopen-*` files). The window is {{SINCE: from {{SINCE}} | NONE: from the start}} to {{UNTIL}}:
+  {{ROOT}}/_build/logs/ (`tutor.md`, `polish-*.md`, `source-*.md`, `skill-fixes.md`, and any other
+  log there but the `reopen-*` files). The window is {{SINCE: from {{SINCE}} | NONE: from the start}} to {{UNTIL}}:
   leave out what the records date outside it (a log's date is in its name, a tutor section's in its
   heading, a line's beside it), and mark an item from an undated line `undated`.{{REOPENED: The hub
   was reopened for its next exam: read {{SAVED STATUS}} and {{SAVED PLAN}} in place of its STATUS.md

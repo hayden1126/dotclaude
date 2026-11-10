@@ -1,6 +1,6 @@
 # 09 Tutor
 
-Baseline as of 2026-10-20; changes only via `12-retro`.
+Baseline as of 2026-11-10; changes only via `12-retro`.
 
 The student studies with the hub: walks through a set one part at a time, takes a true-or-false
 quiz, or asks about the material. The main session tutors and only answers; every change to the
@@ -204,9 +204,12 @@ At each set's end, its score in the reply and the log: verdicts right, and reaso
 
 ## Step 5: Questions and patches
 
-1. Answer first (FB-164). A fact question gets a direct answer and a tiny sanity case ("3 bits
-   give 0 to 7"); the answer text is short and exam-ready, in the course's words. "Be even
-   clearer" gets a clearer version. A number or trace in an answer comes from the checker
+1. Answer a definition or yes/no question from what you know first, in the course's words; then
+   check the notes and say if they differ. Answer first (FB-164). A fact question gets a direct
+   answer and a tiny sanity case ("3 bits give 0 to 7"); the answer text is short and exam-ready,
+   in the course's words. In chat, write symbols as Unicode or plain text, never LaTeX delimiters,
+   and never coin a label the course doesn't use (FB-192). "Be even clearer" gets a clearer
+   version. A number or trace in an answer comes from the checker
    (`_build/verify/examples.out.md`, or the reference run on the example), never by hand.
 2. Then search `notes/` for the point. When the notes don't say it where the student was reading, or
    say it unclearly there, offer the patch: the exact sentence (one short sentence at the point of

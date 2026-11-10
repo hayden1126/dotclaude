@@ -1,6 +1,6 @@
 # 06 Site
 
-Baseline as of 2026-10-20; changes only via `12-retro`.
+Baseline as of 2026-11-10; changes only via `12-retro`.
 
 The site is one long notes page, `_build/notes.html`, built from the verified notes and published
 as a private artifact (FB-110). Converters turn each notes file into an HTML fragment in parallel;
@@ -69,7 +69,15 @@ line (the conventions that change every answer, linked), a `.egrid` of `.eq` gro
 heading, then one `<li>` per question shape: the shape in `<b>`, its section as an `xref`, its
 practice questions), and an `.edrill` line naming what to drill hardest. Every link uses a
 backbone id. A shape that tests only what a topic cut takes out (the backbone's Conventions cut
-lines) stays out of the map.
+lines) stays out of the map. Each section the map names carries its depth label (S33) beside its
+`xref`, as the notes state it.
+
+Once `08-practice` step 7 has written the cram order, the map opens with it (K02): one `.eq`
+group per tier before the question shapes, its `.eqh` the tier's name and minutes, one `<li>` per
+row (its one thing in `<b>`, its section as an `xref` to the section's anchor, its depth label),
+then the skip list and the Out of time line in an `.edrill` line. Its mock lines and `## Tonight`
+stay in `practice/cram-order.md` only. That file is the one source: the map's copy is rewritten
+from it each time it changes, never edited apart.
 
 ## Step 5: Assemble and check
 

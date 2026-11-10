@@ -1,6 +1,6 @@
 # 00 Intake
 
-Baseline as of 2026-10-20; changes only via `12-retro`.
+Baseline as of 2026-11-10; changes only via `12-retro`.
 
 Intake turns "prepare me for this exam" into an approved `PLAN.md` and a hub that a fresh session
 can execute without asking anything. It is the only stage that talks to the student before the
@@ -44,7 +44,8 @@ directory, and a sandboxed session commits only to a repo inside its own root. S
   request>"`. Without hq, or with an hq-open that refuses `--sub`, ask the student to run
   `cd <hub>/exam-prep && claude` and paste that prompt. Then stop: intake goes on in the new
   session. There, Claude Code still loads the hub's `CLAUDE.md` from the directory above: it
-  governs, and wins any conflict. Never edit the hub's files or its workflow; read its sources in
+  governs, and wins any conflict, except notation the staff's own sheets use, which wins (FB-089;
+  `03-backbone` step 4 lists each notation with its staff source). Never edit the hub's files or its workflow; read its sources in
   place (MANIFEST rows give paths relative to `<root>`, such as `../sources/...`). If the hub
   tracks its own course material in git, tell the student once and leave it.
 
@@ -85,8 +86,8 @@ question text, and list the option it supports first.
 | 1 | **Scope authority.** Does the graded work (homework, a practice exam, a review sheet) mirror the exam, and which of it? | Mirrors it, naming which (a practice exam, the review sheet, every homework): scope follows it, mocks clone its questions with fresh numbers. / Doesn't: cover the full scope, mock shapes go beyond the review. / Unsure, or no answer: treat as doesn't. | Settles everything after it (FB-021). |
 | 2 | **Which files belong to this exam?** Show the proposed split by file name: this exam, reserved for a later exam, out. Ask for the exact last in-scope slide and whether its number is the PDF page or the printed slide number. Ask which files hold answers (official solutions, a past exam's key), and which of those sets the student has already attempted. | The proposed split (first). / Other: the student corrects it. | Later material is copied raw and never opened (FB-023); slide and page numbers differ (FB-024, L04). |
 | 3 | **Missing sources.** Only when a source type the exam covers (homework, solutions, recitations, the last lectures) isn't on disk. | I'll add them now. / They arrive during the build. / Proceed without. / Not examined. | "Add them now": stop, wait for the file, re-list, and ask question 2 for it (FB-029). "During the build": a `pending` MANIFEST row that records its planned scope now, last in-scope slide included, since nothing is asked after approval. |
-| 4 | **Exam rules** not found on disk: date and time, length, cheat sheet allowed and its size, calculator, open or closed book, question types. | Pre-filled from the details file or Ed, else open. | Fixes the deliverables (FB-026). |
-| 5 | **Cheat-sheet preferences.** Only when a sheet is allowed and the profile lacks them: font floor in points, color or grayscale print, engine (HTML the session builds and Chromium prints, or LaTeX the student writes and the session checks), and their full name in each form they write it (given and family name in either order, with initials) and their student id, which the sheet check keeps off the sheet (FB-132); a lone name part only when it isn't an ordinary word. | Default: a 6 pt floor, colors that still read in grayscale, HTML printed by Chromium. Save the answers to the profile; the name and id go there only, never in PLAN.md, and only as the student gave them. | Asked once per student, not per exam (FB-131). |
+| 4 | **Exam rules** not found on disk: date and time, length, cheat sheet allowed (its size only when it is), calculator, open or closed book, question types. | Pre-filled from the details file or Ed, else open. | Fixes the deliverables (FB-026). |
+| 5 | **Cheat-sheet preferences, or the review page.** No sheet allowed: offer a condensed review page instead (`07-cheatsheet`, "The condensed review page", FB-143) and, on a yes, its length in printed pages, once; none of the sheet questions below is asked. Only when a sheet is allowed and the profile lacks them: font floor in points, color or grayscale print, engine (HTML the session builds and Chromium prints, or LaTeX the student writes and the session checks), and their full name in each form they write it (given and family name in either order, with initials) and their student id, which the sheet check keeps off the sheet (FB-132); a lone name part only when it isn't an ordinary word. | Default: a 6 pt floor, colors that still read in grayscale, HTML printed by Chromium. Save the answers to the profile; the name and id go there only, never in PLAN.md, and only as the student gave them. No sheet: the review page (first), with its length; or none. PLAN.md records the answer. | Asked once per student, not per exam (FB-131); the review page once per exam (FB-143). |
 
 If the student narrows scope ("only topic X, go deep"), check the narrowed scope against the
 sources before committing to it, and say what the check found (FB-021).
@@ -95,7 +96,8 @@ sources before committing to it, and say what the check found (FB-021).
 student can change it while reviewing:
 
 - Deliverables: topic notes in markdown as the source, one notes page published as a private
-  artifact, a cheat sheet when the rules allow one (two sheets once a mock exists, FB-133), a mock
+  artifact, a cheat sheet when the rules allow one (two sheets once a mock exists, FB-133; with
+  none allowed, the review page question 5 offers), a mock
   with its key in a separate file and a three-view mock page (FB-153), and a cram order offered the
   night before (FB-157).
 - Depth weighted by how the exam tests: procedures get depth, definitions stay brief (FB-064).

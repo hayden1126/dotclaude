@@ -1,6 +1,6 @@
 # 12 Retro
 
-Baseline as of 2026-10-20; changes only via `12-retro`.
+Baseline as of 2026-11-10; changes only via `12-retro`.
 
 After a round's exams, the retro turns what the student corrected into changes to this skill, so
 the next course starts from them instead of finding them again (FB-010). A round is the exams
@@ -103,9 +103,10 @@ Load the delegation skill first. Spawn one `researcher` per hub-exam, unnamed, f
 pass about 400 KB gets one per shard group of about that size, and only the first group's reads the
 hub's records. Each reads its shards and, inside its window, its hub's records: the tutor log
 (`_build/logs/tutor.md`, its tables and `## Patterns`), the polish logs (`_build/logs/polish-*.md`),
-a source added's log (`_build/logs/source-*.md`), STATUS's judgment calls, PLAN.md's Decisions (a
-default the student changed is a correction), the reopen log that opened the exam and the hub-local
-edits. Its slots:
+a source added's log (`_build/logs/source-*.md`), the skill fixes made in the hub
+(`_build/logs/skill-fixes.md`, FB-014: each a candidate), STATUS's judgment calls, PLAN.md's
+Decisions (a default the student changed is a correction), the reopen log that opened the exam and
+the hub-local edits. Its slots:
 
 - the hub-exam, the hub's root, its shard folder (or the shard files of its group), whether it
   reads the records, and `<skill>`;
