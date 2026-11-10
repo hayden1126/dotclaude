@@ -237,8 +237,9 @@ window's scrollback holds edits the compare caught, so log `clear asked`, hand o
 end the reply with one line, `The pass is checked: type /clear, then "go on with the polish pass".`,
 as `08-practice` step 7.5 does; the fresh session finds the look-back as "A pass that stops" says,
 and any session that starts fresh there skips the clear. Then the student looks back; show them what
-changed on each sheet (FB-137) and each text reworded after a leak hit (step 5.5), and ask each held
-question and apply its answer as above. A change the student rejects there is reworded by them, and
+changed on each sheet (FB-137) and each text reworded after a leak hit (step 5.5), ask each held
+question and apply its answer as above, and ask each confirm STATUS logs `held for the look-back`
+(the Review view's minutes, step 5.4), as `07-cheatsheet`'s "Tag the review" opening says. A change the student rejects there is reworded by them, and
 applied as step 5 applies a fix, logged `redo <item>`: they look away again, and once its compare
 passes and it is committed, a new `clear asked` round comes before they see it; or put back the same
 way as an overreach: a corrected fact in every copy (FB-106), its item logged as dropped; an
@@ -290,7 +291,7 @@ student's go, put each back as HEAD has it (`git restore -- <path>`), logging wh
 applied: a step 5 item, or a step 6 fix or put-back, its item left as HEAD has it and named in the
 report to the student. Without their go, the pass resumes instead: an unchecked change never reaches
 a commit. With the pass's changes in HEAD: while a mock is untaken, step 6's look-back runs unless
-the log shows it done, the held questions among it; then step 7 from its first item the log doesn't
+the log shows it done, the held questions and STATUS's held minutes confirm among it; then step 7 from its first item the log doesn't
 show done (without `fidelity review run`, the review didn't run, and step 7 says so). Otherwise
 nothing the pass applied is in HEAD; the student may look back and is told, by item number from the
 log, what was put back, the closing commit takes out the `Build running` line and rewrites the
