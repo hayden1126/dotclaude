@@ -7,7 +7,8 @@ case needs it, a fake `npm` whose `root -g` names a temp directory, so the machi
 never count. $EXAM_PREP_PLAYWRIGHT wins; else the first of node_modules/ beside the page, the
 working directory's _build/node_modules/ and node_modules/, and npm's global root; with none, it
 names each place it looked, says how to install, and exits 2. A --steps file that isn't
-{"<fig-id>": [{"act"?, "frames", "final"}]} exits 2 before any browser starts.
+{"<fig-id>": [{"act"?, "frames", "final"}]} exits 2 before any browser starts, and so does a
+page with a step-through (a .fig-controls row) run with no --steps.
 
 With EXAM_PREP_PLAYWRIGHT set (and MathJax's and the fonts' hosts allowed), the sample hub's page
 broken one way at a time fails with the matching message: a step-through's frame count, last
@@ -17,7 +18,14 @@ Prev that doesn't step back, a mode button that doesn't reset, a TeX error or un
 an overflow that shows only with the worked examples open, a MathJax startup that never finishes
 or fails,
 and an element named currentScript, which the pinned loader path ignores but which, unpinned,
-moves MathJax's loader to its host; and --views on the mock page (its own class)."""
+moves MathJax's loader to its host; a long page whose rail scrolls the page with scrollIntoView,
+which cuts a long jump short in WebKit (C1); and --views on the mock page (its own class). The
+sample's Review view passes in every viewport, its shots named -review, with the long jump run
+there too; its page broken to show an untagged paragraph, hide an rv block or drop the Must-know
+list fails, and so does a link to a hidden target that doesn't switch to Full notes; a section
+with an Unverified banner before its first h3 is hidden whole, and shown it fails; and a load at
+a hidden target's hash, or a hash change to one, with the Review view remembered, that doesn't
+switch to Full notes fails."""
 import contextlib
 import importlib.util
 import io
@@ -36,6 +44,15 @@ SAMPLE = os.path.join(REPO, "tests", "exam_prep", "fixtures", "site")
 MOCK = os.path.join(REPO, "tests", "exam_prep", "fixtures", "mock")
 MOCKPAGE = os.path.join(REPO, "skills", "exam-prep", "scripts", "mockpage.py")
 NODE = shutil.which("node")
+
+
+def webkit_installed():
+    """Whether the Playwright in $EXAM_PREP_PLAYWRIGHT has its WebKit build on disk."""
+    probe = ("import(process.argv[1]).then((m) => { const p = m.webkit.executablePath(); "
+             "console.log(require('fs').existsSync(p) ? 'yes' : 'no'); })")
+    r = subprocess.run([NODE, "-e", probe, os.path.join(os.environ["EXAM_PREP_PLAYWRIGHT"], "index.mjs")],
+                       capture_output=True, text=True, timeout=60)
+    return r.stdout.strip() == "yes"
 
 
 @unittest.skipUnless(NODE, "node is not on PATH")
@@ -71,7 +88,8 @@ class PlaywrightProbeTest(unittest.TestCase):
         env = {"PATH": self.bin, "HOME": self.tmp}
         if env_dir is not None:
             env["EXAM_PREP_PLAYWRIGHT"] = env_dir
-        return subprocess.run([NODE, VERIFY_PAGE, page or self.page, os.path.join(self.tmp, "out")],
+        return subprocess.run([NODE, VERIFY_PAGE, page or self.page, os.path.join(self.tmp, "out"),
+                               "--no-long-jump"],
                               cwd=cwd or self.tmp, env=env, capture_output=True, text=True,
                               timeout=60)
 
@@ -141,7 +159,8 @@ class StepsFileTest(unittest.TestCase):
             steps = os.path.join(tmp, "steps.json")
             with open(steps, "w", encoding="utf-8") as f:
                 f.write(text)
-            r = subprocess.run([NODE, VERIFY_PAGE, page, os.path.join(tmp, "out"), "--steps", steps],
+            r = subprocess.run([NODE, VERIFY_PAGE, page, os.path.join(tmp, "out"), "--steps", steps,
+                                "--no-long-jump"],
                                env={"PATH": os.path.dirname(NODE), "HOME": tmp,
                                     "EXAM_PREP_PLAYWRIGHT": tmp},
                                capture_output=True, text=True, timeout=60)
@@ -160,6 +179,30 @@ class StepsFileTest(unittest.TestCase):
                     '{"fig-1-a": [{"frames": 2, "final": "x", "act": 3}]}'):
             with self.subTest(bad=bad):
                 self.check(bad, ok=False)
+
+    def run_without_steps(self, page):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "p.html")
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(page)
+            return subprocess.run([NODE, VERIFY_PAGE, path, os.path.join(tmp, "out"), "--no-long-jump"],
+                                  env={"PATH": os.path.dirname(NODE), "HOME": tmp,
+                                       "EXAM_PREP_PLAYWRIGHT": tmp},
+                                  capture_output=True, text=True, timeout=60)
+
+    def test_step_throughs_with_no_steps_file_are_bad_usage(self):
+        # It would check less without saying so: exit 2 before any browser starts.
+        r = self.run_without_steps('<figure id="fig-1-a"><svg></svg><div class="fig-controls">'
+                                   '<button data-act="next">Next</button></div></figure>')
+        self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
+        self.assertIn("the page has step-throughs (a .fig-controls row) and no --steps", r.stderr)
+        # No step-through (a mock page, a class named only as text in code): on to Playwright.
+        for page in ('<main><nav class="views"><button data-view="paper">Paper</button></nav></main>',
+                     '<pre><code>&lt;div class="fig-controls"&gt;</code></pre>'):
+            with self.subTest(page=page):
+                r = self.run_without_steps(page)
+                self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
+                self.assertIn("has no index.mjs", r.stderr)
 
 
 @unittest.skipUnless(os.environ.get("EXAM_PREP_PLAYWRIGHT"),
@@ -185,13 +228,15 @@ class BrowserCatchesTest(unittest.TestCase):
     def tearDownClass(cls):
         shutil.rmtree(cls.tmp)
 
-    def fails(self, name, want, page=None, steps="same"):
-        r = self.verify(name, page, steps)
+    def fails(self, name, want, page=None, steps="same", long_jump=False):
+        r = self.verify(name, page, steps, long_jump)
         self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
         self.assertIn(want, r.stdout)
         return r.stdout
 
-    def verify(self, name, page=None, steps="same"):
+    def verify(self, name, page=None, steps="same", long_jump=False):
+        """verify_page.mjs on page; without long_jump it passes --no-long-jump, which saves eight
+        page loads a run (test_assemble's sample page run checks the default)."""
         page = self.page if page is None else page
         d = os.path.join(self.tmp, name)
         os.makedirs(d)
@@ -203,6 +248,8 @@ class BrowserCatchesTest(unittest.TestCase):
             with open(os.path.join(d, "steps.json"), "w", encoding="utf-8") as f:
                 json.dump(self.steps if steps == "same" else steps, f)
             args += ["--steps", os.path.join(d, "steps.json")]
+        if not long_jump:
+            args.append("--no-long-jump")
         return subprocess.run(args, capture_output=True, text=True, timeout=600)
 
     def edit(self, old, new):
@@ -222,7 +269,7 @@ class BrowserCatchesTest(unittest.TestCase):
                    page=self.edit("window.NotesFig['fig-2-walk'] = function", "window.NotesFigX = function"))
 
     def test_no_steps_entry(self):
-        self.fails("nosteps", "no expected run in --steps", steps=None)
+        self.fails("nosteps", "no expected run in --steps", steps={})
 
     def test_a_stray_steps_entry(self):
         self.fails("stray", "--steps lists #fig-9-x",
@@ -313,6 +360,98 @@ class BrowserCatchesTest(unittest.TestCase):
             'viewBox="0 0 10 10" role="img" aria-label="A dot"><circle cx="5" cy="5" r="4"/></svg>'
             '</figure>'))
 
+    def test_a_long_jump_cut_short_in_webkit(self):
+        # The rail kept its active link in view with scrollIntoView, which in WebKit moves the page
+        # too and cancels the smooth jump the click started (C1): Safari stopped short of the target.
+        # The jump must still be moving when the spy reaches a link the rail has to scroll to, so
+        # the page gets a fourth section, after the source key, with forty subsections.
+        if not webkit_installed():
+            self.skipTest("Playwright's WebKit isn't installed (npx playwright install webkit)")
+        para = "<p>Filler, so the jump from the top to the last rail entry runs a long way.</p>" * 4
+        subs = "".join(f'\n  <h3 id="sec-4-part-{i}">4.{i} Part {i}</h3>\n  {para}' for i in range(1, 41))
+        long = self.edit("    </main>", '<section class="note" id="sec-4">\n  <h2><span class="n">§4</span>'
+                         f'Filler</h2>{subs}\n</section>\n    </main>')
+        r = self.verify("jumpok", long, long_jump=True)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("long jump webkit 1280px top->last ok: #sec-4-part-40", r.stdout)
+        self.assertIn("long jump webkit 1280px bottom->first ok: #sec-1", r.stdout)
+        fixed = ("    var a=byId[id]; if(a){ /* keep active visible in rail: scroll the rail alone, since\n"
+                 "      scrollIntoView also moves the page and cancels a smooth jump in flight (WebKit) */\n"
+                 "      var r=a.getBoundingClientRect(), rr=rail.getBoundingClientRect();\n"
+                 "      if(r.top<rr.top+80) rail.scrollTop+=r.top-rr.top-80;\n"
+                 "      else if(r.bottom>rr.bottom-20) rail.scrollTop+=r.bottom-rr.bottom+20;\n"
+                 "    }\n")
+        old = ("    var a=byId[id]; if(a&&a.scrollIntoView){ /* keep active visible in rail */\n"
+               "      var r=a.getBoundingClientRect(); if(r.top<80||r.bottom>window.innerHeight-20) "
+               "a.scrollIntoView({block:'nearest'});\n"
+               "    }\n")
+        self.assertEqual(long.count(fixed), 1)
+        # The old rail code is pinned on a closed map: the sample's open map (K02) moves the page's
+        # geometry so that WebKit cuts the old jump short going up only.
+        opened = '<details class="examnav" open>'
+        self.assertEqual(long.count(opened), 1)
+        closed = long.replace(fixed, old).replace(opened, '<details class="examnav">')
+        out = self.fails("jumpold", "long jump webkit 1280px top->last: #sec-4-part-40 landed at top",
+                         page=closed, long_jump=True)
+        self.assertIn("long jump webkit 1280px bottom->first: #sec-1 landed at top", out)
+
+    def test_the_review_view_shows_its_blocks_and_hides_the_rest(self):
+        r = self.verify("review", long_jump=True)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("[1280-light-review]", r.stdout)
+        self.assertIn("  review view shows its blocks and hides the rest", r.stdout)
+        self.assertIn("hidden-target link #sec-2-walks: switched to Full notes", r.stdout)
+        self.assertIn("a hash change to hidden #sec-2-walks: switched to Full notes", r.stdout)
+        self.assertIn("a load to hidden #sec-2-walks: switched to Full notes", r.stdout)
+        self.assertIn("long jump chromium 1280px review top->last ok:", r.stdout)
+        self.assertIn("long jump chromium 390px review bottom->first ok: #sec-2", r.stdout)
+        shots = set(os.listdir(os.path.join(self.tmp, "review", "shots")))
+        for name in ("390-dark-review-top.png", "1280-light-review-map.png", "1280-light-review-key.png"):
+            self.assertIn(name, shots)
+
+    def test_a_review_view_that_shows_an_untagged_paragraph_or_hides_an_rv_block(self):
+        # The page's own rule broken one way at a time: the check reads CHASSIS.md's rule itself.
+        keep_p = self.edit("if(tag==='h2') return;", "if(tag==='h2'||tag==='p') return;")
+        self.fails("rvshowp", "the Review view shows p", page=keep_p)
+        hide_rv = self.edit("if(k.classList.contains('rv')){ if(h3) h3.classList.remove('rvhide'); return; }", "")
+        out = self.fails("rvhide", "the Review view hides div.callout.warn.rv", page=hide_rv)
+        self.assertIn("the Review view hides h3#sec-1-sums", out)
+        no_must = self.edit("if(must&&(tag==='ul'||tag==='ol')){ must=false; return; }", "")
+        self.fails("rvmust", "the Review view hides ul", page=no_must)
+
+    def test_a_section_a_banner_takes_out_is_hidden_whole(self):
+        # An Unverified section (11-next-exam) ends with its own Must-know list: the view hides it all.
+        h2 = '<h2><span class="n">§2</span> Graphs</h2>'
+        page = self.edit(h2, h2 + '\n  <div class="callout warn"><div class="lab">Unverified</div>'
+                         '<p>Added without review.</p></div>')
+        r = self.verify("rvout", page=page)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("  review view shows its blocks and hides the rest", r.stdout)
+        rule = "if(outOfReview(sec)){ sec.classList.add('rvhide'); return; }"
+        self.assertEqual(page.count(rule), 1)
+        self.fails("rvoutshown", "the Review view shows section#sec-2.note, which its banner takes out",
+                   page=page.replace(rule, ""))
+
+    def test_a_hidden_target_link_that_doesnt_switch_views(self):
+        self.fails("rvlink", "hidden in the Review view, didn't switch to Full notes",
+                   page=self.no_click_switch())
+
+    def no_click_switch(self):
+        # The click handler's guard, and the hashchange listener: a click on a link changes the
+        # hash, so hashToHidden() alone also switches, and either path passes the check.
+        page = self.edit("if(!t||shown(t)) return;\n      e.preventDefault();",
+                         "return;\n      e.preventDefault();")
+        listener = "window.addEventListener('hashchange',hashToHidden);"
+        self.assertEqual(page.count(listener), 1)
+        return page.replace(listener, "")
+
+    def test_a_hash_to_a_hidden_target_that_doesnt_switch_views(self):
+        # Loaded at a hidden target's hash, or a hash change to one, with the Review view remembered.
+        self.fails("rvload", "a load to #sec-2-walks, hidden in the Review view, didn't switch to Full notes",
+                   page=self.edit("    hashToHidden();\n", ""))
+        self.fails("rvhash", "a hash change to #sec-2-walks, hidden in the Review view, didn't switch",
+                   page=self.edit("window.addEventListener('hashchange',hashToHidden);", ""))
+
     def test_overflow_inside_an_open_worked_example(self):
         self.fails("wexwide", "with the worked examples and map open", page=self.edit(
             "<p>Setup: the range 3 to 7.</p>",
@@ -348,7 +487,8 @@ class ViewsTest(unittest.TestCase):
         os.makedirs(d)
         with open(os.path.join(d, "mock.html"), "w", encoding="utf-8") as f:
             f.write(page)
-        r = subprocess.run([NODE, VERIFY_PAGE, os.path.join(d, "mock.html"), os.path.join(d, "shots"), "--views"],
+        r = subprocess.run([NODE, VERIFY_PAGE, os.path.join(d, "mock.html"), os.path.join(d, "shots"), "--views",
+                            "--no-long-jump"],
                            capture_output=True, text=True, timeout=600)
         return r, os.path.join(d, "shots")
 

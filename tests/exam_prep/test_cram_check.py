@@ -88,7 +88,8 @@ class Cram(unittest.TestCase):
         text = read(TEMPLATE)
         text = text[text.index("-->\n") + 4:]
         fills = {"{{NOTES URL}}": [BASE] * 5, "{{ID}}": ["sec-1-sums", "sec-2-walks", "sec-1-rules"],
-                 "{{MINUTES}}": ["30", "10", "20", "15", "15"], "{{N.K}}": ["1.1", "2.2", "1.2"], "{{TOTAL}}": ["45"], "{{TIERS}}": ["2"]}
+                 "{{MINUTES}}": ["30", "10", "20", "15", "15"], "{{N.K}}": ["1.1", "2.2", "1.2"], "{{TOTAL}}": ["45"], "{{TIERS}}": ["2"],
+                 "{{DEPTH LABEL}}": ["Know cold", "Use", "Recognize"]}
         for slot, values in fills.items():
             for v in values:
                 self.assertIn(slot, text)
@@ -207,6 +208,21 @@ class Cram(unittest.TestCase):
                 rc, out, err = self.run_plain(text.replace(edit[0], edit[1], 1))
                 self.assertEqual(rc, 1, out)
                 self.assertIn(message, err)
+
+    def test_a_row_with_no_depth_label_or_more_than_its_words(self):
+        # The label's words alone, then a colon (S33), as assemble.py's map reads it: the
+        # statement it rests on or an "(inferred: ...)" note after it fails here, at step 7.1.
+        message = "no depth label (Know cold, Use, Recognize or Not on <exam>, its words alone, then a colon)"
+        for old, new in (("Use: a walk count", "a walk count"),
+                         ("Use: a walk count", "Use (inferred: no statement): a walk count"),
+                         ("Use: a walk count", "Used: a walk count")):
+            with self.subTest(new):
+                self.fails(self.edited((old, new)), message, "[§2.2 Walks]")
+        rc, out, err = self.run_on(self.edited(("Use: a walk count", "Not on Midterm 1: a walk count")))
+        self.assertEqual(rc, 0, err)
+        rc, out, err = self.run_plain(self.plain().replace("Use: which rule", "which rule", 1))
+        self.assertEqual(rc, 1, out)
+        self.assertIn(message, err)
 
     def test_a_tier_with_no_rows(self):
         text = self.edited(("## Tier 2: Rules (25 min)", "## Tier 2: Rules (0 min)"))

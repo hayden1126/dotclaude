@@ -1,6 +1,6 @@
 # 01 Ingest
 
-Baseline as of 2026-10-20; changes only via `12-retro`.
+Baseline as of 2026-11-10; changes only via `12-retro`.
 
 Ingest puts every source the plan names on disk under `<root>`, renders each in-scope page to an
 image and its text, counts everything from disk into `MANIFEST.md`, and pulls Ed. The main session
@@ -43,12 +43,15 @@ using its value: `RENDER_DPI=300 bash <skill>/scripts/render_pdf.sh <file> <doc-
 Fill each row's Pages from disk: `pdfinfo` for a PDF, the `slides:` total on the first line of
 `map` for a deck (vertical slides included), the page markers for an ebook (FB-044). Then count again across all rows and compare with any count already written
 in STATUS or the plan: a total written from memory has been wrong before. Record printed
-slide numbers next to PDF pages wherever the two differ (L04).
+slide numbers next to PDF pages wherever the two differ (L04). Fill each row's Notes as
+`<what it is>[; <remark>]`, what the source is in a few words ("Lecture 4: search") first, and its
+By, as the template's legend says: the page's source key shows both.
 
 ## Step 4: Originals
 
 When the student wants the originals gone, compare every original's SHA-256 with its `sources/`
-copy first (`sha256sum`), and delete only on a full match. Then MANIFEST's "Originals" line says
+copy first, one pair at a time: `sha256sum <original> sources/<copy>` prints two sums, and the
+original is deleted only when the two are equal. Then MANIFEST's "Originals" line says
 `sources/` is the only copy, with the date, and STATUS says so too, so the next session reads it
 before anything touches `sources/` (FB-043). A sandboxed session can't delete outside its
 root: give the student the exact command.
