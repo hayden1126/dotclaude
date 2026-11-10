@@ -23,9 +23,9 @@
   them before the student has attempted that set.
 - Practice keys (`practice/*-key.md`, `mock-values-key.md` among them) and the script that computes
   the mocks', `_build/verify/mock_key.py`, are quarantined: the student attempts first, no page
-  build or agent reads them (but `08-practice` step 8's key recheck writer, run in the background
-  in its own worktree, its transcript never opened, whose whole reply names part ids and file
-  names only), and until
+  build or agent reads them (but the key recheck writer that `08-practice` step 8.1's key gate
+  spawns, run in the background in its own worktree, its transcript never opened, whose whole
+  reply names part ids and file names only), and until
   then STATUS, `_build/logs/`, commits and replies name a part, never its answer. The tutor's values under `practice/tutor/` are quarantined the same way, except
   that `09-tutor` reads them to grade and shows a part's value once the student has attempted it or
   asks for it. The student doesn't watch the build from stage 08 on; a session they watch

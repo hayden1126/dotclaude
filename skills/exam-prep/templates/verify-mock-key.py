@@ -32,7 +32,7 @@ a part the mock lacks or names one twice, and when the key's parts differ from t
 part's answer is empty, or an Answer: line sits outside a bare `## Question N` block (mock_leak.py
 would miss it), and stops, naming the file, at a mock or key that isn't UTF-8 text.
 SKIP leaves named parts out of the run: a part whose question would need rewording, which the
-key recheck writer may not do (08-practice step 8), so KEY OK still holds every other part to its
+key recheck writer may not do (08-practice step 8.1), so KEY OK still holds every other part to its
 value. A skipped part's value() and reasoned() calls do nothing, it needs neither, its key answer
 isn't compared (the writer replaces it with a `Skipped tonight:` line, which no value would
 match), and the KEY OK line lists it as skipped. Python works out a call's arguments before the

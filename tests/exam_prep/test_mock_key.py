@@ -169,7 +169,7 @@ class MockKey(unittest.TestCase):
         self.assertIn("## exam1\n\n- Q1(a): 6\n- Q1(b): 3\n- Q2(a): S A B C T, dist(T) = 7\n- Q3(a): 2\n", values)
 
     def test_a_skipped_part_is_left_out_and_the_rest_still_checked(self):
-        # The key recheck writer's `question` part (08-practice step 8): its answer no longer
+        # The key recheck writer's `question` part (08-practice step 8.1): its answer no longer
         # matches, and even an assert on its instance fails, yet every other part holds.
         self.edit("mock-exam1-key.md", "Answer: S A B C T, dist(T) = 7", "Answer: S A C B T, dist(T) = 7")
         guarded = BODY.replace('    value("exam1", "Q2(a)"', '    if not skipped("exam1", "Q2(a)"):\n'
