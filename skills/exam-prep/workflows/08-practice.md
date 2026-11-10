@@ -412,10 +412,10 @@ merge, as that step says.
      merge --no-edit <branch>`; with no commit of its own (nothing needed changing), nothing
      merges. Remove its worktree and branch as `09-tutor` step 5.5.3 does, unless the Agent tool
      already did. When the brief named leak parts, run `python3 -I _build/verify/mock_key.py` (part
-     ids only): each leak part must be in its mock's `skipped:` list (a mock whose line isn't KEY
-     OK prints none: read the one `SKIP` line, `grep -n '^SKIP' _build/verify/mock_key.py`, never
-     the lines after it, which hold values). One missing (the writer rewrote it, say, as a part
-     that also fails) makes the report "Anything else" below from here: the merge stays, no `Key
+     ids only): each mock's line must say KEY OK, since a `done` writer leaves it so, and each leak
+     part must be in that mock's `skipped:` list; this session never opens `mock_key.py` to look.
+     A mock not KEY OK, or a leak part missing (the writer rewrote it, say, as a part that also
+     fails), makes the report "Anything else" below from here: the merge stays, no `Key
      checked:` line is rewritten, and the next brief names each missing part in its Purpose as one
      the last writer left unskipped, never a bare respawn, which loops. Otherwise rewrite each untaken mock's line to `Key checked: <slug> <date> at <base>`, or
      add it where the mock has none (an older hub): a line committed after the base stays in the
