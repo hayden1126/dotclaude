@@ -50,8 +50,8 @@ show a sheet line it changes, exactly, before making it (FB-137; while a mock is
   a cited source, its working shown (hard rule 3).
 
 While a mock is untaken, the pass keeps `08-practice` step 8's fence, with the cram order added: the
-session and every reader search only `notes/`, `cheatsheet/`, `_build/frag/`, `_build/review/`,
-`_build/extract/` and `practice/cram-order.md`, open nothing under `practice/` but the cram order
+session and every reader search only `notes/`, `cheatsheet/`, `_build/frag/`, `_build/extract/`
+and `practice/cram-order.md`, open nothing under `practice/` but the cram order
 (the student reads it before the mocks), and never open `_build/verify/mock_key.py` or `_build/mock-plan.md`: a search
 over the hub root prints key lines, and the plan holds the mocks' questions. Each write to the
 pass's log or to STATUS is followed by `python3 -I <skill>/scripts/mock_leak.py <file> <the untaken
@@ -92,9 +92,8 @@ included). Start it: the ask in the student's words, the pass, the sections, the
 hub's head (`git rev-parse HEAD`) as `before <sha>`. The log marks each step's end as it finishes
 (`step 2 done`, `step 5 done`) and each of step 7's items, so a resume knows where the pass stopped.
 The pass's paths, below, are `notes/ _build/frag/ ':(glob)cheatsheet/*.html'
-':(glob)cheatsheet/*.tex' _build/review/notes/ _build/review/_build/frag/ MANIFEST.md
-_build/backbone.md _build/chassis.html practice/cram-order.md` as git pathspecs (the review page's
-paths match nothing on a hub without one), the globs quoted (zsh stops on a glob that matches
+':(glob)cheatsheet/*.tex' MANIFEST.md _build/backbone.md _build/chassis.html
+practice/cram-order.md` as git pathspecs, the globs quoted (zsh stops on a glob that matches
 nothing) and marked `:(glob)`, without which a pathspec's `*` also matches a `/` and takes in a
 finished exam's archive, `cheatsheet/<exam-slug>/`.
 
@@ -139,9 +138,9 @@ step 1 says.
     (`07-cheatsheet`'s "After shipping", FB-140); so does a queued addition on it, a STATUS
     final-sheet item struck with why, or a tutor log `sheet line` dropped on the student's word
     (`09-tutor` step 5, "One open patch");
-  - the condensed review page, when the hub has one: a row on cut material goes, since the page
-    leaves out what a `Not on <exam>` banner holds (`07-cheatsheet`'s "The condensed review page"
-    item 2), and a row that names cut and kept material is reworded to the kept part;
+  - the Review view, when PLAN.md gives it minutes: a `.rv` tag on cut material comes off, in the
+    notes and the fragment, since nothing under a `Not on <exam>` banner joins the view
+    (`07-cheatsheet`, "Tag the review");
   - a cram order row on cut material moves to its skip list (`08-practice` step 7), and one whose
     one thing names cut and kept material is reworded to the kept part;
   - an untaken mock isn't opened or edited: the cram order's line for it says the mock predates
@@ -203,9 +202,9 @@ step 1 says.
    log line dropped) is logged with it and made at item 6, just before the commit, so a stop before
    that commit leaves none.
 4. Rebuild and check each product the pass touched, as that section's item 3 lists them (the notes
-   page, the review page, each sheet, the cram order and the page's cram copy), the touched
+   page with its Review view and the map's cram block, each sheet, the cram order), the touched
    sections' screenshots seen; its republish waits for step 7.1.
-5. That section's item 4: the questions check when the pass changed the notes or the review page,
+5. That section's item 4: the questions check when the pass changed the notes,
    and while a mock is untaken the leak compare with the pass's baseline file, never a new
    baseline (a `.tex` is read as its source). A questions hit is reworded with fresh numbers and
    setup (S7); a new hit on a number, order or table answer is a leak, reworded. Either reword is
