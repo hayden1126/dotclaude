@@ -52,9 +52,10 @@ exactly once.
 The Review view (CHASSIS.md): the hub root's PLAN.md line `- Review view: <N> minutes of reading`
 keeps the page's Review / Full notes toggle (the chassis's `<!-- REVIEW TOGGLE -->` blocks), and
 the build fails when the view's words, read at READING_RATE words a minute, take more than N
-minutes (both numbers printed). `- Review view: none: <why>`, or no such line, strips the toggle
-and refuses any class rv. Class rv goes only on a worked example (details.callout.example.wex) or
-a Pitfall (div.callout.warn whose label is Pitfall), each directly inside its section.
+minutes (both numbers printed); the map's cram block is left out of that count. `- Review view:
+none: <why>`, or no such line, strips the toggle and refuses any class rv. Class rv goes only on
+a worked example (details.callout.example.wex) or a Pitfall (div.callout.warn whose label is
+Pitfall), each directly inside its section.
 
 The cram block (K02): when practice/cram-order.md exists, it must pass cram_check.py against the
 assembled page's ids, and its tiers, rows, Skip line and Out of time line are rendered into a
@@ -469,11 +470,12 @@ def elements(node):
             yield from elements(k)
 
 
-def text_of(node):
-    """node's text, an SVG's left out (a figure's labels are no reading)."""
-    if node["tag"] == "svg":
+def text_of(node, skip=frozenset()):
+    """node's text, an SVG's left out (a figure's labels are no reading), and any element with a
+    class in skip."""
+    if node["tag"] == "svg" or classes_of(node) & skip:
         return ""
-    return " ".join(k if isinstance(k, str) else text_of(k) for k in node["kids"])
+    return " ".join(k if isinstance(k, str) else text_of(k, skip) for k in node["kids"])
 
 
 def label_of(node):
@@ -822,7 +824,10 @@ def build(root):
                  and s["tag"] == "section" and "note" in classes_of(s)
                  and not s["attrs"].get("id", "") == f"sec-{max(nums, default=0) + 1}"
                  for e in review_parts(s)]
-        words = sum(reading_words(text_of(e)) for e in shown) + reading_words(text_of(Tree(nav).root))
+        # The cram block is a reading list into the notes, not review text: a page tagged up to its
+        # minutes must not fail at the first build with a cram order (08 step 7.4).
+        words = sum(reading_words(text_of(e)) for e in shown) \
+            + reading_words(text_of(Tree(nav).root, skip={"ecram"}))
         if words > budget * READING_RATE:
             problems.append(f"the Review view reads in about {words / READING_RATE:.1f} minutes ({words} "
                             f"words at {READING_RATE} a minute), over PLAN.md's {budget}: untag some "

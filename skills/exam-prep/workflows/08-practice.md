@@ -245,7 +245,8 @@ Then:
    notes page: `assemble.py` renders the map's cram block from `practice/cram-order.md` on every
    build and opens the map (`06-site` step 4), so the page needs no edit of its own. Run "Changing
    the notes or a sheet" items 1 and 3 to 5 for the notes page (its compare against the keys, the
-   rebuild and checks, the republish to the same URL). Plain-text notes have no page: the cram
+   rebuild and checks, the republish to the same URL; a rebuild over the Review view's minutes is
+   untagged as item 3 says). Plain-text notes have no page: the cram
    order stays a file. This item runs on its own: after items 1 to 3 here, after step 8.4, and
    after items 1 and 2 for any other later change to the cram order's tiers, rows or skip list. A
    change to the cram order inside "Changing the notes or a sheet" (a row that quotes the changed
@@ -394,10 +395,12 @@ The products, each one the hub has:
    - The notes page: each changed section's fragment, in its own markup (`_build/CONVERT.md`), and
      `06-site` step 3's `fidelity.py` compare of it with its notes file, then `06-site` step 5, all
      of it, the changed sections' screenshots seen (in both views when the page has the Review
-     view: `assemble.py` holds it to its minutes). `assemble.py` renders the map's cram block from
-     `practice/cram-order.md` as item 2 left it, so this one rebuild carries a change to the cram
-     order's tiers, rows or skip list too, with or without a notes change, and step 7.4 never runs
-     inside this list. Plain-text notes: the touched references checked by eye (`04-write` step 6),
+     view). `assemble.py` holds the Review view to PLAN.md's minutes (the cram block left out):
+     over them, the main session untags as `07-cheatsheet`'s "Tag the review" says, lowest-ranked
+     first, and rebuilds, before anything else, a redispatch included. `assemble.py` renders the
+     map's cram block from `practice/cram-order.md` as item 2 left it, so this one rebuild carries
+     a change to the cram order's tiers, rows or skip list too, with or without a notes change, and
+     step 7.4 never runs inside this list. Plain-text notes: the touched references checked by eye (`04-write` step 6),
      and `notes/combined.md` rebuilt from the section files when it exists.
    - A sheet: an HTML sheet through `07-cheatsheet` step 5, its audit limited to the change, then
      its step 4; near a full side, new wording is no longer than what it replaces (FB-137). A LaTeX

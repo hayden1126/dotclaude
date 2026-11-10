@@ -19,7 +19,8 @@ and opens; with none, the map stays closed; a cram order failing cram_check (an 
 them), a row with no depth label or Markdown the map can't render, a hand-written cram block or an
 open attribute in examnav.html is refused. PLAN.md's `- Review view: <N> minutes of reading` keeps
 the toggle, `none` or no line strips it and refuses class rv; rv anywhere but a worked example or
-a Pitfall directly in its section, an unreadable line, and a view over its minutes are refused.
+a Pitfall directly in its section, an unreadable line, and a view over its minutes are refused;
+the map's cram block is left out of the minutes.
 The skill repo's synthetic sample hub, the source of the chassis's
 reference screenshots, is the template filled, links the skill's CHASSIS.md and assembles with
 every link resolved; with EXAM_PREP_PLAYWRIGHT set, its page also passes verify_page.mjs, run as a
@@ -769,6 +770,18 @@ class AssembleTest(unittest.TestCase):
         h = self.cram_hub(plan="- Review view: 4 minutes of reading\n", sec1=sec1, cram=None)
         rc, out = h.run()
         self.assertEqual(rc, 0, out)
+
+    def test_the_cram_block_is_left_out_of_the_review_views_minutes(self):
+        # A page tagged up to its minutes still builds once 08 step 7 writes the cram order.
+        long = RV_PITFALL.replace("Overlaps count twice.", "word " * 400)
+        sec1 = SEC1_MK.replace('<div class="callout def">', long + '<div class="callout def">')
+        cram = CRAM.replace("Know cold: Widgets nest", "Know cold: " + "nest " * 300)
+        for c in (None, cram):
+            with self.subTest(cram=c is not None):
+                h = self.cram_hub(plan="- Review view: 4 minutes of reading\n", sec1=sec1, cram=c)
+                rc, out = h.run()
+                self.assertEqual(rc, 0, out)
+                self.assertEqual('class="ecram"' in h.page(), c is not None)
 
     def test_reading_words_counts_math_by_its_symbols(self):
         self.assertEqual(assemble.reading_words(r"Sum \(\frac{n(n+1)}{2}\) now"), 6)

@@ -253,7 +253,10 @@ At each set's end, its score in the reply and the log: verdicts right, and reaso
       one, unless the Agent tool already did) and the branch (`git branch -D <branch>`: its work
       is redone, not kept), mark the line `held: <why>`, its fields kept, and tell the student
       why. On their go it is dispatched again, the brief changed where the report says what
-      stopped it.
+      stopped it. A report blocked on the Review view's minutes (the Notes patch brief stops
+      there) gets the main session's untag first, as `07-cheatsheet`'s "Tag the review" says,
+      lowest-ranked first, committed on the hub before any redispatch: a bare redispatch fails the
+      same way.
    2. `git diff --no-renames --name-status <hub branch>...<branch>` (three dots: the branch's own
       changes) lists only `M` lines (a patch adds and deletes no file) under `notes/`,
       `_build/frag/` and `cheatsheet/`, and `_build/notes.html`; with a page a changed

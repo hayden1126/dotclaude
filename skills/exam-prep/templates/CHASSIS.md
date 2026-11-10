@@ -44,7 +44,9 @@ the skill's.
   jumps. With `- Review view: none: <why>` or no line, `assemble.py` strips the toggle (the
   chassis's `<!-- REVIEW TOGGLE -->` blocks) and refuses any class `rv`.
 - **The Review view's budget**: `assemble.py` counts the view's words, the map's included and the
-  source key's left out, and fails the build when they take more than PLAN.md's minutes at
+  source key's and the map's cram block left out (the cram block is a reading list into the notes,
+  not review text, so a page tagged up to its minutes still builds once `08-practice` step 7
+  writes the cram order), and fails the build when they take more than PLAN.md's minutes at
   **150 words a minute** (`READING_RATE`), printing both numbers. The rate is an unmeasured
   estimate for dense study notes, not a measured one. In math, each run of letters and each
   number counts as a word (`\frac{n(n+1)}{2}` is four); code counts like prose, a word per
