@@ -192,8 +192,11 @@ step 1 says.
    "Changing the notes or a sheet" item 2 searches for (the one list of the published products and
    what a change does to each), a new number or trace as step 1 says, never an answer from a set
    MANIFEST.md doesn't mark `yes, attempted`. While a mock is untaken, each fix is that section's
-   item 2: a method taught in general or with an example of its own, never a mock's instance.
-   Change the fragment in its own markup (`_build/CONVERT.md`), and a figure label in the
+   item 2: a method taught in general or with an example of its own, never a mock's instance. A
+   fix that changes the reference (`05-verify` step 5) adds `08-practice` step 4's `Reference
+   changed:` line once `Stage 08 built` stands, made at item 6 like the other changes outside the
+   pass's paths: `08-practice` step 8.1's key gate rechecks the untaken keys against it before the
+   next attempt, and no writer runs inside the pass. Change the fragment in its own markup (`_build/CONVERT.md`), and a figure label in the
    fragment's SVG and wherever the notes describe it. Use the Edit tool: the notes hold math and
    Unicode that a `sed` rewrite breaks. An added sheet line, while a mock is untaken, goes where
    `08-practice` step 8 sends a one-line addition (the final sheet once its step 8.3 has built it,
