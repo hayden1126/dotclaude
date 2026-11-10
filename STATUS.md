@@ -206,6 +206,11 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     later (one in the second the previous holder released). A long wait can starve to its
     timeout. Fix shape: a ticket queue (a waiter writes a ticket, and only the oldest live ticket
     may take the lock; a fresh caller queues behind it). Not picked yet; a lane after Nov 16.
+  - **`lane sync-main` refuses on empty untracked dirs** (seen 2026-11-10, #183's chain): it
+    listed 18 dirs that hold no file (`.claude/.cc-writes` pairs Claude Code leaves in any dir a
+    session ran from, old empty skill subdirs, a `.tmp`), which `git status` never shows. The lead
+    removed them with `rmdir` (refuses a non-empty dir) and reran. They come back, so every chain
+    can hit it. Fix shape: skip dirs with no file, as git does. Not picked yet; a lane after Nov 16.
   - **excluded-guard rule 1 blocks `ed-pull` in a nested exam-prep hub** (reported 2026-11-09 by a
     session outside dotclaude, d0396fce): the exam-prep convention keeps a hub as its own git repo
     inside the course repo, and the skill runs `ed-pull` from the hub root, so rule 1 refuses it
