@@ -1,6 +1,6 @@
 # CHASSIS: how the notes page looks
 
-Baseline as of 2026-10-20; changes only via `12-retro`.
+Baseline as of 2026-11-10; changes only via `12-retro`.
 
 The look only: layout, palette, components and how the page behaves. What the notes say is
 `STYLE.md`'s, and how Markdown becomes HTML is `CONVERT.md`'s. A hub keeps a copy in
@@ -74,7 +74,7 @@ Only a step-through may add unstyled hook classes for its handler, each named `f
 - Scroll-spy is a scroll handler, and a check waits for scrolling to settle (L18).
 - **C1.** The rail keeps its active link visible by scrolling the rail alone, never
   `scrollIntoView`: that moves the page too and cancels a smooth jump in flight in WebKit
-  (L71). `verify_page.mjs` checks the long jump, in WebKit too when it is installed.
+  (L25). `verify_page.mjs` checks the long jump, in WebKit too when it is installed.
 - The page is a fragment (title, font links, style, body content, scripts), as past runs
   published it: the artifact host wraps it in a standards-mode document, and `verify_page.mjs`
   wraps it the same way before checking it, since loaded alone it renders in quirks mode (L19).

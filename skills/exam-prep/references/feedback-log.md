@@ -1,6 +1,6 @@
 # Feedback log
 
-Baseline as of 2026-10-20; changes only via `12-retro`.
+Baseline as of 2026-11-10; changes only via `12-retro`.
 
 Every rule the skill encodes came from a correction or a stated preference in a past run. This log
 traces each one to its evidence. Ids are stable, so a hub doc that cites `FB-073` keeps pointing at
@@ -39,6 +39,7 @@ naming the id that replaces it, if one does.
 | FB-011 | Course material is copyrighted: `sources/` and rendered pages are gitignored, the hub repo stays local, and no remote is added without the student's go. | SKILL, t:hub | B4.C8, A4.C8 |
 | FB-012 | Never state a prediction about the exam without a source. Record the instructor's exam-format statement in the hub and cite it. | w00, w09 | A3.C10 |
 | FB-013 | When the student asks to skip the extract, the backbone or the reviews for an added source, push back once (what it costs, how long the full path takes), commit a `Skip asked` line in STATUS, and wait, writing no notes. Asked again, add it as notes only, in one commit with its MANIFEST row and an `Unverified:` STATUS line; values from the checker's output or quoted with a citation, never computed; an `Unverified` banner on the material and the page; off every sheet, out of the mocks' plan and the cram order's reading rows, and out of walk-throughs until verified. The addition fences itself like a build. Where the ask comes (a tutor tab, a build, a patch open, a mock untaken) decides when either happens. | SKILL, w11, w02, t:convert, extract_check.py | skill test P1 |
+| FB-014 | A bug found in a hub that lives in a skill file (a template, the chassis, a script, a brief) is fixed in the hub, then logged in `_build/logs/skill-fixes.md` (what, where, the hub's diff) for the retro, and the session offers to relay the fix to the other open hubs that use that file. | SKILL, w12, t:briefs | E1.C11, E1.C13, D1 (section 2), F1 (section 2) |
 
 ## 00-intake
 
@@ -63,7 +64,7 @@ naming the id that replaces it, if one does.
 | FB-040 | Never use WebFetch on slides: it summarizes and drops formulas and slide numbers. Fetch raw HTML with curl and slice it; render PDFs page by page to image and text, and view the image when the text layer is thin. | w01, SKILL | A1.G1, A4.G1, B4.G15, H1.G2 |
 | FB-041 | A deck is not a lecture: cut extraction boundaries by content. Never split one slide between two agents. | w01, w02 | A1.C3 |
 | FB-042 | Select source files by name. Never glob a downloads folder, which holds unrelated secrets. | w01 | H1.G8 |
-| FB-043 | Delete originals only after a SHA-256 match against `sources/`. After that, STATUS says `sources/` is the only copy. | w01 | B1.C8, B2.C8, B4.C17 |
+| FB-043 | Delete originals only after a SHA-256 match against `sources/`. After that, STATUS says `sources/` is the only copy. | w01 | B1.C8, B2.C8, B4.C17, D1.C27 |
 | FB-044 | MANIFEST has one row per document: id, file, pages, in, out or reserved, and a note. Take counts from disk. | w01, t:manifest | B1 (stage 01), B4 (section 5a) |
 
 ## 02-extract
@@ -85,7 +86,7 @@ naming the id that replaces it, if one does.
 | FB-061 | A coverage matrix maps every extract block to a subsection or to an explicit skip, and a script checks it. | w03 | B4 (section 5a) |
 | FB-062 | Shortlist figures from both directions: the notes' mechanisms that prose can't carry, and the slides' diagrams. Report the shortlist before building. | w03, w06 | A1.C12, A1.C13 |
 | FB-063 | Map each subsection to the practice questions that drill it, and each practice question to its section. | w03, S9 | B4 (S9), A1.C19 |
-| FB-064 | Weight depth by how the exam tests: procedures get depth, definitional material stays brief. | w03 | B4.C3 |
+| FB-064 | Weight depth by how the exam tests: procedures get depth, definitional material stays brief. | w03, S33 | B4.C3, F1.C12, D1.C5, D1.C21, E1.C14, E1.C20, E1.C29 |
 | FB-065 | Conventions the answers depend on are stated once, in one canonical place, and linked from every use. | w03, S8 | B4 (S8), B4 (hard rules) |
 
 ## 04-write
@@ -111,7 +112,7 @@ naming the id that replaces it, if one does.
 | FB-086 | No compressed aphorisms: give the concrete situation (who holds what, which channel is trusted). | S29 | A1.C29 |
 | FB-087 | When a later section qualifies a number, put a forward caveat where the plain number first appears. | S30 | A1.C25 |
 | FB-088 | Confusable pairs get an explicit comparison table. | S31 | B3.C23 |
-| FB-089 | Where the slides' convention and the answer keys' convention differ, reconcile them in one place. | S32, w04 | B3.C24, B4.G17 |
+| FB-089 | Where the slides' convention and the answer keys' convention differ, reconcile them in one place. | S32, w04, w03, w00 | B3.C24, B4.G17, E1.C7 |
 | FB-090 | Writers never compute a trace or a number by hand: they leave a TODO-VERIFY marker, and the value comes from the checker. | w04, w05 | B1 (stage 04), B4 (hard rules), B1.G8 |
 | FB-091 | After all sections exist, a wiring pass adds the cross-reference links, the lettering and the Conclusion lines. | w04 | A1.C6 |
 | FB-092 | When the student reads in a plain-text tool, write for it: no LaTeX, pipe tables, cross-references as text. | S10, w04 | A4.C3, A1.G14 |
@@ -130,6 +131,7 @@ naming the id that replaces it, if one does.
 | FB-106 | When a correction lands, fix every copy: notes, checklist, pitfall box, sheet. | w05, w10 | B3.C22 |
 | FB-107 | When official solutions arrive, diff every answer against the notes and the solved key, and record the verdict. | w05 | A3.C17 |
 | FB-108 | Check a reviewer's claim with the checker before applying it. Fixes are applied single-threaded. | w05 | B1 (stage 05) |
+| FB-109 | A cold reader, who sees only the section, flags every undefined term, compressed sentence and untabled confusable pair before publish. | w05, t:briefs | D1.C6, D1.C7, D1.C8, D1.C9, D1.C10, D1.C11, D1.C12, D1.C13, D1.C15, D1.C31, E1.C22, E1.C23, E1.C24, E1.C25, E1.C26, E1.C30, F1.C9, F1.C11, F1.C13 |
 | FB-191 | Before publish, the main session checks the notes against every unattempted question set's text (`mock_leak.py --questions`): a shared run of 8 words or 3 numbers is a blocker, rewritten with fresh numbers and setup (S7). A passage the student may want back goes to `_build/held.md` and returns as a patch once the set is attempted. | w05, w09 | D1.C26, D1.C28, D1 (stage 05), E1 (stage 05), F1 (stage 05) |
 
 ## 06-site
@@ -149,6 +151,7 @@ naming the id that replaces it, if one does.
 | FB-120 | Conversion agents use only the chassis's classes. CSS changes are made by the main session and checked against the chassis screenshots. | S13, w06 | H1.C11, B4 (S13) |
 | FB-121 | Material found out of scope stays, under a visible "Not on Exam N" banner. | w06, w11 | A3.C17, B4.C14, A4.C9 |
 | FB-122 | Publish from the session that builds the page: a republish elsewhere must first read the whole live copy. | w06 | B3.G3, B4.G13 |
+| FB-123 | Every source citation links to its row in the page's source key, which says what the source is and its file; the build fails on a code with no row. | w06, assemble.py | E1.C10, E1.C11, D1.C20 |
 
 ## 07-cheatsheet
 
@@ -167,6 +170,7 @@ naming the id that replaces it, if one does.
 | FB-140 | Space freed by a scope cut is reserved for the mock-derived items. Check other sections first, then ask. | w07 | B3.C4, B3.C5 |
 | FB-141 | Organize the sheet by task, and give the cram order a map of the sheet. | w07 | B3.C28 |
 | FB-142 | Text inside embedded SVG stays above the font floor. | w07, check_pdf.py | B3.C31, B4.G9 |
+| FB-143 | When the exam allows no sheet, offer a condensed review page on the notes chassis instead: cram-ordered, length asked once, opening with what it covers and leaves out, audited like any condensation. | w07, w00 | E1.C17, E1.C18, E1.C21, F1.C3, F1.C5, F1.C8 |
 
 ## 08-practice
 
@@ -180,6 +184,8 @@ naming the id that replaces it, if one does.
 | FB-155 | Clones at exam difficulty with fresh numbers, plus one harder set flagged as harder than the exam. | w08 | A2.C1 |
 | FB-156 | A script asserts every key value. | w08 | B1 (stage 05), B4 (section 5a) |
 | FB-157 | The night before, offer a cram order: a reading list ranked by points per minute, in tiers with minute budgets, a skip list and an "out of time" fallback to the Must-know lists, pointing into the verified notes rather than new text. | w08 | B3.C1, B3.C2, B3.C10, B4.C15 |
+| FB-158 | The cram night opens with the notes page's link and each mock's, defines a tier in one line, and starts from what the student has already read. | w08, w06 | E1.C5, E1.C6, D1.C22 |
+| FB-159 | The cram night offers an Ed re-pull first, and new staff answers go through the source-added path, mock keys included. | w08 | D1.C23, E1.C15, E1.C19 |
 
 ## 09-tutor
 
@@ -189,12 +195,13 @@ naming the id that replaces it, if one does.
 | FB-161 | Grade the verdict and the reasoning separately against rubric points. Say what a full-mark reason contains. Grade the arithmetic and the wording even when the verdict is right. | w09 | A1.C21, A3.C4, A3.C6, A3.C20, A3.C22 |
 | FB-162 | To check partial work, verify every intermediate value and list the steps left. | w09 | A3.C5 |
 | FB-163 | Give solutions when asked, after one line of pushback. Support a reset: treat the student as not having seen them. | w09 | A3.C7, A3.C8 |
-| FB-164 | A small fact question gets a direct answer and a tiny sanity case. Answer text is short and exam-ready. | w09 | A3.C12 |
+| FB-164 | A small fact question gets a direct answer and a tiny sanity case. Answer text is short and exam-ready. | w09 | A3.C12, D1.C30, E1.C28 |
 | FB-165 | Quiz mode: one true/false at a time, the full statement with no hint, compared against the key, flagging right-for-the-wrong-reason, with a score per set. | w09 | A3.C18 |
 | FB-166 | When a confusion exposes a gap, patch the notes at once with one short sentence at that point, republish and bump the version. A good tutor answer goes into the notes, and a one-line form into the sheet if it fits. | w09, w10 | A3.C15, A3.C16, B3.C14, A1.C23 |
 | FB-167 | During study Q&A the main session only answers. Every edit goes to a dispatched writer with the exact text and the verify steps. | w09 | B3.C34, B4.C13 |
 | FB-168 | On pushback, re-derive and concede an overstatement plainly. | w09 | A3.C21 |
 | FB-169 | Show a clearer draft first and apply it when the student says so. | w09 | B3.C29 |
+| FB-192 | In chat, write symbols as Unicode or plain text, never LaTeX delimiters, and never coin a label the course doesn't use. | w09 | D1.C14, D1.C16, D1.C17 |
 
 ## 10-polish
 
