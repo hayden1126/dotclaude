@@ -28,7 +28,7 @@ no hub had it, carried on (`trying (round N+2)`). An item nobody picks stays `op
 | Id | Item | Axis | Evidence | Status |
 |---|---|---|---|---|
 | K01 | Keep exam scope as one fact per section and per question, and generate every in/out marker from it: the sidebar, the exam-day map, the mock's totals and time budget, the cheat sheet. A scope cut then reaches every product at once. | org | K-org.F1, K-word (other axes) | open |
-| K02 | Build the tiered cram order (points per minute, minute budgets) into the top of the notes, open by default and linked to anchors, from the same weight data as the exam-day map. | org | K-org.F2, E1.C5, E1.C6, D1.C22 | trying (round 2) |
+| K02 | Build the tiered cram order (points per minute, minute budgets) into the top of the notes, open by default and linked to anchors, from the same weight data as the exam-day map. As tried: `assemble.py` generates the page's cram block from `practice/cram-order.md` on every build (`06-site` step 4), so no copy is kept by hand. | org | K-org.F2, E1.C5, E1.C6, D1.C22 | trying (round 2) |
 | K03 | Route every mock part to its notes subsection (a link) and to its key entry (behind a reveal). The key ends each answer with a review link and a per-step points split. The points table links to its questions. | org, struct, ui | K-org.F3, K-struct.F6, K-ui.F10 | open |
 | K04 | When the exam's answer is a table (a trace), write the worked example and the key answer as that table, one numbered step per row. Prose steps stay for derivations and proofs. | struct | K-struct.F1 | open |
 | K05 | Worked-example steps reuse the recipe's step numbers (or tag the recipe step each applies), and the cheat sheet keeps the recipe's step count and numbering. | struct | K-struct.F2, K-struct.F14 | open |

@@ -131,8 +131,8 @@ naming the id that replaces it, if one does.
 | FB-106 | When a correction lands, fix every copy: notes, checklist, pitfall box, sheet. | w05, w10 | B3.C22 |
 | FB-107 | When official solutions arrive, diff every answer against the notes and the solved key, and record the verdict. | w05 | A3.C17 |
 | FB-108 | Check a reviewer's claim with the checker before applying it. Fixes are applied single-threaded. | w05 | B1 (stage 05) |
-| FB-109 | A cold reader, who sees only the section, flags every undefined term, compressed sentence and untabled confusable pair before publish. | w05, t:briefs | D1.C6, D1.C7, D1.C8, D1.C9, D1.C10, D1.C11, D1.C12, D1.C13, D1.C15, D1.C31, E1.C22, E1.C23, E1.C24, E1.C25, E1.C26, E1.C30, F1.C9, F1.C11, F1.C13 |
-| FB-191 | Before publish, and before each republish after a notes change (an `08` change, a `09` patch, a `10` pass, an `11` source added), the main session checks the notes against every unattempted question set's text (`mock_leak.py --questions`), skipped when there is none: a shared run of 8 words or 3 numbers is a blocker, rewritten with fresh numbers and setup (S7). The unattempted sets are those whose solutions row reads exactly `yes`, and those with no solutions row whose own Answers cell doesn't read `no, attempted YYYY-MM-DD`. A passage the student may want back goes to `_build/held.md` and returns as a patch once the set is attempted. | w05, w08, w09, w10, w11, w00, t:hub, t:manifest, mock_leak.py | D1.C26, D1.C28, D1 (section 2), E1 (section 4), F1 (section 2) |
+| FB-109 | A cold reader, who sees only the section, flags every undefined term, compressed sentence and untabled confusable pair before publish. | w05, t:briefs, t:plan | D1.C6, D1.C7, D1.C8, D1.C9, D1.C10, D1.C11, D1.C12, D1.C13, D1.C15, D1.C31, E1.C22, E1.C23, E1.C24, E1.C25, E1.C26, E1.C30, F1.C9, F1.C11, F1.C13 |
+| FB-191 | Before publish, and before each republish after a notes change (an `08` change, a `09` patch, a `10` pass, an `11` source added), the main session checks the notes against every unattempted question set's text (`mock_leak.py --questions`), skipped when there is none: a shared run of 8 words or 3 numbers is a blocker, rewritten with fresh numbers and setup (S7). The unattempted sets are those whose solutions row reads exactly `yes`, and those with no solutions row whose own Answers cell doesn't read `no, attempted YYYY-MM-DD`. A passage the student may want back goes to `_build/held.md` and returns as a patch once the set is attempted. | w05, w07, w08, w09, w10, w11, w00, t:hub, t:manifest, mock_leak.py | D1.C26, D1.C28, D1 (section 2), E1 (section 4), F1 (section 2) |
 
 ## 06-site
 
@@ -170,7 +170,7 @@ naming the id that replaces it, if one does.
 | FB-140 | Space freed by a scope cut is reserved for the mock-derived items. Check other sections first, then ask. | w07 | B3.C4, B3.C5 |
 | FB-141 | Organize the sheet by task, and give the cram order a map of the sheet. | w07 | B3.C28 |
 | FB-142 | Text inside embedded SVG stays above the font floor. | w07, check_pdf.py | B3.C31, B4.G9 |
-| FB-143 | When the exam allows no sheet, offer a condensed review page on the notes chassis instead: cram-ordered, length asked once, opening with what it covers and leaves out, audited like any condensation. | w07, w00, w08, w09, w11, SKILL, t:plan, t:convert | E1.C17, E1.C18, E1.C21, F1.C3, F1.C5, F1.C8 |
+| FB-143 | When the exam allows no sheet, offer the notes page's Review view instead: a Review / Full notes toggle over the notes themselves, showing the Must-know lists, the exam-day map and the worked examples and pitfalls the notes tag for it, copying nothing; its length asked once per exam in minutes of reading, which the build enforces. | w07, w00, w06, w08, w10, w11, SKILL, t:plan, t:chassis, t:convert, assemble.py, verify_page.mjs | E1.C17, E1.C18, E1.C21, F1.C3, F1.C5, F1.C8 |
 
 ## 08-practice
 
@@ -185,7 +185,7 @@ naming the id that replaces it, if one does.
 | FB-156 | A script asserts every key value. | w08 | B1 (stage 05), B4 (section 5a) |
 | FB-157 | The night before, offer a cram order: a reading list ranked by points per minute, in tiers with minute budgets, a skip list and an "out of time" fallback to the Must-know lists, pointing into the verified notes rather than new text. | w08 | B3.C1, B3.C2, B3.C10, B4.C15 |
 | FB-158 | The cram night opens with the notes page's link and each mock's, defines a tier in one line, and starts from what the student has already read. | w08, w06 | E1.C5, E1.C6, D1.C22 |
-| FB-159 | The cram night offers an Ed re-pull first, and new staff answers go through the source-added path, mock keys included. | w08, w09 | D1.C23, E1.C15, E1.C19, E1 (section 2) |
+| FB-159 | The cram night offers an Ed re-pull first, and new staff answers go through the source-added path; then one writer in its own worktree opens each untaken mock's key, fixes the parts the answer touches, reruns the key checker and reports part ids only, so no answer reaches the student's chat. | w08, t:briefs, t:hub | D1.C23, E1.C15, E1.C19, E1 (section 2) |
 
 ## 09-tutor
 
