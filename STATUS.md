@@ -91,11 +91,12 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     - Design notes: [[dotclaude-tab-bar]], [[dotclaude-remote-paste]], `PLAN.md` ("Next: a
       device-wide mute").
   - **Live lanes** (briefs in each record). Merge order (Hayden's picks,
-    2026-11-07, 2026-11-08 and 2026-11-10): 0 exam-prep #183 (`fix/exam-prep-round2`, opened
-    2026-11-10: fixes from the last sessions that used the skill, list approved by Hayden). Hayden,
-    2026-11-10: it "may merge and install early", so before Nov 16 and inside the freeze too, and
-    picked "Exam-prep first" over waiting for demo-av #180; demo-av then merges main and reinstalls
-    from its branch on his OK. 0b demo-av PR 4 (demo content planning in `demo-first-scope`,
+    2026-11-07, 2026-11-08 and 2026-11-10): exam-prep #183 merged 2026-11-10 (692fbf9) and is
+    installed from main, under Hayden's early-merge exception (2026-11-10); the lane stays open for
+    round 2's retro (the next two exams), whose PR waits for Nov 16 unless he says so.
+    The lead's pre-merge ./setup.sh (Hayden's OK) released demo-av's install hold, so the live
+    demo-video and demo-first-scope are main's until demo-av reinstalls from its branch on his OK.
+    0 demo-av PR 4 (demo content planning in `demo-first-scope`,
     captions on by default, `demo-video` no longer manual-only; merged and installed by Nov 11,
     else after Nov 15). After Nov 15: 1 practices (Keep open, its next
     PR; carries the lead's notes, told when), 2 verify-app (`feat/verify-app`, the
