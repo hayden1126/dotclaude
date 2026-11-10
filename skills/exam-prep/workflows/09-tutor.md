@@ -123,7 +123,8 @@ Settle it before the first part:
   rerun: any other set's would show its official answer in the self-test's edit, so ask first, as
   Step 6 does), and once mocks exist `08-practice` step 4's rerun clause for a changed reference
   follows (items 2 and 4; on the cram night a changed part of an untaken mock goes to the key recheck
-  writer's reference-change variant, as it says): it isn't graded
+  writer's reference-change variant, as it says, its `Key recheck: owed` STATUS line committed with
+  the reference change, so no attempt starts before the recheck): it isn't graded
   until its `value()` replaces the call, and the other parts go first. A set whose official
   solutions give final answers only gets values here too when the student's partial work needs its
   intermediate values.

@@ -571,11 +571,12 @@ meanwhile and merges your branch when you report.
 Role: `writer`, spawned with `isolation: "worktree"` and `run_in_background: true` on the Agent
 call: it opens the untaken mocks' keys, which the cram night's session never opens, since the
 student reads that session's chat (`08-practice` step 8's opening, FB-159). The student is told not
-to open its transcript. One per run of `11-next-exam`'s "A source added to this exam", once that
-path has taken the staff answers into the notes, covering every new staff answer it took in; never
-two at once (both rewrite `practice/mock-values-key.md`). STATUS holds `Key recheck: dispatched
-<date>` until the merge, and the next mock attempt waits for it. The reference-change variant
-below serves `08-practice` step 4's rerun clause.
+to open its transcript. One per `Key recheck: owed` line, covering every cause it names (each run
+of `11-next-exam`'s "A source added to this exam" adds its source, dispatched once that path has
+taken it into the notes); never two at once (both rewrite `practice/mock-values-key.md`). STATUS holds `Key recheck: owed <date>
+(<its causes>)` from the cause until the dispatch rewrites it to `dispatched <date>`, and that until
+the merge; the next mock attempt waits for both (`08-practice` step 8's opening). The
+reference-change variant below serves `08-practice` step 4's rerun clause.
 
 ```text
 # Brief: recheck the untaken {{EXAM}} mock keys against staff answers on {{TOPICS}}

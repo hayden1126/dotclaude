@@ -168,7 +168,10 @@ exists, step 7's items 1 and 2. A change to a key alone reruns items 4 and 5, st
 item 2. A change to the reference at any later point (a `05-verify` step 5 rerun) reruns items 2
 and 4: a part whose value changed fails item 4, and its answer is rewritten from the new values.
 In step 8, a failing part of a mock not yet taken goes to the key recheck writer, from its brief's
-reference-change variant (step 8's opening), so its answer never reaches this session; for a taken mock, rewrite the answer from that
+reference-change variant (step 8's opening), so its answer never reaches this session: STATUS gets
+`Key recheck: owed <date> (a reference change)`, or "a reference change" added to an unstruck
+`owed` line, committed with the reference change, and the writer is dispatched as that opening
+says; for a taken mock, rewrite the answer from that
 mock's section of the values file printed alone (`sed -n '/^## <slug>$/,/^## /p'
 practice/mock-values-key.md`), never the whole file.
 
@@ -281,17 +284,29 @@ and offers the checks it held (`09-tutor` step 1's Patches and Waiting checks bu
   step 4's rerun clause for a changed reference: the main session never opens an untaken mock's
   key, so one writer does, from `<skill>/templates/agent-briefs.md`, section "Key recheck" (the
   staff-answer brief, or its reference-change variant), load the delegation skill first:
-  - One writer per path, covering every new staff answer that path took in (or every part the
-    changed reference fails), and never two at once: both rewrite `practice/mock-values-key.md`.
-    A path that ends while one runs waits for its merge, then dispatches its own.
+  - A recheck is owed from the moment its cause lands, and STATUS says so before any writer runs:
+    `Key recheck: owed <date> (<each source's log, or "a reference change">)`, committed with the
+    cause (`11-next-exam` step 3's fence commit for a source, step 4's rerun clause for a
+    reference change, `09-tutor` when it changes the reference). A later cause joins the unstruck
+    `owed` line, its log or "a reference change" added, so STATUS holds at most one. The line
+    outlives the session: whoever ends a path, a `/clear` or a lost session, the next session
+    that reads STATUS finds the recheck still owed.
+  - One writer per `owed` line, covering every cause it names, and never two at once: both
+    rewrite `practice/mock-values-key.md`. With a source on the line, the staff-answer brief,
+    whose parts take in every part the key checker fails too; with only "a reference change", its
+    variant. The dispatch rewrites the line to `Key recheck: dispatched <date> (<its causes>)`. An
+    `owed` line that comes while a writer runs waits: the session that settles that writer's
+    branch (below) dispatches it next. A session that finds an unstruck `owed` line and no
+    unstruck `dispatched` line dispatches it at once, before the links below.
   - The Agent call carries `isolation: "worktree"` and `run_in_background: true`, and the session
     tells the student not to open the writer's transcript: its Read and Edit calls show key text,
     which a foreground subagent would print in this window.
-  - Before the spawn, STATUS gets `Key recheck: dispatched <date>`, committed (a background
-    writer's branch is known only from its completion notice, as with `09-tutor`'s `dispatched
-    <date>`); step 8.1 reads it, and the merge (or the removal below) strikes it. In a fresh
-    session, an unstruck line whose writer `delegation-ledger watch` no longer shows is settled as
-    `09-tutor`'s patch log settles one: its worktree's branch merged as below, or removed.
+  - Before the spawn, the `dispatched` line is committed (a background writer's branch is known
+    only from its completion notice, as with `09-tutor`'s `dispatched <date>`); step 8.1 reads
+    both lines, and the merge (or the removal below) strikes the `dispatched` one. In a fresh
+    session, an unstruck `dispatched` line whose writer `delegation-ledger watch` no longer shows
+    is settled as `09-tutor`'s patch log settles one: its worktree's branch merged as below, or
+    removed.
   - The writer opens each untaken mock's key, finds the parts the answer touches (and any part
     step 4's item 4 now fails), fixes each one's key as step 4 says (a computed answer copied from
     the new values), reruns step 4's items 2 and 4, and reports part ids, each `changed`,
@@ -308,9 +323,11 @@ and offers the checks it held (`09-tutor` step 1's Patches and Waiting checks bu
     branch>...<branch>`, file names only), `git merge --no-edit <branch>`, then remove its
     worktree and branch as `09-tutor` step 5.5.3 does. On a conflict, or a merge git refuses,
     `git merge --abort` as that step does, never resolving it here (its hunks are key text);
-    remove the worktree and the branch, strike the line, and dispatch again from the hub's head.
+    remove the worktree and the branch, rewrite the line to `owed`, its causes kept, and dispatch
+    again from the hub's head.
   - Any other report merges nothing: remove the worktree and the branch as `09-tutor` step 5.5.1
-    does, strike the line, and tell the student which mock's key waits. A `blocked` report gets the main session's
+    does, rewrite the line to `owed`, its causes kept (the attempt still waits), and tell the
+    student which mock's key waits. A `blocked` report gets the main session's
     fix first (a change to the reference as step 4's rerun clause says, say), then a dispatch
     with the brief changed where the report says what stopped it; never a bare redispatch, which
     stops the same way.
@@ -350,8 +367,10 @@ step 3.4) and from any search over the hub root; the main session runs the other
 merge, as that step says.
 
 1. Before an attempt, no `10-polish` pass runs (STATUS has no `Build running` line), no notes
-   patch is open (`09-tutor` step 5, "One open patch") and no key recheck writer runs (STATUS has
-   no unstruck `Key recheck: dispatched` line, this step's opening), so a sheet either changed is logged, and the
+   patch is open (`09-tutor` step 5, "One open patch") and no key recheck is owed or runs (STATUS
+   has no unstruck `Key recheck: owed` or `Key recheck: dispatched` line, this step's opening: an
+   `owed` line with no writer running is dispatched now, and the attempt waits for its merge), so a
+   sheet either changed is logged, and the
    log's pending lines are offered first, as `09-tutor` step 5.5.9 offers them (the patch now, or
    the mock first with them marked `held: mock first`); a mock sheet STATUS logs as changed is shown
    to the student, changes and all (FB-137), and printed again; with the LaTeX engine, the student

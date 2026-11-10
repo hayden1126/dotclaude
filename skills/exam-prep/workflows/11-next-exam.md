@@ -187,8 +187,8 @@ In this order, each item logged as it lands:
    skill's own changes from a hub-local edit; hubs never keep their own copy.
 3. **Reset STATUS.** Take out every line about the finished exam's build, mocks, sheets and cram
    night: `Stage 08 built`, `Reopened build:`, `Tutor:`, `Polish:`, `Source added:`, `Skip asked:`,
-   the final-sheet items, a mock sheet logged as changed or to print again, a key recheck's
-   `Key recheck:` line and part ids (item 1 moved the attempts). An `Unverified:` line stays: its material is still unchecked
+   the final-sheet items, a mock sheet logged as changed or to print again, each
+   `Key recheck:` line (`owed` or `dispatched`) and its part ids (item 1 moved the attempts). An `Unverified:` line stays: its material is still unchecked
    ("A source added unverified"). Keep the notes page's URL line (same URL from here on), and add
    the finished exam's sheet and mock page URLs to the `Earlier exams:` line (start it
    when there is none), as `<old exam>: <name> <URL>, ... (tag exam/<old-slug>)`. Set the
@@ -290,10 +290,14 @@ build is this build's end, not a stage's.
    page can be rebuilt; each page's hit lines (part ids only, which the student may read), under a
    line naming the page, go in the log's name with `.baseline.txt` for `.md`, and `baseline taken`
    in the log. Add `Build running: <date>` and `Source added: <doc>, started <date>, before <sha>
-   (<the log>)` to STATUS and commit it all. Then check that the fence commit's parent is `<sha>`
+   (<the log>)` to STATUS, and while a mock is untaken `Key recheck: owed <date> (<the log>)`, or
+   the log added to an unstruck `owed` line (`08-practice` step 8's key recheck: this run owes it
+   from here, and a stop that puts the hub back takes it out with STATUS.md), and commit it all.
+   Then check that the fence commit's parent is `<sha>`
    (`git rev-parse <it>~1`, where it is `git log -1 --format=%H -- STATUS.md`, since a tutor tab may
    have committed its log since) and the hub is still free, and log `fence checked`: otherwise
-   another tab wrote in between, so take both lines out, commit, and stop; the student asks again.
+   another tab wrote in between, so take this step's lines out (the log out of an `owed` line it
+   joined), commit, and stop; the student asks again.
 4. **Build**, for that source only. While a mock is untaken, the student looks away from this window
    from here to step 5's look-back: tell them first to come back when a reply's only line asks for
    `/clear`, and to type it before reading anything above that line. The MANIFEST.md change first,
@@ -318,8 +322,8 @@ build is this build's end, not a stage's.
    `08-practice` step 7's item 3 says and step 7's items 1 and 2, rebuilding again when the audit
    changes a row (08's "Changing the notes or a sheet" item 3, whose ids come from the page); an
    untaken mock isn't edited (`08-practice` step 8's key recheck checks its keys once this path
-   ends: one writer in the background for every staff answer this path took in, never two at
-   once). The log marks each stage's end once its commit is made (`02 done`), each product's
+   ends, from step 3's `owed` line: one writer in the background for every new source the line
+   names, never two at once). The log marks each stage's end once its commit is made (`02 done`), each product's
    (`page done`, `sheets done`, `cram order done`), and `step 4 done` after the last. Before
    `step 4 done`, that section's item 4 questions check prints QUESTIONS OK on the notes as they
    now stand (FB-191), so
@@ -350,8 +354,13 @@ build is this build's end, not a stage's.
    reworded, the version, and what they must redo, as that item 5 lists it (a changed sheet printed
    again, the cram order's next mock line). Last, log `step 5 done`, hand off and commit;
    the closing commit takes out the `Build running` line and any `Skip asked:` line for it, and
-   rewrites the source's line as `Source added: <doc> <date>: done (<the log>)`. Then the patches
-   and checks that waited, as `10-polish`
+   rewrites the source's line as `Source added: <doc> <date>: done (<the log>)`, step 3's
+   `Key recheck: owed` line kept. Then, while a mock is untaken, this session dispatches the key
+   recheck from that line, as `08-practice` step 8's opening says (the dispatch commit rewrites it
+   to `dispatched`), and logs `key recheck dispatched`; while another recheck writer runs (an
+   unstruck `dispatched` line), the line waits, logged `key recheck waits`, and the session that
+   settles that writer's branch dispatches it. A session that ends before either finds the `owed`
+   line in STATUS, as the next one does. Then the patches and checks that waited, as `10-polish`
    step 7.5 says.
 
 **A stop.** A session that finds `Build running` beside a `Source added: <doc>, started` line reads
