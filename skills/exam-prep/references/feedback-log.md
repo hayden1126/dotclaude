@@ -39,7 +39,7 @@ naming the id that replaces it, if one does.
 | FB-011 | Course material is copyrighted: `sources/` and rendered pages are gitignored, the hub repo stays local, and no remote is added without the student's go. | SKILL, t:hub | B4.C8, A4.C8 |
 | FB-012 | Never state a prediction about the exam without a source. Record the instructor's exam-format statement in the hub and cite it. | w00, w09 | A3.C10 |
 | FB-013 | When the student asks to skip the extract, the backbone or the reviews for an added source, push back once (what it costs, how long the full path takes), commit a `Skip asked` line in STATUS, and wait, writing no notes. Asked again, add it as notes only, in one commit with its MANIFEST row and an `Unverified:` STATUS line; values from the checker's output or quoted with a citation, never computed; an `Unverified` banner on the material and the page; off every sheet, out of the mocks' plan and the cram order's reading rows, and out of walk-throughs until verified. The addition fences itself like a build. Where the ask comes (a tutor tab, a build, a patch open, a mock untaken) decides when either happens. | SKILL, w11, w02, t:convert, extract_check.py | skill test P1 |
-| FB-014 | A bug found in a hub that lives in a skill file (a template, the chassis, a script, a brief) is fixed in the hub, then logged in `_build/logs/skill-fixes.md` (what, where, the hub's diff) for the retro, and the session offers to relay the fix to the other open hubs that use that file. | SKILL, w12, t:briefs | E1.C11, E1.C13, D1 (section 2), F1 (section 2) |
+| FB-014 | A bug found in a hub that lives in a skill file (a template, the chassis, a script, a brief) is fixed in the hub's copy, or, for a script or brief, worked around in the hub (a wrapper or flag under `_build/`), then logged in `_build/logs/skill-fixes.md` (what, where, the hub's diff) for the retro, and the session offers to relay the fix to the other open hubs that use that file. | SKILL, w12, t:briefs | E1.C11, E1.C13, D1 (section 2), F1 (section 2) |
 
 ## 00-intake
 
@@ -73,7 +73,7 @@ naming the id that replaces it, if one does.
 |---|---|---|---|
 | FB-050 | Extracts are organized by source unit; notes are organized by topic. | w02 | A1.C6 |
 | FB-051 | Capture provenance once, at extraction: the base location once per file, the slide or page per fact, and a verbatim anchor phrase for key formulas and tables. | w02, t:briefs | A1.C7 |
-| FB-052 | Extractors view every page image as well as the text, write diagrams as data, and flag what they can't read. The run's report states image coverage per deck. | w02, t:briefs | B1.C7, B4 (stage 02) |
+| FB-052 | Extractors view every page image as well as the text, write diagrams as data, and flag what they can't read. The run's report states image coverage per deck. | w02, t:briefs, extract_check.py | B1.C7, B4 (stage 02), D1.G5 |
 | FB-053 | One whole deck per agent. Split a big deck at a section divider with a three-page overlap. | w02 | B4 (stage 02), H1 (stage steps) |
 | FB-054 | Fan out wide for raw extraction. A stage that carries cross-references works from a fixed id registry or stays single-threaded. | w02, w04 | A4.C4 |
 | FB-055 | Check small, rotated or crowded labels on a higher-resolution crop before using the value. | w02 | B1.G9 |
@@ -132,7 +132,7 @@ naming the id that replaces it, if one does.
 | FB-107 | When official solutions arrive, diff every answer against the notes and the solved key, and record the verdict. | w05 | A3.C17 |
 | FB-108 | Check a reviewer's claim with the checker before applying it. Fixes are applied single-threaded. | w05 | B1 (stage 05) |
 | FB-109 | A cold reader, who sees only the section, flags every undefined term, compressed sentence and untabled confusable pair before publish. | w05, t:briefs | D1.C6, D1.C7, D1.C8, D1.C9, D1.C10, D1.C11, D1.C12, D1.C13, D1.C15, D1.C31, E1.C22, E1.C23, E1.C24, E1.C25, E1.C26, E1.C30, F1.C9, F1.C11, F1.C13 |
-| FB-191 | Before publish, the main session checks the notes against every unattempted question set's text (`mock_leak.py --questions`): a shared run of 8 words or 3 numbers is a blocker, rewritten with fresh numbers and setup (S7). A passage the student may want back goes to `_build/held.md` and returns as a patch once the set is attempted. | w05, w09 | D1.C26, D1.C28, D1 (stage 05), E1 (stage 05), F1 (stage 05) |
+| FB-191 | Before publish, the main session checks the notes against every unattempted question set's text (`mock_leak.py --questions`): a shared run of 8 words or 3 numbers is a blocker, rewritten with fresh numbers and setup (S7). A passage the student may want back goes to `_build/held.md` and returns as a patch once the set is attempted. | w05, w09, t:hub, mock_leak.py | D1.C26, D1.C28, D1 (stage 05), E1 (stage 05), F1 (stage 05) |
 
 ## 06-site
 
@@ -145,13 +145,13 @@ naming the id that replaces it, if one does.
 | FB-114 | Deploying to the student's own site waits for an explicit go after review. | w06 | A1.C17, A4.C1 |
 | FB-115 | Every tree or graph example gets an SVG figure, never ASCII. Delete prose that only re-describes a figure. | w06, S11 | B3.C17, B3.C18, B3.C19, B4.C24, B4.C28 |
 | FB-116 | Worked examples are collapsible and closed by default. | S7, CHASSIS | A2.C5, A2.C6 |
-| FB-117 | Step-throughs are fed by the checker's JSON, never hand-typed. | w06 | B4 (hard rules) |
+| FB-117 | Step-throughs are fed by the checker's JSON, never hand-typed. | w06, verify_page.mjs | B4 (hard rules), E1.G10, D1.G8 |
 | FB-118 | Publish every artifact private, and check the sharing setting after publishing. | w06 | B4.C16 |
 | FB-119 | A screenshot bug report comes from the student's real browser: reproduce it with that platform's scrollbars, not only headless. | w06 | A1.C33 |
 | FB-120 | Conversion agents use only the chassis's classes. CSS changes are made by the main session and checked against the chassis screenshots. | S13, w06 | H1.C11, B4 (S13) |
 | FB-121 | Material found out of scope stays, under a visible "Not on Exam N" banner. | w06, w11 | A3.C17, B4.C14, A4.C9 |
 | FB-122 | Publish from the session that builds the page: a republish elsewhere must first read the whole live copy. | w06 | B3.G3, B4.G13 |
-| FB-123 | Every source citation links to its row in the page's source key, which says what the source is and its file; the build fails on a code with no row. | w06, assemble.py | E1.C10, E1.C11, D1.C20 |
+| FB-123 | Every source citation links to its row in the page's source key, which says what the source is, who made it and its file; the build fails on a code with no row. | w06, assemble.py, linkcheck.py, t:convert, t:chassis, t:manifest | E1.C10, E1.C11, D1.C20 |
 
 ## 07-cheatsheet
 
@@ -180,7 +180,7 @@ naming the id that replaces it, if one does.
 | FB-151 | For true/false, enumerate the adjacent-variant surface (swap the property, the pair, the direction, the number). Write a verdict and a witness for every variant when the set is small. | w08 | A2.C2, A2.C3, B4.C6 |
 | FB-152 | A rule stated for one question type applies to every sibling type before the plan goes out. | w08 | A2.C3 |
 | FB-153 | The mock page has three views (by paper, by question type, by topic). Tag each part once and regroup the same items. | w08, t:mock | A2.C4, H1.C11 |
-| FB-154 | The key lives in a separate file under a STOP header. The page build never reads it, and a leak check runs on the built page. | w08 | B4.C7, B4 (section 5a) |
+| FB-154 | The key lives in a separate file under a STOP header. The page build never reads it, and a leak check runs on the built page. | w08, mock_leak.py | B4.C7, B4 (section 5a), E1.G7 |
 | FB-155 | Clones at exam difficulty with fresh numbers, plus one harder set flagged as harder than the exam. | w08 | A2.C1 |
 | FB-156 | A script asserts every key value. | w08 | B1 (stage 05), B4 (section 5a) |
 | FB-157 | The night before, offer a cram order: a reading list ranked by points per minute, in tiers with minute budgets, a skip list and an "out of time" fallback to the Must-know lists, pointing into the verified notes rather than new text. | w08 | B3.C1, B3.C2, B3.C10, B4.C15 |
