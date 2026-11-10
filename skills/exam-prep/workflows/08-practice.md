@@ -296,7 +296,8 @@ and offers the checks it held (`09-tutor` step 1's Patches and Waiting checks bu
     whose parts take in every part the key checker fails too; with only "a reference change", its
     variant. The dispatch rewrites the line to `Key recheck: dispatched <date> (<its causes>)`. An
     `owed` line that comes while a writer runs waits: the session that settles that writer's
-    branch (below) dispatches it next. A session that finds an unstruck `owed` line and no
+    branch (below) dispatches it next, and a `dispatched` line put back to `owed` (below) joins
+    it. A session that finds an unstruck `owed` line and no
     unstruck `dispatched` line dispatches it at once, before the links below.
   - The Agent call carries `isolation: "worktree"` and `run_in_background: true`, and the session
     tells the student not to open the writer's transcript: its Read and Edit calls show key text,
@@ -306,15 +307,21 @@ and offers the checks it held (`09-tutor` step 1's Patches and Waiting checks bu
     both lines, and the merge (or the removal below) strikes the `dispatched` one. In a fresh
     session, an unstruck `dispatched` line whose writer `delegation-ledger watch` no longer shows
     is settled as `09-tutor`'s patch log settles one: its worktree's branch merged as below, or
-    removed.
+    removed (with no report, a branch with a commit of its own stands for `done`: the writer
+    commits only once every mock says KEY OK). A merge with no report has no part ids, so run
+    step 4's item 4 (`python3 -I _build/verify/mock_key.py`, which prints part ids only) at once:
+    each mock's `KEY OK: ...; skipped: <ids>` line gives that mock's `question` parts for its cram order line and STATUS,
+    and STATUS logs the report as lost (no part's `changed` or `unchanged` known). A run that
+    doesn't print KEY OK for every mock rewrites the line to `owed`, its causes kept, and
+    dispatches again from the hub's head.
   - The writer opens each untaken mock's key, finds the parts the answer touches (and any part
     step 4's item 4 now fails), fixes each one's key as step 4 says (a computed answer copied from
     the new values), reruns step 4's items 2 and 4, and reports part ids, each `changed`,
     `unchanged` or `question`, never key text: this session's chat is the student's, so no answer
     reaches it. Its whole reply is the brief's JSON block, no text before or after it (a
     background agent's reply reaches this chat as its completion notice), and its summary and
-    blocked_actions name part ids and file names only, never a value. A `question` part (the question itself would need rewording, which the writer may
-    not do) goes into `mock_key.py`'s `SKIP`, so KEY OK still holds every other part; the main
+    blocked_actions name part ids and file names only, never a value. A `question` part (the
+    question itself would need rewording, which the writer may not do) goes into `mock_key.py`'s `SKIP`, so KEY OK still holds every other part; the main
     session merges the rest and puts the skip on that mock's cram order line: skip the part and
     score out of the points left, as a scope cut does (`10-polish` step 3).
   - No attempt starts until the branch is merged. On a `done` report whose branch changes only
