@@ -53,7 +53,7 @@ evidence ids.
     D1.C7, D1.C8, D1.C9, D1.C10, D1.C11, D1.C12, D1.C13, D1.C15, D1.C31, E1.C22, E1.C23, E1.C24,
     E1.C25, E1.C26, E1.C30, F1.C9, F1.C11, F1.C13).
   - FB-123: every citation links to the page's source key, which `assemble.py` builds from
-    MANIFEST.md: what the source is (its Notes, else the file's base name), who made it (MANIFEST's
+    MANIFEST.md: what the source is (its Notes, blank without them), who made it (MANIFEST's
     new optional By column, a Made by column when a cited row has one) and its file; `linkcheck.py`
     fails a citation with no in-page link, the chassis highlights a targeted key row, and
     `11-next-exam` removes a hub-local key (E1.C10, E1.C11, D1.C20).
