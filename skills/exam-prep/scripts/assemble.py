@@ -52,7 +52,8 @@ exactly once.
 The Review view (CHASSIS.md): the hub root's PLAN.md line `- Review view: <N> minutes of reading`
 keeps the page's Review / Full notes toggle (the chassis's `<!-- REVIEW TOGGLE -->` blocks), and
 the build fails when the view's words, read at READING_RATE words a minute, take more than N
-minutes (both numbers printed); the map's cram block is left out of that count. `- Review view:
+minutes (both numbers printed, and the remedy: untag from the last ranked subsection up, or, with
+no rv tag left, new minutes asked of the student); the map's cram block is left out of that count. `- Review view:
 none: <why>`, or no such line, strips the toggle and refuses any class rv. Class rv goes only on
 a worked example (details.callout.example.wex) or a Pitfall (div.callout.warn whose label is
 Pitfall), each directly inside its section, and never in a section whose Not on <exam> or
@@ -854,9 +855,13 @@ def build(root):
         words = sum(reading_words(text_of(e)) for e in shown) \
             + reading_words(text_of(Tree(nav).root, skip={"ecram"}))
         if words > budget * READING_RATE:
+            tagged = any("rv" in classes_of(e) for s in sections for e in elements(Tree(s).root))
             problems.append(f"the Review view reads in about {words / READING_RATE:.1f} minutes ({words} "
-                            f"words at {READING_RATE} a minute), over PLAN.md's {budget}: untag some "
-                            "rv blocks, or raise the budget with the student")
+                            f"words at {READING_RATE} a minute), over PLAN.md's {budget}: " + (
+                                "untag rv blocks from the last ranked subsection up (07-cheatsheet, "
+                                "Tag the review)" if tagged else
+                                "no rv tag is left to untag, so the main session asks the student for new "
+                                "minutes on PLAN.md's `- Review view:` line and logs them in STATUS"))
     problems += rv
     page = page.replace("/* SECTION ACCENTS */", accents(len(sections)), 1)
     page = page.replace("<!-- EXAM-DAY MAP -->", nav, 1)

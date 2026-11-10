@@ -171,8 +171,12 @@ line, asked once, at intake. `assemble.py` counts the view's words at 150 a minu
 an unmeasured estimate for dense study notes) and fails the build when they take more than N
 minutes, printing both numbers. The map's cram block (`08-practice` step 7) is left out of the
 count: it is a reading list into the notes, not review text. Any later rebuild can still fail on
-the minutes (a patch that lengthens a tagged block, a new Must-know line); the remedy is always
-item 4's: untag from the last ranked subsection up, before anything else.
+the minutes (a patch that lengthens a tagged block, a new Must-know line); the remedy is item 4's:
+untag from the last ranked subsection up, before anything else. Once no `.rv` tag is left (the
+Must-know lists, the headings and the map count untagged), untagging can't help: the main session
+asks the student for new minutes on PLAN.md's `Review view:` line and logs them in STATUS. While
+a build runs, which asks nothing (hard rule 1), it sets the minutes the view now takes, rounded
+up, and logs that in STATUS as a judgment call for the student to confirm or change.
 
 1. **Rank the subsections.** Before the cram order exists, by the backbone's How it's tested
    weights; once it exists (`08-practice` step 7), in its rows' order. A subsection under a `Not on
@@ -189,7 +193,9 @@ item 4's: untag from the last ranked subsection up, before anything else.
    block as CONVERT.md maps it (or have the section converted again, `06-site` step 3), then
    `06-site` step 3's `fidelity.py`, which compares the marker like an id.
 4. **Assemble and check**, `06-site` step 5, all of it. `assemble.py` enforces the budget: over
-   it, untag from the last ranked subsection up and rerun from item 3. `verify_page.mjs` checks and
+   it, untag from the last ranked subsection up and rerun from item 3; once no `.rv` tag is left,
+   new minutes on PLAN.md's `Review view:` line, asked of the student and logged in STATUS as this
+   section's opening says, and rerun. `verify_page.mjs` checks and
    shoots both views; look at the `-review` screenshots too. Since no text changes, `05-verify`
    step 5's questions check needs no extra pages (FB-191), and there is no audit of copied text.
 5. **Republish** the notes page to its same URL, as `06-site` step 6 says, its version bumped on

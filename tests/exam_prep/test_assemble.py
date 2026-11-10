@@ -772,6 +772,19 @@ class AssembleTest(unittest.TestCase):
         rc, out = h.run()
         self.assertEqual(rc, 0, out)
 
+    def test_over_its_minutes_the_remedy_is_untagging_then_new_minutes(self):
+        # 07-cheatsheet's "Tag the review": untag while a tag is left; with none, ask for minutes.
+        plan = "- Review view: 2 minutes of reading\n"
+        long = RV_PITFALL.replace("Overlaps count twice.", "word " * 400)
+        tagged = SEC1_MK.replace('<div class="callout def">', long + '<div class="callout def">')
+        self.assertRefused(self.cram_hub(plan=plan, sec1=tagged, cram=None),
+                           "over PLAN.md's 2: untag rv blocks from the last ranked subsection up")
+        untagged = SEC1_MK.replace("<ul><li>x</li></ul>", "<ul><li>" + "word " * 400 + "</li></ul>")
+        self.assertIn("word " * 400, untagged)
+        self.assertRefused(self.cram_hub(plan=plan, sec1=untagged, cram=None),
+                           "over PLAN.md's 2: no rv tag is left to untag, so the main session asks the "
+                           "student for new minutes on PLAN.md's `- Review view:` line")
+
     def banner_sec1(self, label, must="x"):
         """SEC1_MK with a label banner before its first h3, and its Must-know list holding must."""
         return SEC1_MK.replace('<h3 id="sec-1-basics">', f'<div class="callout warn"><div class="lab">{label}'
