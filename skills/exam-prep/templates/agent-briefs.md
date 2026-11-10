@@ -574,7 +574,7 @@ student reads that session's chat (`08-practice` step 8's opening, FB-159). The 
 to open its transcript. One per run of `11-next-exam`'s "A source added to this exam", once that
 path has taken the staff answers into the notes, covering every new staff answer it took in; never
 two at once (both rewrite `practice/mock-values-key.md`). STATUS holds `Key recheck: dispatched
-<branch>` until the merge, and the next mock attempt waits for it. The reference-change variant
+<date>` until the merge, and the next mock attempt waits for it. The reference-change variant
 below serves `08-practice` step 4's rerun clause.
 
 ```text

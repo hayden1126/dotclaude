@@ -287,9 +287,11 @@ and offers the checks it held (`09-tutor` step 1's Patches and Waiting checks bu
   - The Agent call carries `isolation: "worktree"` and `run_in_background: true`, and the session
     tells the student not to open the writer's transcript: its Read and Edit calls show key text,
     which a foreground subagent would print in this window.
-  - At the dispatch, STATUS gets `Key recheck: dispatched <branch>` (the worktree's branch the
-    Agent call names), committed; step 8.1 reads it, and the merge (or the removal below) strikes
-    it.
+  - Before the spawn, STATUS gets `Key recheck: dispatched <date>`, committed (a background
+    writer's branch is known only from its completion notice, as with `09-tutor`'s `dispatched
+    <date>`); step 8.1 reads it, and the merge (or the removal below) strikes it. In a fresh
+    session, an unstruck line whose writer `delegation-ledger watch` no longer shows is settled as
+    `09-tutor`'s patch log settles one: its worktree's branch merged as below, or removed.
   - The writer opens each untaken mock's key, finds the parts the answer touches (and any part
     step 4's item 4 now fails), fixes each one's key as step 4 says (a computed answer copied from
     the new values), reruns step 4's items 2 and 4, and reports part ids, each `changed`,

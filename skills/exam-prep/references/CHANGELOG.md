@@ -94,7 +94,7 @@ evidence ids.
     only, so no answer reaches the student's chat, which the hub CLAUDE.md's key rule now allows.
     The writer ends every source-added path while a mock is untaken, and a reference change's
     failing parts go to the brief's reference-change variant; one runs at a time, in the background
-    with its transcript unopened, under a `Key recheck: dispatched <branch>` STATUS line that
+    with its transcript unopened, under a `Key recheck: dispatched <date>` STATUS line that
     blocks the next attempt; its merge takes only the untaken keys, the values file and
     `mock_key.py`, and a conflict is aborted, never resolved in the chat; a part whose question
     would need rewording goes into the key checker's new `SKIP` and onto the mock's cram order
