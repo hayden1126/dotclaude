@@ -187,8 +187,8 @@ In this order, each item logged as it lands:
    skill's own changes from a hub-local edit; hubs never keep their own copy.
 3. **Reset STATUS.** Take out every line about the finished exam's build, mocks, sheets and cram
    night: `Stage 08 built`, `Reopened build:`, `Tutor:`, `Polish:`, `Source added:`, `Skip asked:`,
-   the final-sheet items, a mock sheet logged as changed or to print again, each `Key checked:`,
-   `Key question:` and `Reference changed:` line (an older hub's `Key recheck:` line too) and the
+   the final-sheet items, a mock sheet logged as changed or to print again, each `Key checked:`
+   and `Reference changed:` line (an older hub's `Key recheck:` line too) and the
    key rechecks' part ids (item 1 moved the attempts). An `Unverified:` line stays: its material is still unchecked
    ("A source added unverified"). Keep the notes page's URL line (same URL from here on), and add
    the finished exam's sheet and mock page URLs to the `Earlier exams:` line (start it

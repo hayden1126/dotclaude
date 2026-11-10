@@ -572,13 +572,13 @@ Role: `writer`, spawned with `isolation: "worktree"`, `run_in_background: true` 
 `Key recheck` on the Agent call, only from `08-practice` step 8.1's key gate: it opens the untaken
 mocks' keys, which the cram night's session never opens, since the student reads that session's
 chat (FB-159). The student is told not to open its transcript. The gate spawns one before a mock's
-attempt when the key checker fails that mock, when STATUS holds a `Key question:` line (a leak hit
-after a recheck's merge, sent back as a `question` part), or when STATUS gained a `Source added:
-<doc> <date>: done` or a `Reference changed:` line after the mock's `Key checked:` line; one writer
-covers every
-such cause and every untaken mock, and never two run at once (both rewrite
-`practice/mock-values-key.md`). The attempt waits for its merge. The reference-change variant below
-serves a gate whose causes hold no new source.
+attempt when the key checker fails that mock, when its leak checks hit a leak part (a part whose
+answer a page the student reads holds, and whose remedy edits the mock or its key), or when STATUS
+gained a `Source added: <doc> <date>: done` or a `Reference changed:` line after the mock's `Key
+checked:` line; one writer covers every such cause and every untaken mock, and never two run at
+once (both rewrite `practice/mock-values-key.md`). The attempt waits for its merge. The
+reference-change variant below serves a gate whose causes hold no new source, and the leak-part
+case after it adds the leak parts to either brief.
 
 ```text
 # Brief: recheck the untaken {{EXAM}} mock keys against new sources on {{TOPICS}}
@@ -592,8 +592,8 @@ so nothing you report may show a key: part ids only.
 
 ## End state
 - Done means: every part of {{THE UNTAKEN MOCKS}} the new sources touch checked against them,
-  each wrong one's key fixed, in one commit on your branch (none when no part needed a change),
-  and each mock's line from the key checker says KEY OK, a `question` part left out of the run as
+  each wrong one's key fixed, in one commit on your branch (none when no part needed a change and
+  Scope names no leak part), and each mock's line from the key checker says KEY OK, a `question` part left out of the run as
   Scope says.
 - Artifact path: your branch, in your worktree of {{ROOT}}.
 - Report: your whole reply is the JSON block (status, summary, artifacts, blocked_actions), with
@@ -618,10 +618,6 @@ so nothing you report may show a key: part ids only.
 - The parts: each part whose `Topic:` is a section a new source changed, and each part the key
   checker now fails. Check each one's answer against the new sources and the notes as they now
   stand.
-- {{EACH UNSTRUCK `Key question:` LINE'S PART: `<slug> <part id>`, ... | NONE: drop this line.}}:
-  the main session's leak check after the last recheck found each one's answer on a page the
-  student reads, and its remedy (fresh numbers, a reworded question) is no writer's. Report each
-  `question`, unchecked, and skip it as the next item says.
 - Fix as `08-practice` step 4 says: a computed answer is copied from `practice/mock-values-key.md`
   after `python3 -I _build/verify/mock_key.py` writes it, never worked by hand; a reasoned answer
   is cited from the notes. Leave the mock files as they are: a part whose question would need
@@ -645,29 +641,53 @@ so nothing you report may show a key: part ids only.
   report it, blocked), `sources/`, and any search outside the files above.
 ```
 
-**Reference-change variant** (the key gate's causes are `Reference changed:` lines, left by
-`08-practice` step 4's rerun clause, or a part the key checker fails, with no new source: the parts
-of an untaken mock the key checker now fails need their answers rewritten from the new values;
-there is no source text and no section list). Replace
-the title, Purpose, the End state's "Done means" line, and the Scope's new-sources and parts
-lines with the text below, and end the commit subject `after a reference change`. The Report line
-stands as it is: the whole reply is the JSON block, part ids and file names only.
+**Reference-change variant** (the key gate's causes hold no new source: `Reference changed:`
+lines, left by `08-practice` step 4's rerun clause, parts the key checker fails, or leak parts
+alone. The parts of an untaken mock the key checker now fails need their answers rewritten from
+the new values; there is no source text and no section list). Replace the title, Purpose, the End
+state's "Done means" line, and the Scope's new-sources and parts lines with the text below, and end
+the commit subject `after a reference change`, or `after a leak hit` when leak parts are the only
+cause. The Report line stands as it is: the whole reply is the JSON block, part ids and file names
+only.
 
 ```text
-# Brief: rewrite the untaken {{EXAM}} mock keys' parts the changed reference fails
+# Brief: fix the untaken {{EXAM}} mock keys' parts the key gate names
 
 ## Purpose
-The reference that computes the mock keys changed ({{WHAT CHANGED, NO VALUE}}), so a key answer
-copied from the old values may now be wrong. The student takes {{THE UNTAKEN MOCKS}} tonight and
-marks each against its key, so every failing part must be right before then. The student reads the
-main session's chat, so nothing you report may show a key: part ids only.
+{{WITH A `Reference changed:` LINE: The reference that computes the mock keys changed (WHAT
+CHANGED, NO VALUE), so a key answer copied from the old values may now be wrong. | WITH A FAILING
+PART AND NO SUCH LINE: The key checker fails a part, so its key answer no longer matches the
+values. | WITH LEAK PARTS ONLY: drop this sentence.}} The student takes {{THE UNTAKEN MOCKS}}
+tonight and marks each against its key, so every part named below must be right, or skipped,
+before then. The student reads the main session's chat, so nothing you report may show a key:
+part ids only.
 
 - Done means: every part of {{THE UNTAKEN MOCKS}} the key checker fails rewritten from the new
-  values, in one commit on your branch (none when no part fails), and each mock's line from the
-  key checker says KEY OK, a `question` part left out of the run as Scope says.
+  values, in one commit on your branch (none when no part fails and Scope names no leak part), and
+  each mock's line from the key checker says KEY OK, a `question` part left out of the run as
+  Scope says.
 - The parts: run `python3 -I _build/verify/mock_key.py` first, before any change; each part it
   reports FAIL on. A part whose instance the new reference makes degenerate (an assert names it)
   would need fresh numbers: report it `question` and skip it as Scope says.
+```
+
+**Leak-part case** (either brief, when the key gate's leak checks hit a leak part, `08-practice`
+step 8.1): the gate names each one by slug and part id, and the writer skips it, since its remedy
+(fresh numbers, a reworded question) is no writer's. Add the paragraph below to the Purpose, after
+its first; the Done means line to the End state, after the brief's own; and the leak parts line to
+the Scope, right after the brief's parts line, so "the next item" is the Fix item.
+
+```text
+The main session's leak checks found the answers of {{EACH LEAK PART: `<slug> <part id>`, ...}}
+on a page the student reads before the attempt. Its remedy (fresh numbers, a reworded question) is
+not yours to make, so tonight each of those parts is skipped.
+
+- Done means, too: each leak part in `SKIP` in `_build/verify/mock_key.py`, its key's answer
+  replaced by the `Skipped tonight` line Scope gives and its working deleted, in the same one
+  commit, and reported `question`.
+
+- The leak parts: {{EACH LEAK PART: `<slug> <part id>`, ...}}. Report each `question`, unchecked,
+  and skip it as the next item says.
 ```
 
 ## Polish reader (stage 10)

@@ -98,8 +98,9 @@ evidence ids.
     mock's key, fixes the parts the answer touches, reruns the key checker and reports part ids
     only, so no answer reaches the student's chat, which the hub CLAUDE.md's key rule now allows.
     A key gate before each attempt (`08-practice` step 8.1, never inside a build) spawns the writer
-    when the key checker fails or STATUS gained a `Source added: ... done` or `Reference changed:`
-    line after the mock's `Key checked: <slug> <date> at <sha>` line (git's order, not the dates),
+    when the key checker fails, when its leak checks (step 4's item 5, step 6's item 2 and step 7's
+    item 2, with the untaken keys, part ids only) hit a part whose remedy edits an untaken mock or
+    its key, or when STATUS gained a `Source added: ... done` or `Reference changed:` line after the mock's `Key checked: <slug> <date> at <sha>` line (git's order, not the dates),
     and a merge rewrites that line (or adds it, on an older hub; only step 4 adds one otherwise)
     to the writer's base (the head the session noted at the spawn, or the report's sha, never the
     current HEAD), so a `/clear`, a lost report or a failed merge leaves the check due with no
@@ -108,10 +109,10 @@ evidence ids.
     gate, and its `dispatched` line stands for a running writer until that writer is settled). One writer
     runs at a time, in the background with its transcript unopened, its whole reply the JSON block
     (part ids and file names only), spawned once everything uncommitted is committed, and a merge
-    with no report takes its `question` parts from the key checker's skipped list. A leak hit
-    after a merge whose remedy edits an untaken mock or its key goes back to the gate's writer as
-    a `question` part, through a `Key question:` STATUS line that keeps the gate due. Its
-    merge takes only the untaken keys, the values file and `mock_key.py`, and a conflict is
+    with no report takes its `question` parts from the key checker's skipped list. Such a leak
+    part goes to the writer as a `question` part, found again by each gate's leak checks until it
+    is skipped, never stored; after a merge the gate runs again, so its leak checks cover the
+    merged answers. Its merge takes only the untaken keys, the values file and `mock_key.py`, and a conflict is
     aborted, never resolved in the chat; a part whose question would need rewording goes into the
     key checker's new `SKIP`, its key answer replaced by a `Skipped tonight:` line, and onto the
     mock's cram order line, and a `blocked` report gets the main session's fix before any

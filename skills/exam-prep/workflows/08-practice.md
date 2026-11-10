@@ -353,12 +353,22 @@ merge, as that step says.
      waits while `delegation-ledger watch` shows any live background agent, then the writer is
      settled as above (its report, or with none its worktree), and only then is the line taken
      out, committed.
-   - **Due or not.** Run step 4's item 4, `python3 -I _build/verify/mock_key.py` (part ids only),
-     which adds no `Key checked:` line here. A recheck is due when the mock's line isn't KEY OK,
-     when STATUS holds an unstruck `Key question:` line (a leak hit, below), or when STATUS gained
-     a finished source or a reference change after its `Key checked: <slug> <date> at <sha>` line:
-     `git log --oneline <sha>..HEAD -G'Source added: .*: done|Reference changed:' -- STATUS.md`
-     prints a commit. The order is git's, never the dates': a source added the day a mock was built
+   - **Due or not.** Run, in this order, each with the untaken mocks' keys and printing part ids
+     only: step 4's item 4, `python3 -I _build/verify/mock_key.py`, which adds no `Key checked:`
+     line here; the leak checks of step 4's item 5, step 6's item 2 and step 7's item 2 (a hit
+     names the key and the part, never the answer); then the source check below. A recheck is due
+     when a mock's line isn't KEY OK, when a leak check hits a leak part, or when the source check
+     prints a commit. A leak part is a part whose hit's remedy edits an untaken mock or its key
+     (fresh numbers for a computed answer, as step 4.5 and step 6.2 give it, a reworded question,
+     or a key's working reworded): no edit this session makes on the cram night, so it goes to the
+     writer as a `question` part. A hit step 4.5 lets stand (a page teaching what the part asks,
+     or the phrase "answer key") is logged in STATUS by its part as there, once, and a cram order
+     row that states an answer is reworded (step 7.2, then step 7.4): neither makes the gate due.
+     Nothing about a leak part is stored: the next gate's leak checks find it again until a writer
+     has skipped it. The source check asks whether STATUS gained a finished source or a reference
+     change after the mock's `Key checked: <slug> <date> at <sha>` line: `git log --oneline
+     <sha>..HEAD -G'Source added: .*: done|Reference changed:' -- STATUS.md` prints a commit.
+     The order is git's, never the dates': a source added the day a mock was built
      is still after it. A mock with no `Key checked:` line (a hub built before the line existed)
      takes the sha of the commit that added `Stage 08 built`
      (`git log -1 --format=%h -S'Stage 08 built' -- STATUS.md`), and such a hub's `Key recheck:
@@ -376,11 +386,12 @@ merge, as that step says.
      subagent would print in this window. One writer covers every untaken mock and every cause in
      any untaken mock's range: with a `Source added` line among them, the new-source brief, each
      such source in it, whose parts take in every part the key checker fails too; with only
-     `Reference changed:` lines, a failing part or a `Key question:` line, its reference-change
-     variant. Either brief names each unstruck `Key question:` line's part, which the writer skips
-     as a `question` part. The attempt waits for its report.
+     `Reference changed:` lines, failing parts or leak parts, its reference-change variant. With a
+     leak part, either brief takes the brief's leak-part case, which names each one by `<slug>
+     <part id>`. The attempt waits for its report.
    - **What the writer does.** It opens each untaken mock's key, finds the parts the new sources
-     touch (and any part step 4's item 4 now fails), fixes each one's key as step 4 says (a
+     touch (and any part step 4's item 4 now fails), skips each leak part as a `question` part
+     unchecked, fixes each other part's key as step 4 says (a
      computed answer copied from the new values), reruns step 4's items 2 and 4, and reports part
      ids, each `changed`, `unchanged` or `question`, never key text: this session's chat is the
      student's, so no answer reaches it. Its whole reply is the brief's JSON block, no text before
@@ -406,15 +417,11 @@ merge, as that step says.
      merges. Remove its worktree and branch as `09-tutor` step 5.5.3 does, unless the Agent tool
      already did, and rewrite each untaken mock's line to `Key checked: <slug> <date> at <base>`, or
      add it where the mock has none (an older hub): a line committed after the base stays in the
-     next range. After a merge, what a change to a key reruns (step 4's closing paragraph): step
-     4's items 4 and 5, step 6's item 2 and step 7's items 1 and 2, each with the untaken mocks'
-     keys. A hit there whose remedy edits an untaken mock or its key (fresh numbers for a computed
-     answer, as step 4.5 and step 6.2 give it, or a reworded question) is no edit this session
-     makes on the cram night: it goes back to the gate's writer as a `question` part. Log it in
-     STATUS as `Key question: <slug> <part id> (a leak hit)`, part ids only, which keeps the gate
-     due; the next writer skips that part, and its merge strikes the line through. Log in STATUS
-     each mock's part ids and what the report says of each, commit, and run the gate again: it
-     passes, or with a `Key question:` line, spawns again.
+     next range. Log in STATUS each mock's part ids and what the report says of each, commit, and
+     run the gate again from its first check. Its key checker and leak checks are what a change to
+     a key reruns (step 4's closing paragraph), now over the merged keys, so a stop or a `/clear`
+     after the merge loses nothing: the next gate runs them. It passes, or with a failing part or
+     a leak part (a merged answer now on a page), spawns again.
    - **Anything else** merges nothing and rewrites no `Key checked:` line, so the gate stays due.
      A conflict, or a merge git refuses: `git merge --abort` as `09-tutor` step 5.5.3 does, never
      resolving it here (its hunks are key text), then remove the worktree and the branch and run
