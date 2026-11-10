@@ -52,7 +52,8 @@
 // per spy target, one per step-through at its last frame, one per static figure (its id; one inside
 // a closed worked example is shot with it opened), the first worked example opened (-wex),
 // the exam-day map opened (-map), the source key with its first row targeted (-key; the row must
-// be the :target and on screen), and with --views one per view (-view-<name>). Exit 0 when every check passes, 1 on any failure, 2 on bad
+// be the :target and on screen, and at the page's bottom, where the shot is taken, the rail's link
+// to the last section must be active), and with --views one per view (-view-<name>). Exit 0 when every check passes, 1 on any failure, 2 on bad
 // usage.
 import fs from 'node:fs';
 import path from 'node:path';
@@ -419,6 +420,19 @@ for (const width of [390, 1280]) {
         return r.matches(':target') && b.top >= 0 && b.bottom <= innerHeight;
       }, keyRow);
       if (!shown) fail(`${tag}: source key row #${keyRow} not targeted and on screen for its shot`);
+      // At the page's bottom the rail marks the last spied section (the key, too short to reach
+      // the spy's line) active.
+      await page.evaluate(() => window.scrollTo({ top: document.documentElement.scrollHeight, behavior: 'instant' }));
+      await settle(page);
+      const lastActive = await page.evaluate(() => {
+        const spied = [...document.querySelectorAll('#main section.note, #main section.note h3[id]')]
+          .filter((e) => e.id);
+        const last = spied[spied.length - 1];
+        const a = last && document.querySelector(`#toc a[data-target="${CSS.escape(last.id)}"]`);
+        return a ? { id: last.id, active: a.classList.contains('active') } : null;
+      });
+      if (lastActive && !lastActive.active) fail(`${tag}: at the page's bottom the rail's link to #${lastActive.id}, the last section, is not active`);
+      else if (lastActive) console.log(`  at the bottom the rail marks #${lastActive.id} active`);
       await page.screenshot({ path: path.join(outDir, `${tag}-key.png`) });
     }
     if (viewsArg) {

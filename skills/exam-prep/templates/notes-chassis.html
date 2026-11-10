@@ -164,6 +164,9 @@
     letter-spacing:.02em;color:var(--ink-soft);border-bottom:1px solid var(--hair-strong)}
   tbody tr:last-child td{border-bottom:0}
   td code{white-space:nowrap}
+  /* a cell's muted small line (the source key's file name under what the source is) */
+  td .mut{color:var(--ink-soft)}
+  td .sm{font-size:.8rem;font-family:var(--f-mono);overflow-wrap:anywhere}
 
   /* ---- figures ---- */
   figure{margin:1.4rem 0;padding:1rem;border:1px solid var(--hair);border-radius:12px;background:var(--surface)}
@@ -353,6 +356,11 @@
       var top=spyList[i].getBoundingClientRect().top;
       if(top<=line) best=spyList[i].id; else break;
     }
+    /* a short last section (the source key) never reaches the line: at the page's bottom,
+       within 2px, it is the one in view */
+    var se=document.scrollingElement||document.documentElement;
+    if(spyList.length && se.scrollTop>0 && se.scrollTop+window.innerHeight>=se.scrollHeight-2)
+      best=spyList[spyList.length-1].id;
     if(best) setActive(best);
   }
   var ticking=false;

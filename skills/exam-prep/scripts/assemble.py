@@ -17,8 +17,9 @@ the chassis:
   - the source key, one last section after the notes' (sec-<last N + 1>, so it sits in the rail
     like any section): a table with one row per code the page cites, read from the hub's
     MANIFEST.md (its Doc id, File, Notes and optional By columns, found by header name). A row
-    gives the code, the file's base name, what the source is (its Notes, blank when Notes is
-    empty, never its Scope) and, when any cited row has a By cell, who made it (a Made by column,
+    has three columns at most, so it fits a phone: the code; what the source is (its Notes, never
+    its Scope) with the file's base name under it in muted small text (`.mut.sm`; with empty Notes,
+    the file line alone); and, when any cited row has a By cell, who made it (a Made by column,
     blank for a row without one); a table with no By column reads as before. Each
     a.slink, in a section, a step-through or the map, gets href="#src-<code>", where the code is
     its text's first word (D5 from `D5 p.23`, HW1 from `HW1 Q2c`), and a title holding its row's
@@ -198,21 +199,24 @@ def link_citations(name, text, key, cited, problems):
 
 
 def source_key(n, key, cited):
-    """The source key: section n, one table row per cited code, in MANIFEST.md's order, with a
-    Made by column when any cited row has a By cell."""
+    """The source key: section n, one table row per cited code, in MANIFEST.md's order: the code,
+    what it is with the file's base name under it (muted, small), and a Made by column when any
+    cited row has a By cell. Three columns at most, so the table fits a phone's width."""
     shown = [(code, row) for code, row in key.items() if code in cited]
     made_by = any(row[2] for _, row in shown)
     rows = []
     for code, row in shown:
         base, what, by = (html.escape(x) for x in row)
+        file_line = f'<span class="mut sm">{base}</span>'
         rows.append(f'      <tr id="{source_id(code)}"><td><code>{html.escape(code)}</code></td>'
-                    f"<td>{base}</td><td>{what}</td>" + (f"<td>{by}</td>" if made_by else "") + "</tr>")
+                    f"<td>{what + '<br>' if what else ''}{file_line}</td>"
+                    + (f"<td>{by}</td>" if made_by else "") + "</tr>")
     return (f'<section class="note" id="sec-{n}">\n'
             f'  <h2><span class="n">§{n}</span> {KEY_TITLE}</h2>\n'
-            "  <p>Every citation on this page links to its row here: the source's code, its file"
-            + (", what it is and who made it" if made_by else " and what it is") + ".</p>\n"
+            "  <p>Every citation on this page links to its row here: the source's code, what it is"
+            + (" and its file, and who made it" if made_by else " and its file") + ".</p>\n"
             '  <div class="tbl-wrap"><table>\n'
-            "    <thead><tr><th>Code</th><th>File</th><th>What it is</th>"
+            "    <thead><tr><th>Code</th><th>What it is</th>"
             + ("<th>Made by</th>" if made_by else "") + "</tr></thead>\n"
             "    <tbody>\n" + "\n".join(rows) + "\n    </tbody>\n  </table></div>\n</section>")
 

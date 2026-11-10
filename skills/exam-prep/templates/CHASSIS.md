@@ -43,7 +43,7 @@ the classes written `.class` in its first column are the only ones a fragment ma
 | `a.slink`, `a.xref` | a source citation, linked by assemble.py to its row in the source key, and a cross-reference |
 | `.tbl-wrap` | a table's scroll box |
 | `figure`, `figcaption`, `.fig-controls` | a figure, its caption and a step-through's buttons; the page's script wraps each figure's SVG in a `figbox` scroll box |
-| `.bx`, `.accbx`, `.fill-surf`, `.dash`, `.mono`, `.mut`, `.sm`, `.acc` | SVG shapes and text inside a figure |
+| `.bx`, `.accbx`, `.fill-surf`, `.dash`, `.mono`, `.mut`, `.sm`, `.acc` | SVG shapes and text inside a figure; in a table cell, `.mut` and `.sm` make a muted small line (the source key's file name) |
 | `details.examnav`, `.ebody`, `.efound`, `.egrid`, `.eq`, `.eqh`, `.edrill` | the exam-day map |
 
 **A step-through** (`06-site`, step 2) is a `<figure id="<fig-id>">` holding its SVG, its
@@ -72,7 +72,8 @@ Only a step-through may add unstyled hook classes for its handler, each named `f
   on a phone (L13).
 - No math inside SVG text or headings (L14); a label the rail or a cross-reference shows is typed
   text, never a CSS counter (L16); figures stay inside their section (L17).
-- Scroll-spy is a scroll handler, and a check waits for scrolling to settle (L18).
+- Scroll-spy is a scroll handler, and a check waits for scrolling to settle (L18). At the page's
+  bottom it marks the last section active: a short one (the source key) never reaches its line.
 - **C1.** The rail keeps its active link visible by scrolling the rail alone, never
   `scrollIntoView`: that moves the page too and cancels a smooth jump in flight in WebKit
   (L25). `verify_page.mjs` checks the long jump, in WebKit too when it is installed.
@@ -84,10 +85,10 @@ Only a step-through may add unstyled hook classes for its handler, each named `f
 
 Converters add content only, in the chassis's classes: no inline styles and no new CSS (FB-120,
 S13). A CSS change is the main session's, made in `_build/chassis.html`, and checked against the
-reference screenshots in `<skill>/templates/chassis-shots/` (1280 px light and 390 px dark: the
-top of the page, four subsections, a step-through at its last frame, an open worked example, the
-open exam-day map and the source key with a row targeted, together every component) before it
-ships. A look change worth keeping for later courses goes to
-`12-retro`, which regenerates the shots from the skill repo's synthetic sample hub,
-`tests/exam_prep/fixtures/site/`: assemble it, then run `verify_page.mjs` on it with
+reference screenshots in `<skill>/templates/chassis-shots/` (1280 px light and 390 px dark: the top
+of the page, four subsections, a step-through at its last frame, an open worked example, the open
+exam-day map and the source key with a row targeted, the rail marking it active, together every
+component) before it ships. A look change worth keeping for later courses goes to `12-retro`, which
+regenerates the shots from the skill repo's synthetic sample hub, `tests/exam_prep/fixtures/site/`:
+assemble it, then run `verify_page.mjs` on it with
 `--spy sec-1-sums,sec-1-rules,sec-2-basics,sec-2-walks --steps _build/frag/steps.json`.
