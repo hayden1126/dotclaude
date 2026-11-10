@@ -167,9 +167,9 @@ When the exam allows no sheet, the student still needs a recall layer shorter th
 whose Review view shows each section's Must-know list, the exam-day map and the blocks the notes
 tag `.rv`, and hides the rest. It copies nothing: this stage only tags worked examples and pitfalls
 the verified notes already hold. Its budget is PLAN.md's `- Review view: <N> minutes of reading`
-line, asked at intake, and again only when nothing is left to untag (below). `assemble.py` counts the view's words at 150 a minute (`READING_RATE`,
-an unmeasured estimate for dense study notes) and fails the build when they take more than N
-minutes, printing both numbers. The map's cram block (`08-practice` step 7) is left out of the
+line, asked at intake, and again only when nothing is left to untag (below). `assemble.py` counts
+the view's words at 150 a minute (`READING_RATE`, an unmeasured estimate for dense study notes) and
+fails the build when they take more than N minutes, printing both numbers. The map's cram block (`08-practice` step 7) is left out of the
 count: it is a reading list into the notes, not review text. Any later rebuild can still fail on
 the minutes (a patch that lengthens a tagged block, a new Must-know line); the remedy is item 4's:
 untag from the last ranked subsection up, before anything else. Once no `.rv` tag is left (the
