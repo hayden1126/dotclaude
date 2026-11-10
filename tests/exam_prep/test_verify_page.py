@@ -23,7 +23,9 @@ which cuts a long jump short in WebKit (C1); and --views on the mock page (its o
 sample's Review view passes in every viewport, its shots named -review, with the long jump run
 there too; its page broken to show an untagged paragraph, hide an rv block or drop the Must-know
 list fails, and so does a link to a hidden target that doesn't switch to Full notes; a section
-with an Unverified banner before its first h3 is hidden whole, and shown it fails."""
+with an Unverified banner before its first h3 is hidden whole, and shown it fails; and a load at
+a hidden target's hash, or a hash change to one, with the Review view remembered, that doesn't
+switch to Full notes fails."""
 import contextlib
 import importlib.util
 import io
@@ -399,6 +401,8 @@ class BrowserCatchesTest(unittest.TestCase):
         self.assertIn("[1280-light-review]", r.stdout)
         self.assertIn("  review view shows its blocks and hides the rest", r.stdout)
         self.assertIn("hidden-target link #sec-2-walks: switched to Full notes", r.stdout)
+        self.assertIn("a hash change to hidden #sec-2-walks: switched to Full notes", r.stdout)
+        self.assertIn("a load to hidden #sec-2-walks: switched to Full notes", r.stdout)
         self.assertIn("long jump chromium 1280px review top->last ok:", r.stdout)
         self.assertIn("long jump chromium 390px review bottom->first ok: #sec-2", r.stdout)
         shots = set(os.listdir(os.path.join(self.tmp, "review", "shots")))
@@ -431,6 +435,13 @@ class BrowserCatchesTest(unittest.TestCase):
     def test_a_hidden_target_link_that_doesnt_switch_views(self):
         self.fails("rvlink", "hidden in the Review view, didn't switch to Full notes",
                    page=self.edit("if(!t||shown(t)) return;", "return;"))
+
+    def test_a_hash_to_a_hidden_target_that_doesnt_switch_views(self):
+        # Loaded at a hidden target's hash, or a hash change to one, with the Review view remembered.
+        self.fails("rvload", "a load to #sec-2-walks, hidden in the Review view, didn't switch to Full notes",
+                   page=self.edit("    hashToHidden();\n", ""))
+        self.fails("rvhash", "a hash change to #sec-2-walks, hidden in the Review view, didn't switch",
+                   page=self.edit("window.addEventListener('hashchange',hashToHidden);", ""))
 
     def test_overflow_inside_an_open_worked_example(self):
         self.fails("wexwide", "with the worked examples and map open", page=self.edit(

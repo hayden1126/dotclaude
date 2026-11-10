@@ -46,7 +46,9 @@
 // figures, which it hides, aside), its shots named <width>-<scheme>-review-..., and checks there
 // that the view shows exactly what CHASSIS.md says (every rv block, worked examples open, each h3
 // over one, each Must-know h3 and its list, the map, the source key, the fixed line) and hides the
-// rest, a section with a Not on <exam> or Unverified banner before its first h3 whole, and that clicking a link to something it hides switches to Full notes and lands on it.
+// rest, a section with a Not on <exam> or Unverified banner before its first h3 whole, and that
+// clicking a link to something it hides switches to Full notes and lands on it, as do a hash change
+// to it and a load of the page at its hash with the Review view remembered (near the top, both).
 // Then the long jump (CHASSIS.md, C1), at 390 and 1280 px with smooth scrolling on, in Chromium and
 // in WebKit (Safari's engine, where a page scroll the rail starts cancels the jump): from the top it
 // clicks the last rail entry (#toc a), from the bottom the first, the drawer opened first where the
@@ -532,6 +534,37 @@ for (const width of [390, 1280]) {
         else if (!land.shown || land.top < -2 || land.top > land.max - 20) {
           fail(`${tag}: a link to #${hid}, hidden in the Review view, switched to Full notes but landed at top ${land.top} px`);
         } else console.log(`  hidden-target link #${hid}: switched to Full notes, landed at top ${land.top} px`);
+        // The same target reached by its hash, the Review view remembered: a hash change, then a
+        // fresh load of the page at it. Each switches to Full notes and lands near the top.
+        const landed = async (p) => {
+          await settle(p);
+          return p.evaluate((id) => {
+            const t = document.getElementById(id);
+            return { full: !document.documentElement.hasAttribute('data-notesview'), shown: t.getClientRects().length > 0,
+              top: Math.round(t.getBoundingClientRect().top) };
+          }, hid);
+        };
+        const near = (how, l) => {
+          if (!l.full) fail(`${tag}: ${how} to #${hid}, hidden in the Review view, didn't switch to Full notes`);
+          else if (!l.shown || l.top < -2 || l.top > 200) {
+            fail(`${tag}: ${how} to #${hid}, hidden in the Review view, switched to Full notes but landed at top ${l.top} px`);
+          } else console.log(`  ${how} to hidden #${hid}: switched to Full notes, landed at top ${l.top} px`);
+        };
+        await pickView(page, 'review');
+        await page.evaluate(() => {
+          localStorage.setItem('notes-view', 'review');
+          history.replaceState(null, '', location.pathname);
+          window.scrollTo({ top: 0, behavior: 'instant' });
+        });
+        await page.evaluate((id) => { location.hash = id; }, hid);
+        near('a hash change', await landed(page));
+        await page.evaluate(() => localStorage.setItem('notes-view', 'review'));
+        const fresh = await ctx.newPage();
+        await fresh.goto(pathToFileURL(wrapped).href + '#' + encodeURIComponent(hid), { waitUntil: 'networkidle' });
+        await fresh.waitForFunction(() => !!(window.MathJax && MathJax.startup && MathJax.startup.promise), null, { timeout: 30000 })
+          .then(() => fresh.evaluate(() => MathJax.startup.promise)).catch(() => {});
+        near('a load', await landed(fresh));
+        await fresh.close();
       }
     }
     if (viewsArg && !review) {

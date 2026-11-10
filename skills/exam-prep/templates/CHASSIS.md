@@ -44,7 +44,8 @@ the skill's.
   `assemble.py` refuses an `rv` block in it; a banner further down hides only itself. Once the map has a cram block, sections and their rail entries take the order
   of each section's first row in it (CSS `order`; subsections keep theirs, and sections it names
   no row for follow in page order). A link to anything the view hides switches to Full notes, then
-  jumps. With `- Review view: none: <why>` or no line, `assemble.py` strips the toggle (the
+  jumps, and so does a load of the page at such a target's hash, or a hash change to one, with the
+  Review view remembered. With `- Review view: none: <why>` or no line, `assemble.py` strips the toggle (the
   chassis's `<!-- REVIEW TOGGLE -->` blocks) and refuses any class `rv`.
 - **The Review view's budget**: `assemble.py` counts the view's words, the map's included and the
   source key's and the map's cram block left out (the cram block is a reading list into the notes,

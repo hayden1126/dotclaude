@@ -459,9 +459,18 @@
     rebuildSpy(); current=null;
   }
   function remember(v){ try{localStorage.setItem('notes-view',v);}catch(e){} }
+  // a page loaded, or a hash changed, to something the Review view hides: Full notes, then there
+  function hashToHidden(){
+    if(!reviewOn||location.hash.length<2) return;
+    var t=null; try{ t=document.getElementById(decodeURIComponent(location.hash.slice(1))); }catch(e){}
+    if(!t||shown(t)) return;
+    setView('full'); remember('full'); t.scrollIntoView(); onScroll();
+  }
   if(picks.length){
     var savedView=null; try{ savedView=localStorage.getItem('notes-view'); }catch(e){}
     setView(savedView==='review'?'review':'full'); onScroll();
+    hashToHidden();
+    window.addEventListener('hashchange',hashToHidden);
     picks.forEach(function(b){ b.addEventListener('click',function(){
       var v=b.dataset.pick; if((v==='review')===reviewOn) return;
       // keep the heading in view where it still shows; at the page's top, stay at the top
