@@ -97,7 +97,7 @@ evidence ids.
     only, so no answer reaches the student's chat, which the hub CLAUDE.md's key rule now allows.
     A key gate before each attempt (`08-practice` step 8.1, never inside a build) spawns the writer
     when the key checker fails, when its leak checks (step 4's item 5, step 6's item 2 and step 7's
-    item 2, with the untaken keys, part ids only) hit a leak part (one whose remedy edits an
+    item 2, and the final sheet once step 8.3 has built it, with the untaken keys, part ids only) hit a leak part (one whose remedy edits an
     untaken mock or its key), or when STATUS gained a `Source added: ... done` or `Reference changed:` line after
     the mock's `Key checked: <slug> <date> at <sha>` line (git's order, not the dates), and a merge rewrites that line (or adds it, on an older hub; only step 4 adds one otherwise)
     to the writer's base (the head the session noted at the spawn, or the report's sha, never the

@@ -350,8 +350,9 @@ merge, as that step says.
      writer's worktree with no commit of its own is removed as `09-tutor` step 5.5.1 does.
    - **Due or not.** Run, in this order, each with the untaken mocks' keys and printing part ids
      only: step 4's item 4, `python3 -I _build/verify/mock_key.py`, which adds no `Key checked:`
-     line here; the leak checks of step 4's item 5, step 6's item 2 and step 7's item 2 (a hit
-     names the key and the part, never the answer); then the source check below. A recheck is due
+     line here; the leak checks of step 4's item 5, step 6's item 2 and step 7's item 2, and the
+     final sheet's (`cheatsheet/<exam-slug>-final.html`, or its `.tex`) once step 8.3 has built it
+     (a hit names the key and the part, never the answer); then the source check below. A recheck is due
      when a mock's line isn't KEY OK, when a leak check hits a leak part, or when the source check
      prints a commit. A leak part is a part whose hit's remedy edits an untaken mock or its key
      (fresh numbers for a computed answer, as step 4.5 and step 6.2 give it, a reworded question,
