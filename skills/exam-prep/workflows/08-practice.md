@@ -284,7 +284,7 @@ and offers the checks it held (`09-tutor` step 1's Patches and Waiting checks bu
   this exam" ends with it, this re-pull's or any other (a source the student brings), and so does
   step 4's rerun clause for a changed reference: the main session never opens an untaken mock's
   key, so one writer does, from `<skill>/templates/agent-briefs.md`, section "Key recheck" (the
-  staff-answer brief, or its reference-change variant), load the delegation skill first:
+  new-source brief, or its reference-change variant), load the delegation skill first:
   - A recheck is owed from the moment its cause lands, and STATUS says so before any writer runs:
     `Key recheck: owed <date> (<each source's log, or "a reference change">)`, committed with the
     cause (`11-next-exam` step 3's fence commit for a source, step 4's rerun clause for a
@@ -293,7 +293,7 @@ and offers the checks it held (`09-tutor` step 1's Patches and Waiting checks bu
     outlives the session: whoever ends a path, a `/clear` or a lost session, the next session
     that reads STATUS finds the recheck still owed.
   - One writer per `owed` line, covering every cause it names, and never two at once: both
-    rewrite `practice/mock-values-key.md`. With a source on the line, the staff-answer brief,
+    rewrite `practice/mock-values-key.md`. With a source on the line, the new-source brief,
     whose parts take in every part the key checker fails too; with only "a reference change", its
     variant. The dispatch rewrites the line to `Key recheck: dispatched <date> (<its causes>)`. An
     `owed` line that comes while a writer runs waits: the session that settles that writer's
@@ -320,7 +320,7 @@ and offers the checks it held (`09-tutor` step 1's Patches and Waiting checks bu
     and STATUS logs the report as lost (no part's `changed` or `unchanged` known). A run that
     doesn't print KEY OK for every mock rewrites the line to `owed`, its causes kept, and
     dispatches again from the hub's head.
-  - The writer opens each untaken mock's key, finds the parts the answer touches (and any part
+  - The writer opens each untaken mock's key, finds the parts the new sources touch (and any part
     step 4's item 4 now fails), fixes each one's key as step 4 says (a computed answer copied from
     the new values), reruns step 4's items 2 and 4, and reports part ids, each `changed`,
     `unchanged` or `question`, never key text: this session's chat is the student's, so no answer

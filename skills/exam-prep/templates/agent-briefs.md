@@ -579,16 +579,17 @@ the merge; the next mock attempt waits for both (`08-practice` step 8's opening)
 reference-change variant below serves `08-practice` step 4's rerun clause.
 
 ```text
-# Brief: recheck the untaken {{EXAM}} mock keys against staff answers on {{TOPICS}}
+# Brief: recheck the untaken {{EXAM}} mock keys against new sources on {{TOPICS}}
 
 ## Purpose
-Staff answered questions the night before the exam, and the notes now carry the answers. A mock key
-written before them may mark a right answer wrong. The student takes {{THE UNTAKEN MOCKS}} tonight
-and marks each against its key, so every part the answers touch must be right before then. The
-student reads the main session's chat, so nothing you report may show a key: part ids only.
+New sources came in after the mock keys were written (a staff answer, a recitation the student
+brought, say), and the notes now carry them. A key written before them may mark a right answer
+wrong. The student takes {{THE UNTAKEN MOCKS}} tonight and marks each against its key, so every
+part the new sources touch must be right before then. The student reads the main session's chat,
+so nothing you report may show a key: part ids only.
 
 ## End state
-- Done means: every part of {{THE UNTAKEN MOCKS}} the staff answers touch checked against them,
+- Done means: every part of {{THE UNTAKEN MOCKS}} the new sources touch checked against them,
   each wrong one's key fixed, in one commit on your branch, and each mock's line from the key
   checker says KEY OK, a `question` part left out of the run as Scope says.
 - Artifact path: your branch, in your worktree of {{ROOT}}.
@@ -604,13 +605,13 @@ student reads the main session's chat, so nothing you report may show a key: par
 - Work in: your worktree of {{ROOT}}. Write only `practice/mock-<slug>-key.md` for the slugs
   {{SLUGS}}, `practice/mock-values-key.md` (the key checker writes it) and
   `_build/verify/mock_key.py`.
-- The staff answers: {{EACH STAFF TEXT, QUOTED, WITH ITS SOURCE}}. The notes sections they changed:
-  {{§N.M LIST}}.
+- The new sources: {{EACH NEW SOURCE'S TEXT, QUOTED, WITH ITS SOURCE}}. The notes sections they
+  changed: {{§N.M LIST}}.
 - Read: `_build/MOCK.md` (the key format), each of those mocks and its key,
   `_build/verify/mock_key.py`, `practice/mock-values-key.md`, the notes and
   `_build/verify/examples.out.md`.
-- The parts: each part whose `Topic:` is a section an answer changed, and each part the key
-  checker now fails. Check each one's answer against the staff answers and the notes as they now
+- The parts: each part whose `Topic:` is a section a new source changed, and each part the key
+  checker now fails. Check each one's answer against the new sources and the notes as they now
   stand.
 - Fix as `08-practice` step 4 says: a computed answer is copied from `practice/mock-values-key.md`
   after `python3 -I _build/verify/mock_key.py` writes it, never worked by hand; a reasoned answer
@@ -627,7 +628,7 @@ student reads the main session's chat, so nothing you report may show a key: par
   The checker then leaves the part out and holds every other part to KEY OK.
 - Run the key checker from the worktree root, `python3 -I _build/verify/mock_key.py`, until each
   mock's line says KEY OK. Survey with `git status` and `git diff --stat` only, never a command
-  that prints a diff, and commit with the subject `Keys: recheck {{SLUGS}} after a staff answer`.
+  that prints a diff, and commit with the subject `Keys: recheck {{SLUGS}} after a new source`.
   A run that stops short commits nothing.
 - Out of scope: a taken mock's key, every subfolder of `practice/` (a finished exam's archive),
   `_build/verify/` but the files above (a change to the reference is the main session's: report
@@ -636,8 +637,8 @@ student reads the main session's chat, so nothing you report may show a key: par
 
 **Reference-change variant** (`08-practice` step 4's rerun clause on the cram night: a `05-verify`
 step 5 rerun changed the reference, and the parts of an untaken mock the key checker now fails need
-their answers rewritten from the new values; there is no staff text and no section list). Replace
-the title, Purpose, the End state's "Done means" line, and the Scope's staff-answers and parts
+their answers rewritten from the new values; there is no source text and no section list). Replace
+the title, Purpose, the End state's "Done means" line, and the Scope's new-sources and parts
 lines with the text below, and end the commit subject `after a reference change`. The Report line
 stands as it is: the whole reply is the JSON block, part ids and file names only.
 
