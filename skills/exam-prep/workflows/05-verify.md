@@ -125,10 +125,9 @@ same audit when they exist.
   allowed sources:
   `python3 -I <skill>/scripts/mock_leak.py --questions <the sets' extracts> --allow <the lecture
   extracts> --pages notes/*.md`. The main session runs it, since reviewers never open `practice/`.
-  Each hit names a notes line and a set's part, never the text. The condensed review page, when
-  PLAN.md has one, is built after this stage from the notes, so `07-cheatsheet` runs this check
-  again with its Markdown (`_build/review/notes/*.md`) added to `--pages`, and every later change
-  runs it as `08-practice`'s "Changing the notes or a sheet" item 4 says.
+  Each hit names a notes line and a set's part, never the text. The Review view (`07-cheatsheet`)
+  only tags blocks of the notes, so this check covers it, and every later change runs it as
+  `08-practice`'s "Changing the notes or a sheet" item 4 says.
   A hit is a blocker: rewrite the passage with fresh numbers and a fresh setup (S7), and rerun
   until it prints QUESTIONS OK. A passage cut or held back instead, which the student may want
   back once they attempt the set, goes to `_build/held.md`, one entry per passage: its section,

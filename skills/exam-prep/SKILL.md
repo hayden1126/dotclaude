@@ -100,7 +100,7 @@ names (00 runs 01's Ed pull; 02 starts 05's checker).
 | 04 | `workflows/04-write.md` | `notes/NN-<slug>.md`, wired | `linkcheck.py` is clean (plain-text notes: references checked by hand) |
 | 05 | `workflows/05-verify.md` | checker, reviews applied | self-test covers every official part (or nothing is computable), no `TODO-VERIFY` left |
 | 06 | `workflows/06-site.md` | the notes page, published | `verify_page.mjs` passes, URL in STATUS |
-| 07 | `workflows/07-cheatsheet.md` | sheet HTML and PDF (only if allowed); with no sheet allowed, the condensed review page when PLAN.md includes it | `check_pdf.py` passes; the review page: `verify_page.mjs` passes, URL in STATUS |
+| 07 | `workflows/07-cheatsheet.md` | sheet HTML and PDF (only if allowed); with no sheet allowed, the notes page's Review view (`.rv` tags in the notes) when PLAN.md gives it minutes | `check_pdf.py` passes; the Review view: `assemble.py` within its minutes, `verify_page.mjs` passes in both views, the notes page republished |
 | 08 | `workflows/08-practice.md` | mocks, quarantined keys, mock pages, the cram order | the key script asserts every computable value; the leak check passes |
 | 09 | `workflows/09-tutor.md` | walk-throughs, quizzes, notes patches, `_build/logs/tutor.md` | on demand |
 | 10 | `workflows/10-polish.md` | scan, report, apply on approval | on demand |
@@ -125,7 +125,8 @@ names (00 runs 01's Ed pull; 02 starts 05's checker).
    exam gets one pushback before any notes are written, and a `Skip asked` line in STATUS; asked
    again, the material goes in under an `Unverified` banner. Where the ask comes decides when, and
    whether, either happens: `11-next-exam`'s "A source added unverified" (FB-013). Material under
-   that banner stays off every sheet, out of the mocks' plan and the cram order's reading rows, and
+   that banner stays off every sheet and the Review view, out of the mocks' plan and the cram
+   order's reading rows, and
    out of `09`'s walk-throughs and quizzes while its `Unverified:` STATUS line stands.
 3. **No hand-computed values.** Every trace, number and key answer comes from a checker that first
    reproduces the official solutions (FB-090, FB-100). When PLAN.md's Checker line says nothing
