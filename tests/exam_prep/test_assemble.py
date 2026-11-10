@@ -244,6 +244,23 @@ class AssembleTest(unittest.TestCase):
         self.assertEqual(rc, 0, out)
         self.assertNotIn("Made by", h.page())
 
+    def test_a_remark_after_a_semicolon_in_notes_stays_off_the_key(self):
+        # Notes is `<what it is>[; <remark>]`: the key and the title show what it is alone.
+        cites = SEC2.replace("<ol", '<p>Try it <a class="slink">HW1 Q2c</a>.</p>\n  <ol')
+        h = self.hub(sections={1: SEC1, 2: cites})
+        h.write("MANIFEST.md", MANIFEST.replace("| Lecture 1: widgets |",
+                                                "| Lecture 1: widgets; through slide 9, the rest is Exam 2 |")
+                .replace("| 2 | in | no | yes | |", "| 2 | in | no | yes | ; added late |"))
+        rc, out = h.run()
+        self.assertEqual(rc, 0, out)
+        page = h.page()
+        self.assertNotIn("the rest is Exam 2", page)
+        self.assertNotIn("added late", page)
+        self.assertIn('<tr id="src-D1"><td><code>D1</code></td><td>Lecture 1: widgets<br>', page)
+        self.assertIn('title="D1: d1-widgets.pdf, Lecture 1: widgets">D1 p.2</a>', page)
+        # A remark with no what it is before it leaves the file line alone.
+        self.assertIn('<tr id="src-HW1"><td><code>HW1</code></td><td><span class="mut sm">hw1.pdf</span></td></tr>', page)
+
     def test_a_citation_whose_code_has_no_manifest_row_refused(self):
         self.assertRefused(self.in_sec1('<p>See <a class="slink">X7 p.1</a>.</p>'),
                            "frag/sec1.html (§1): citation `X7 p.1` names X7, which has no row in MANIFEST.md")

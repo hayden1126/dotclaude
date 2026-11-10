@@ -43,7 +43,9 @@ using its value: `RENDER_DPI=300 bash <skill>/scripts/render_pdf.sh <file> <doc-
 Fill each row's Pages from disk: `pdfinfo` for a PDF, the `slides:` total on the first line of
 `map` for a deck (vertical slides included), the page markers for an ebook (FB-044). Then count again across all rows and compare with any count already written
 in STATUS or the plan: a total written from memory has been wrong before. Record printed
-slide numbers next to PDF pages wherever the two differ (L04).
+slide numbers next to PDF pages wherever the two differ (L04). Fill each row's Notes as
+`<what it is>[; <remark>]`, what the source is in a few words ("Lecture 4: search") first, and its
+By, as the template's legend says: the page's source key shows both.
 
 ## Step 4: Originals
 

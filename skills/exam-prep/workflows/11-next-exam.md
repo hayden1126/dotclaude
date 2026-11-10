@@ -119,7 +119,8 @@ Draft all three in `<root>`, as `00-intake` step 4 does, before showing anything
 - **`MANIFEST.md`**, from `<skill>/templates/MANIFEST.md.tmpl`, the rows carried: its title names
   this exam; each row for this exam in an `in` form; new files as new rows with new doc ids (none
   renumbered or reused: citations use them); the finished exam's rows `in` when this exam covers
-  them, else `out` with "(on <old exam>)" in Notes; Answers cells carried, each set the student
+  them, else `out` with "on <old exam>" as Notes' remark; each carried row's Notes as
+  `<what it is>[; <remark>]`, what it is filled where the old row lacks it, and its By; Answers cells carried, each set the student
   has attempted since marked `yes, attempted`, or with no solutions row `no, attempted
   YYYY-MM-DD` (question 2); topic cuts for this exam only. A
   cumulative exam needs no other scope word: its old rows are `in`.
@@ -458,8 +459,8 @@ fresh session answers from STATUS, then runs step 7.5.
    asks again.
 2. **Ingest** the doc as `01-ingest` steps 1 to 3 do: copied in by name, rendered, and its
    MANIFEST.md row, `in` with the doc id item 1 picked and its count from disk, its Answers cell as
-   the template's legend says, its Notes naming who put it in scope (a staff post, or the student's
-   word, quoted).
+   the template's legend says, its Notes what the source is, then `;` and who put it in scope (a staff
+   post, or the student's word, quoted).
 3. **Write**, the notes only, in the Write brief's Format: a new section after the last, or a
    short subsection just before an old section's Must know, placed and named as "The build on a
    reopened hub" row 03 says, any text naming the moved Must know by number updated. Each

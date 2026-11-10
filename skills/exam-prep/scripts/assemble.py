@@ -17,9 +17,9 @@ the chassis:
   - the source key, one last section after the notes' (sec-<last N + 1>, so it sits in the rail
     like any section): a table with one row per code the page cites, read from the hub's
     MANIFEST.md (its Doc id, File, Notes and optional By columns, found by header name). A row
-    has three columns at most, so it fits a phone: the code; what the source is (its Notes, never
-    its Scope) with the file's base name under it in muted small text (`.mut.sm`; with empty Notes,
-    the file line alone); and, when any cited row has a By cell, who made it (a Made by column,
+    has three columns at most, so it fits a phone: the code; what the source is (its Notes up to
+    the first `;`, never a remark after it or the Scope) with the file's base name under it in muted
+    small text (`.mut.sm`; with that part empty, the file line alone); and, when any cited row has a By cell, who made it (a Made by column,
     blank for a row without one); a table with no By column reads as before. Each
     a.slink, in a section, a step-through or the map, gets href="#src-<code>", where the code is
     its text's first word (D5 from `D5 p.23`, HW1 from `HW1 Q2c`), and a title holding its row's
@@ -141,8 +141,9 @@ def source_id(code):
 
 def manifest_key(path):
     """{code: (file base name, what it is, who made it)} from MANIFEST.md's table, its columns
-    found by header name: what it is is the row's Notes, blank when Notes is
-    empty (a Scope such as `in, PDF pp.1-9` says nothing of what a source is); who made it is the
+    found by header name: what it is is the row's Notes up to its first `;` (Notes is
+    `<what it is>[; <remark>]`, and the remark stays off the page), blank when that part is empty (a
+    Scope such as `in, PDF pp.1-9` says nothing of what a source is); who made it is the
     By cell (staff, classmate, textbook, student or free text), empty with no By column. ValueError
     when the table has no Doc id or File column, or repeats a code."""
     rows, cols = {}, None
@@ -167,7 +168,7 @@ def manifest_key(path):
             if code in rows:
                 raise ValueError(f"two rows for {code}")
             base = posixpath.basename(cell("file"))
-            rows[code] = (base, cell("notes"), cell("by"))
+            rows[code] = (base, cell("notes").split(";", 1)[0].strip(), cell("by"))
     if cols is None:
         raise ValueError("has no table under a `| Doc id | File | ... |` header")
     return rows

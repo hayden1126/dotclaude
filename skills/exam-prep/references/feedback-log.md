@@ -151,7 +151,7 @@ naming the id that replaces it, if one does.
 | FB-120 | Conversion agents use only the chassis's classes. CSS changes are made by the main session and checked against the chassis screenshots. | S13, w06 | H1.C11, B4 (S13) |
 | FB-121 | Material found out of scope stays, under a visible "Not on Exam N" banner. | w06, w11 | A3.C17, B4.C14, A4.C9 |
 | FB-122 | Publish from the session that builds the page: a republish elsewhere must first read the whole live copy. | w06 | B3.G3, B4.G13 |
-| FB-123 | Every source citation links to its row in the page's source key, which says what the source is, who made it and its file; the build fails on a code with no row. | w06, w11, assemble.py, linkcheck.py, verify_page.mjs, t:convert, t:chassis, t:manifest | E1.C10, E1.C11, D1.C20 |
+| FB-123 | Every source citation links to its row in the page's source key, which says what the source is, who made it and its file; the build fails on a code with no row. | w01, w06, w11, assemble.py, linkcheck.py, verify_page.mjs, t:convert, t:chassis, t:manifest | E1.C10, E1.C11, D1.C20 |
 
 ## 07-cheatsheet
 

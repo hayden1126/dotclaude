@@ -12,14 +12,14 @@ Counts come from disk (`pdfinfo`, `ls`), never from memory.
 
 | Doc id | File | By | Pages | Scope | Answers | Rendered | Notes |
 |---|---|---|---|---|---|---|---|
-| D1 | `sources/lectures/{{FILE}}.pdf` | staff | {{N}} | in | no | yes | |
-| D2 | `sources/lectures/{{FILE}}.pdf` | staff | {{N}} | in, PDF pp.1-{{K}} (last in-scope slide: PDF p.{{K}} = printed {{M}}) | no | yes | {{WHY THE CUT}} |
-| HW1 | `sources/homework/{{FILE}}.pdf` | staff | {{N}} | in | no | yes | |
+| D1 | `sources/lectures/{{FILE}}.pdf` | staff | {{N}} | in | no | yes | {{WHAT IT IS: "Lecture 4: search"}} |
+| D2 | `sources/lectures/{{FILE}}.pdf` | staff | {{N}} | in, PDF pp.1-{{K}} (last in-scope slide: PDF p.{{K}} = printed {{M}}) | no | yes | {{WHAT IT IS}}; {{WHY THE CUT}} |
+| HW1 | `sources/homework/{{FILE}}.pdf` | staff | {{N}} | in | no | yes | {{WHAT IT IS: "Homework 1: search"}} |
 | HW1S | `sources/homework/{{FILE}}.pdf` | staff | {{N}} | in | yes | yes | official solutions to HW1 |
-| ED | `sources/ed/ed-digest.md` | staff | n/a | in | no | n/a | the Ed pull; cursor in `sources/ed/cursor.json` |
-| D9 | `sources/lectures/{{FILE}}.pdf` | staff | {{N}} | reserved: {{LATER EXAM}} | no | no | raw copy only, never opened |
-| D10 | {{EXPECTED FILE}} | staff | | pending: in, PDF pp.1-{{K}} (through {{LAST SLIDE}}) | {{yes or no}} | no | {{WHEN IT ARRIVES}} |
-| X1 | `sources/{{FILE}}` | staff | {{N}} | out | no | no | {{WHY}} |
+| ED | `sources/ed/ed-digest.md` | staff | n/a | in | no | n/a | Ed posts; cursor in `sources/ed/cursor.json` |
+| D9 | `sources/lectures/{{FILE}}.pdf` | staff | {{N}} | reserved: {{LATER EXAM}} | no | no | {{WHAT IT IS}}; raw copy only, never opened |
+| D10 | {{EXPECTED FILE}} | staff | | pending: in, PDF pp.1-{{K}} (through {{LAST SLIDE}}) | {{yes or no}} | no | {{WHAT IT IS}}; {{WHEN IT ARRIVES}} |
+| X1 | `sources/{{FILE}}` | staff | {{N}} | out | no | no | {{WHAT IT IS}}; {{WHY}} |
 
 Topic cuts: {{none | one line each:}}
 - {{TOPIC}}: not on {{EXAM}} ({{SOURCE: Ed #N, a staff post, date | the syllabus, its line}});
@@ -35,9 +35,10 @@ Topic cuts: {{none | one line each:}}
   slides, sets and posts), `classmate` (a shared study guide), `textbook`, `student` (the student's
   own notes), or a few words of free text. Optional: a table without the column still reads, and
   its key then has no Made by column.
-- **Notes:** what the source is, in a few words ("Lecture 4: search"), which the source key shows;
-  an empty cell leaves only the file name under it (the key's What it is column shows both). A
-  remark on the row (why a range is cut) follows it.
+- **Notes:** `<what it is>[; <remark>]`. What the source is, in a few words ("Lecture 4: search"),
+  is what the source key shows, the file name under it; with it empty the key shows the file name
+  alone. A remark on the row (why a range is cut, when a file arrives) follows a `;` and stays off
+  the page, so what it is holds no `;` of its own.
 - **Answers:** `yes` marks a file that holds answers (official solutions, a past exam's key), with
   `solutions to <doc>` in Notes naming the set it answers. Mock writers never read it. Nothing
   published quotes it until the student has attempted that set, which the cell then records as
