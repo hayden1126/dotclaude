@@ -313,10 +313,13 @@ build is this build's end, not a stage's.
    chassis exam line refilled from MANIFEST.md and its `.lede` reworded when it names the scope,
    as `10-polish` step 3 does, step 2's step-throughs, made for a figure 03 shortlisted and rerun
    when 03 or 05 changed the checker, and step 4's exam-day map when 03 added How it's tested rows;
-   the cram order taking the material as a row in its last tier, audited as `08-practice` step 7's
-   item 3 says before the notes page's rebuild, which then renders the row into the map; an untaken
-   mock isn't edited (`08-practice` step 8's key recheck checks its keys once this path ends: one
-   writer in the background for every staff answer this path took in, never two at once). The log marks each stage's end once its commit is made (`02 done`), each product's
+   the cram order taking the material as a row in its last tier, then the notes page's rebuild,
+   which renders the row into the map and checks its id (`assemble.py`), then the row's audit as
+   `08-practice` step 7's item 3 says and step 7's items 1 and 2, rebuilding again when the audit
+   changes a row (08's "Changing the notes or a sheet" item 3, whose ids come from the page); an
+   untaken mock isn't edited (`08-practice` step 8's key recheck checks its keys once this path
+   ends: one writer in the background for every staff answer this path took in, never two at
+   once). The log marks each stage's end once its commit is made (`02 done`), each product's
    (`page done`, `sheets done`, `cram order done`), and `step 4 done` after the last. Before
    `step 4 done`, that section's item 4 questions check prints QUESTIONS OK on the notes as they
    now stand (FB-191), so
