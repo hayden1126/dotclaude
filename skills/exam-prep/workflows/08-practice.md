@@ -251,8 +251,9 @@ Then:
    build and opens the map (`06-site` step 4), so the page needs no edit of its own. Run "Changing
    the notes or a sheet" items 1 and 3 to 5 for the notes page (its compare against the keys, the
    rebuild and checks, the republish to the same URL; a rebuild over the Review view's minutes is
-   untagged as item 3 says, or with no `.rv` tag left, new minutes asked of the student and
-   logged in STATUS). Plain-text notes have no page: the cram
+   untagged as item 3 says, or with no `.rv` tag left, new minutes: this build, unattended, sets
+   them and logs it in STATUS for the student to confirm, as `07-cheatsheet`'s "Tag the review"
+   opening says, and a later run with the student present asks them). Plain-text notes have no page: the cram
    order stays a file. This item runs on its own: after items 1 to 3 here, after step 8.4, and
    after items 1 and 2 for any other later change to the cram order's tiers, rows or skip list. A
    change to the cram order inside "Changing the notes or a sheet" (a row that quotes the changed

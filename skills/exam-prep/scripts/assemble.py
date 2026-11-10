@@ -861,7 +861,9 @@ def build(root):
                                 "untag rv blocks from the last ranked subsection up (07-cheatsheet, "
                                 "Tag the review)" if tagged else
                                 "no rv tag is left to untag, so the main session asks the student for new "
-                                "minutes on PLAN.md's `- Review view:` line and logs them in STATUS"))
+                                "minutes on PLAN.md's `- Review view:` line and logs them in STATUS, or, "
+                                "during an unattended build, sets them and logs it, as 07-cheatsheet's "
+                                "Tag the review opening says"))
     problems += rv
     page = page.replace("/* SECTION ACCENTS */", accents(len(sections)), 1)
     page = page.replace("<!-- EXAM-DAY MAP -->", nav, 1)
