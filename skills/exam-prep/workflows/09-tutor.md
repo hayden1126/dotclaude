@@ -22,8 +22,8 @@ picks it up.
   exists and STATUS records no attempt of it (`08-practice` step 8.2 records each one, its misses
   or none). While one is, `08-practice` step 8's rules bind the tutor: it opens no untaken mock's
   key, `practice/mock-values-key.md` or `_build/verify/mock_key.py`, and keeps every search inside
-  `notes/`, `cheatsheet/`, `_build/frag/`, `_build/review/` and `_build/extract/` (which hold no
-  mock); every STATUS write is followed by that stage's STATUS check with the untaken mocks' keys
+  `notes/`, `cheatsheet/`, `_build/frag/` and `_build/extract/` (which hold no mock), but for Step
+  5.5.4's grep of `practice/cram-order.md`; every STATUS write is followed by that stage's STATUS check with the untaken mocks' keys
   (its step 4's opening); every notes or sheet change runs its "Changing the notes or a sheet"; a
   one-line sheet addition goes where its step 8 says (Step 5.2); and the next-step line stays as it
   stands.
@@ -39,13 +39,13 @@ picks it up.
     unless its official solutions are extracted (Step 3), and so does a part that needs the
     reference extended;
   - it makes no fresh true-or-false statement, keeps every search inside `notes/`, `cheatsheet/`,
-    `_build/frag/`, `_build/review/` and `_build/extract/`, and never opens `_build/mock-plan.md`:
+    `_build/frag/` and `_build/extract/`, and never opens `_build/mock-plan.md`:
     before any mock file exists, the plan already holds the mocks' questions and their variants;
-  - it reads `notes/`, `cheatsheet/`, `_build/frag/` and `_build/review/` as committed, never from
+  - it reads `notes/`, `cheatsheet/` and `_build/frag/` as committed, never from
     disk: the build edits them in place, and from 08's step 2 commits a change only once its leak
     compare passes (`08-practice`'s "Changing the notes or a sheet", item 4), so a line on disk may
     state a mock's answer. Search them with `git grep -n -e <phrase> HEAD -- notes/ cheatsheet/
-    _build/frag/ _build/review/`, and read a passage with `git show HEAD:<path> | sed -n
+    _build/frag/`, and read a passage with `git show HEAD:<path> | sed -n
     '<from>,<to>p'`. `_build/extract/` is searched and read
     from disk with the Grep and Read tools, whose output stays folded (Step 3): a part's block holds
     its `Solution [` line; but not a file `git status --short -- _build/extract/` lists, which a
@@ -101,10 +101,7 @@ post the next part until the student is done asking (A1.C20).
 Settle it before the first part:
 
 - A taken mock: its key, `practice/mock-<slug>-key.md`. An untaken mock is never walked through:
-  it is a timed rehearsal (`08-practice` step 8.1). Before grading a taken mock, read STATUS for
-  its `mock key: recheck <mock> parts on <topic> after the attempt` lines (`08-practice` step 8's
-  opening): check each of its parts on that topic against the notes and the new source first, fix
-  the key as `08-practice` step 4's rerun clause says, then strike the line.
+  it is a timed rehearsal (`08-practice` step 8.1).
 - A set whose official solutions are extracted (MANIFEST.md marks their file `Answers: yes`, with
   `solutions to <doc>` in its Notes): the `Solution [` line under each part's block in
   `_build/extract/`.
@@ -125,7 +122,8 @@ Settle it before the first part:
   worked example from a lecture or from a set MANIFEST.md marks `yes, attempted`, the self-test
   rerun: any other set's would show its official answer in the self-test's edit, so ask first, as
   Step 6 does), and once mocks exist `08-practice` step 4's rerun clause for a changed reference
-  follows (items 2 and 4; a changed part of an untaken mock is logged, as it says): it isn't graded
+  follows (items 2 and 4; on the cram night a changed part of an untaken mock goes to its key recheck
+  writer, as it says): it isn't graded
   until its `value()` replaces the call, and the other parts go first. A set whose official
   solutions give final answers only gets values here too when the student's partial work needs its
   intermediate values.
@@ -241,10 +239,10 @@ At each set's end, its score in the reply and the log: verdicts right, and reaso
    the call, and tell the student to go on (FB-167), and while a mock is untaken, that the next mock
    waits until you say this patch is done (Step 5.5.9). Every patch runs `08-practice`'s
    "Changing the notes or a sheet", the one list of what a change does to each published product:
-   its item 2 and item 3's rebuilds of the notes and the review page by the writer, the rest at the
-   merge (Step 5.5), item 1 included while a mock is untaken, since the hub without the patch is its
-   baseline. The patch's paths, in every git command below, are `notes/ _build/frag/ cheatsheet/
-   _build/review/notes/ _build/review/_build/frag/`.
+   its item 2 (but the cram order) and item 3's rebuild of the notes page by the writer, the rest
+   at the merge (Step 5.5), item 1 included while a mock is untaken, since the hub without the
+   patch is its baseline. The patch's paths, in every git command below, are `notes/ _build/frag/
+   cheatsheet/`.
 5. When the hand-back arrives, answer a waiting student first; it goes by its line's mark as it
    stands now ("One open patch"). One that arrives while a `Build running` line stands waits, its
    line still `dispatched`, for the build's end (Step 1). On a line with the `drop` field nothing
@@ -258,11 +256,9 @@ At each set's end, its score in the reply and the log: verdicts right, and reaso
       stopped it.
    2. `git diff --no-renames --name-status <hub branch>...<branch>` (three dots: the branch's own
       changes) lists only `M` lines (a patch adds and deletes no file) under `notes/`,
-      `_build/frag/`, `cheatsheet/` and `_build/review/` (the review page's Markdown, fragments and
-      build), and `_build/notes.html`; with a page a changed `notes/NN-*.md` comes with its
-      `_build/frag/sec<N>.html` (`N` without a leading zero, as `assemble.py` maps it) and
-      `_build/notes.html`, and a changed `_build/review/notes/NN-*.md` with its fragment under
-      `_build/review/_build/frag/` and `_build/review/_build/notes.html`; any other list
+      `_build/frag/` and `cheatsheet/`, and `_build/notes.html`; with a page a changed
+      `notes/NN-*.md` comes with its `_build/frag/sec<N>.html` (`N` without a leading zero, as
+      `assemble.py` maps it) and `_build/notes.html`; any other list
       (`practice/`, STATUS.md, a notes file alone) merges nothing, as in item 1. With no mock
       untaken, `git diff <hub branch>...<branch> -- <the patch's paths>` shows the change as
       drafted; while one is, the change waits for item 7, after the leak compare.
@@ -281,10 +277,14 @@ At each set's end, its score in the reply and the log: verdicts right, and reaso
       one `git worktree list` marks prunable, L46), and `git branch -d <branch>`.
    4. The checks: "Changing the notes or a sheet" item 3 for each product the stat named, the
       notes page's browser check in the background so the next answer isn't held, its result and
-      the patched section's screenshots seen. A sheet's refit is the main session's (Step 7), and
+      the patched section's screenshots seen. Once the cram order exists, the cram row first: the
+      writer never opens `practice/`, so the main session greps `practice/cram-order.md` for the
+      patch's old phrase (its one read under `practice/`, Step 1) and, when a row quotes the changed
+      fact, fixes the row itself and runs `08-practice` step 7's items 1 and 2; only then the notes
+      page's rebuild, which renders the fixed row into the map (`06-site` step 4). A sheet's refit is the main session's (Step 7), and
       a LaTeX sheet is read as its `.tex` here; the student compiles it only at item 8, after the
       leak compare.
-   5. That section's item 4: the questions check when the stat named `notes/` or `_build/review/`,
+   5. That section's item 4: the questions check when the stat named `notes/`,
       and while a mock is untaken the leak compare with the baseline in
       `_build/logs/patch-baseline.txt`.
    6. A check in item 4 that fails, a questions hit or a new leak hit in item 5, a wording cut or an
