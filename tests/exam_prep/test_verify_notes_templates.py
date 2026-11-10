@@ -4,7 +4,8 @@ into _build/verify/.
 Each runs in a temp hub copied from fixtures/verify-notes (two notes files, their fragments and an
 examples.out.md, all matching), as the workflows run it: `python3 -I` from the hub root. Pinned:
 each self-test passes on the hub; a clean hub passes; each error the brief names, planted into
-the hub's own files, fails the real run with a line naming where and what; and each self-test
+the hub's own files, fails the real run with a line naming where and what (a dropped `.rv`, and
+a `.rv` on a Not-on banner, among them); and each self-test
 fails when its comparison is made a no-op (NOT CAUGHT) or its plant changes nothing (PLANT DID
 NOTHING)."""
 import os

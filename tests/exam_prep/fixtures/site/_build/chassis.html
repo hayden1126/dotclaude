@@ -219,8 +219,11 @@
   .topbar .brand{font-family:var(--f-display);font-weight:700;font-size:.9rem;margin:0;
     min-width:0;flex:1 1 auto;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .menubtn{font:inherit;font-family:var(--f-display);font-size:.85rem;background:var(--surface-2);
-    border:1px solid var(--hair-strong);color:var(--ink);border-radius:8px;padding:.4rem .7rem;min-height:40px;cursor:pointer}
-  .themebtn{margin-left:auto;background:var(--surface-2);border:1px solid var(--hair-strong);color:var(--ink);
+    border:1px solid var(--hair-strong);color:var(--ink);border-radius:8px;padding:.4rem .7rem;min-height:40px;cursor:pointer;
+    flex:none;white-space:nowrap}
+  /* a phone's top bar with the view toggle has no room left for the brand */
+  @media (max-width:480px){ .topbar .brand:has(~ .viewtog){display:none} }
+  .themebtn{flex:none;margin-left:auto;background:var(--surface-2);border:1px solid var(--hair-strong);color:var(--ink);
     border-radius:8px;padding:.4rem .6rem;min-height:40px;cursor:pointer;font-size:.95rem;line-height:1}
   .rail .themebtn{margin:1rem 0 0;width:100%;font-family:var(--f-display);font-size:.8rem}
   .backdrop{display:none;position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:45}
@@ -445,7 +448,8 @@
     setView(savedView==='review'?'review':'full'); onScroll();
     picks.forEach(function(b){ b.addEventListener('click',function(){
       var v=b.dataset.pick; if((v==='review')===reviewOn) return;
-      var at=current&&document.getElementById(current);
+      // keep the heading in view where it still shows; at the page's top, stay at the top
+      var at=window.scrollY>0&&current&&document.getElementById(current);
       setView(v); remember(v);
       var y=at&&shown(at)? at.getBoundingClientRect().top+window.scrollY-16 : 0;
       window.scrollTo({top:Math.max(y,0),behavior:'instant'}); onScroll();

@@ -19,7 +19,10 @@ an overflow that shows only with the worked examples open, a MathJax startup tha
 or fails,
 and an element named currentScript, which the pinned loader path ignores but which, unpinned,
 moves MathJax's loader to its host; a long page whose rail scrolls the page with scrollIntoView,
-which cuts a long jump short in WebKit (C1); and --views on the mock page (its own class)."""
+which cuts a long jump short in WebKit (C1); and --views on the mock page (its own class). The
+sample's Review view passes in every viewport, its shots named -review, with the long jump run
+there too; its page broken to show an untagged paragraph, hide an rv block or drop the Must-know
+list fails, and so does a link to a hidden target that doesn't switch to Full notes."""
 import contextlib
 import importlib.util
 import io

@@ -13,7 +13,14 @@ cites (from MANIFEST.md, an uncited row left out; a Made by column only when a c
 cell; what a source is from Notes, with its file name under it, the file line alone without
 them; three columns at most), each citation linked to its row; a code with no
 row, an empty citation or one with its own href, a MANIFEST it can't read, or none when the page
-cites, is refused. The skill repo's synthetic sample hub, the source of the chassis's
+cites, is refused. With a practice/cram-order.md, the map gets its cram block (an .ecram of tiers,
+rows with #id links and depth labels, the Skip and Out of time lines; no mock line, no Tonight)
+and opens; with none, the map stays closed; a cram order failing cram_check (an unknown id among
+them), a row with no depth label or Markdown the map can't render, a hand-written cram block or an
+open attribute in examnav.html is refused. PLAN.md's `- Review view: <N> minutes of reading` keeps
+the toggle, `none` or no line strips it and refuses class rv; rv anywhere but a worked example or
+a Pitfall directly in its section, an unreadable line, and a view over its minutes are refused.
+The skill repo's synthetic sample hub, the source of the chassis's
 reference screenshots, is the template filled, links the skill's CHASSIS.md and assembles with
 every link resolved; with EXAM_PREP_PLAYWRIGHT set, its page also passes verify_page.mjs, run as a
 build runs it, so with the long jump (the one run here or in test_verify_page that keeps it on by
