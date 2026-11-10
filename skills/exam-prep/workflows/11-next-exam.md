@@ -87,7 +87,8 @@ questions, each only when the reading left it open:
    cumulative or not, row by row. For a row this exam covers only in part, ask for its first and
    its last in-scope slide, each as the PDF page or the printed slide number (FB-024: a deck split
    across exams starts partway). Ask too which answer sets the student has attempted since (their
-   Answers cells become `yes, attempted`).
+   Answers cells become `yes, attempted`), and which question sets with no solutions row (their
+   Answers cells become `no, attempted YYYY-MM-DD`).
 3. Missing sources (question 3).
 4. This exam's rules (question 4): date, time, length, sheet, calculator, book, question types.
 
@@ -115,7 +116,8 @@ Draft all three in `<root>`, as `00-intake` step 4 does, before showing anything
   this exam; each row for this exam in an `in` form; new files as new rows with new doc ids (none
   renumbered or reused: citations use them); the finished exam's rows `in` when this exam covers
   them, else `out` with "(on <old exam>)" in Notes; Answers cells carried, each set the student
-  has attempted since marked `yes, attempted` (question 2); topic cuts for this exam only. A
+  has attempted since marked `yes, attempted`, or with no solutions row `no, attempted
+  YYYY-MM-DD` (question 2); topic cuts for this exam only. A
   cumulative exam needs no other scope word: its old rows are `in`.
 - **`CLAUDE.md`**: its Exam facts become this exam's, from
   `<skill>/templates/hub-CLAUDE.md.tmpl`, with a line `Earlier exams:` naming each earlier exam,
@@ -310,7 +312,10 @@ build is this build's end, not a stage's.
    and `06-site` step 5 run again, after the page's own rebuild above, its compare as this step
    says and its republish left to step 5; an untaken mock isn't edited. The log marks each stage's end
    once its commit is made (`02 done`), each product's (`page done`, `sheets done`, `cram order
-   done`), and `step 4 done` after the last. With no mock untaken, a sheet's change is shown to the
+   done`), and `step 4 done` after the last. Before `step 4 done`, `05-verify` step 5's questions
+   check (`mock_leak.py --questions` on the unattempted sets that step lists from MANIFEST.md,
+   skipped when there is none) prints QUESTIONS OK on the notes as they now stand (FB-191), so
+   step 5's republish carries no hit. With no mock untaken, a sheet's change is shown to the
    student before it is made (FB-137). While one is, every change to the notes or a sheet runs
    `08-practice`'s "Changing the notes or a sheet" with the untaken mocks' keys, its item 4
    comparing with step 3's baseline file, never with a new baseline taken from notes that may
@@ -464,7 +469,10 @@ fresh session answers from STATUS, then runs step 7.5.
    While a mock is untaken, items 3 and 4 run as
    `08-practice`'s "Changing the notes or a sheet" with the untaken mocks' keys: its baseline (item
    1) before the first write, its values as item 3 here says, and its compare (item 4) passed before
-   any commit, a hit on a quoted value reworded by leaving the value out, its citation kept.
+   any commit, a hit on a quoted value reworded by leaving the value out, its citation kept. Then
+   `05-verify` step 5's questions check (`mock_leak.py --questions` on the unattempted sets that
+   step lists from MANIFEST.md, skipped when there is none) prints QUESTIONS OK (FB-191), a hit
+   reworded the same way, before item 5's commit and republish.
 5. **Commit**, once: the material (its notes, fragment and page), its backbone headings, its
    MANIFEST.md row and, in STATUS, `Unverified: <doc>, <section ids>, <date>` in place of the `Skip
    asked` line, with any rewording logged by its part, never a value, as "Changing the notes or a

@@ -12,11 +12,11 @@ attempt ("The final sheet" below, which 08 runs). Without a mock there is one sh
 
 ## Step 1: Check the inputs
 
-- CLAUDE.md's rules allow a sheet. Quote the rule in STATUS: its size, one side or two, whether
-  it is collected and whether it must carry a name (FB-130). Not allowed: when PLAN.md includes a
-  condensed review page (intake offered it, FB-143), build that instead, as "The condensed review
-  page" below says, in place of steps 2 to 6. Otherwise skip this stage and log it (as the build's
-  last stage, or run alone, removing the `Build running` line).
+- CLAUDE.md's rules allow a sheet. Quote the rule in STATUS: its size, one side or two, whether it
+  is collected and whether it must carry a name (FB-130). Not allowed: when PLAN.md's Review page
+  line holds a condensed review page (intake offered it, FB-143), build that instead, as "The
+  condensed review page" below says, in place of steps 2 to 6. Otherwise skip this stage and log it
+  (as the build's last stage, or run alone, removing the `Build running` line).
 - `05-verify` is done. The sheet derives from the notes and the checker's output
   (`_build/verify/examples.out.md`) only: never from a key, the mock, or a source MANIFEST marks
   `reserved`, and never an answer from a set it doesn't mark `yes, attempted`.
@@ -161,7 +161,8 @@ when it was built: it fills like any sheet. So the final sheet makes room for it
 ## The condensed review page (no sheet allowed)
 
 When the exam allows no sheet, the student still needs a recall layer shorter than the notes
-(FB-143). Its length is the number of printed pages PLAN.md records (asked once, at intake). It
+(FB-143). Its length is the number of printed pages PLAN.md's Review page line records (asked
+once, at intake). It
 derives from the verified notes and `examples.out.md` only, under step 1's rules for a sheet, and
 nothing on it is new teaching.
 

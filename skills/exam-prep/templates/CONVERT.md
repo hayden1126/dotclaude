@@ -95,6 +95,10 @@ this one section: a figure placed outside it shifts every later section's accent
   first word) and a title naming the file. A code with no `MANIFEST.md` row fails the build. The `§` in a bracket that opens with a document id is that document's,
   never one of the notes' sections: it is no bare reference.
 - Every Markdown link `[text](#id)` becomes `<a class="xref" href="#id">text</a>`.
+- A link to a section of another published page, `[text](<url>#id)` (the review page's rows link
+  the notes page so), becomes `<a href="<url>#id" target="_blank" rel="noopener">text</a>`, with
+  no class: `a.xref` is for in-page links only, which `linkcheck.py --html` resolves and
+  `fidelity.py` compares with the Markdown's `#id` links. The URL is `https://`, from STATUS.
 - Never turn a bare §-mention into a link with a guessed id. Keep it as text and list it in your
   report, so the main session wires it.
 

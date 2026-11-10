@@ -33,11 +33,17 @@ of `practice/` or `_build/verify/`: a diff of those files prints values.
   `_build/notes.html` reads `notes/combined.md` instead (build it now from the section files), a
   notes change rebuilds that file instead of a page, the cram order names its sections as text
   (`cram_check.py --plain`), and step 6.4's Playwright is installed as `06-site` step 5 says.
-- `05-verify` is done, and `07-cheatsheet` is done or logged as skipped. With 07 done, the mock
-  sheet is `cheatsheet/<exam-slug>-mock.pdf` (with the LaTeX engine, the student's PDF of it,
-  under that name). With it skipped there is no sheet: leave out every sheet item below (the
-  cold solver's sheet, the sheet in the key's STOP line, the cram order's sheet items, the sheet
-  at the attempt, step 8.3).
+- `05-verify` is done, and `07-cheatsheet` is done or logged as skipped. When 07 built a sheet,
+  the mock sheet is `cheatsheet/<exam-slug>-mock.pdf` (with the LaTeX engine, the student's PDF
+  of it, under that name). Otherwise there is no sheet: 07 was skipped, or it built the condensed
+  review page in a sheet's place (PLAN.md's Review page line). Then leave out every sheet item
+  below (the cold solver's sheet, the sheet in the key's STOP line, the cram order's sheet items,
+  the sheet at the attempt, step 8.3, the final-sheet items).
+- The review page, when 07 built one, is no sheet: the cold solver doesn't get it, and the student
+  brings nothing to the exam. It is a page the student reads before the mocks, and its rows carry
+  worked examples. So it joins the notes in step 3.4's comparison, in step 4.5's leak runs and in
+  "Changing the notes or a sheet". Its built page is `_build/review/_build/notes.html` and its
+  Markdown is `_build/review/notes/` (`07-cheatsheet`, "The condensed review page", item 3).
 - PLAN.md's Deliverables row for the mock, and its "08 practice" row: how many mocks and the
   question shapes they follow. Its Scope authority line says what the mocks cover (FB-021);
   MANIFEST.md's Scope column and its topic cuts hold the cut.
@@ -94,11 +100,11 @@ The plan holds no answer: the writers read it.
    --out _build/mock-<slug>.html`. It refuses any line off the format and names it: fix each,
    and rerun until it writes the page.
 3. A part a writer reports it couldn't make fresh gets fresh numbers now (FB-071).
-4. The writers can't see each other's mocks: compare the clones of each source question across
-   the mocks and with the notes' worked examples, and give any clone with the same instance as
-   another (the same numbers, graph or table) fresh numbers, so one mock's key never answers
-   another and the notes never work a mock's instance. A justify, prove or classify clone that
-   asks another mock's claim gets another claim (step 2).
+4. The writers can't see each other's mocks: compare the clones of each source question across the
+   mocks and with the notes' worked examples (and the review page's, when 07 built one), and give
+   any clone with the same instance as another (the same numbers, graph or table) fresh numbers, so
+   one mock's key never answers another and no page the student reads first works a mock's instance.
+   A justify, prove or classify clone that asks another mock's claim gets another claim (step 2).
 
 A question sent back for fresh numbers (step 4) is reworked in place by the main session, its
 shape and wording kept; a larger rewrite goes to a new writer whose brief names that question
@@ -145,18 +151,18 @@ as it stands until step 7.5 changes it, and once item 2 has written the first ke
    listed as reasoned. It also checks that the key's parts are the mock's, with or without a
    checker.
 5. `python3 -I <skill>/scripts/mock_leak.py <page> practice/*-key.md` on the notes
-   (`_build/notes.html`) and on the mock sheet (`cheatsheet/<exam-slug>-mock.html`, or its
-   `.tex`): the student reads both before the mocks. A hit on a part whose answer comes from the
-   instance's numbers (a number, an order, a table) means the page works the mock's instance:
-   give the question fresh numbers (the rerun clause below). Any other hit is the page teaching
-   what the part asks (a rule, a classification, a verdict and its witness), as a sheet may in
-   the real exam, and the phrase "answer key" is the notes naming the course's keys (S32): log
-   each in STATUS by its part. An answer under 8 characters isn't searched (the last line names
-   it): step 3.4's comparison of instances is what keeps it off the pages. Each key but the last
-   one's is a page too, opened before the later mocks: `mock_leak.py --no-markers
-   practice/mock-<slug>-key.md` with the keys of the mocks taken after it (step 2's order) prints
-   LEAK OK, or its working answers a later part: reword the working, or give that part fresh
-   numbers or another claim (step 3).
+   (`_build/notes.html`), on the review page when 07 built one (`_build/review/_build/notes.html`),
+   and with a sheet on the mock sheet (`cheatsheet/<exam-slug>-mock.html`, or its `.tex`): the
+   student reads each before the mocks. A hit on a part whose answer comes from the instance's
+   numbers (a number, an order, a table) means the page works the mock's instance: give the question
+   fresh numbers (the rerun clause below). Any other hit is the page teaching what the part asks (a
+   rule, a classification, a verdict and its witness), as a sheet may in the real exam, and the
+   phrase "answer key" is the notes naming the course's keys (S32): log each in STATUS by its part.
+   An answer under 8 characters isn't searched (the last line names it): step 3.4's comparison of
+   instances is what keeps it off the pages. Each key but the last one's is a page too, opened
+   before the later mocks: `mock_leak.py --no-markers practice/mock-<slug>-key.md` with the keys of
+   the mocks taken after it (step 2's order) prints LEAK OK, or its working answers a later part:
+   reword the working, or give that part fresh numbers or another claim (step 3).
 
 Without a checker, the cold solver's agreement settles each cited answer (step 5).
 
@@ -173,14 +179,14 @@ rewrite the answer from that mock's section of the values file printed alone
 
 ## Step 5: The cold solver
 
-Run `05-verify`, section "The mock": one reviewer per mock, from the "Cold solver" brief, with
-the mock, the notes and the mock sheet only (FB-103). Settle each answer where it and the key
-disagree with the checker (a new `value()` when it is computable) or the source, and fix the
-question (a convention it didn't state) or the key. A part it says the notes can't answer is
-outside what the student studied: reword or drop it (a dropped true-or-false part's statement
-joins the Variants, step 4.3), or, when the exam does test it, fix the notes as "Changing the
-notes or a sheet" says: this session holds the key, so the obvious fix states the answer. Log
-each in STATUS by its part and what changed, never a value.
+Run `05-verify`, section "The mock": one reviewer per mock, from the "Cold solver" brief, with the
+mock, the notes and the mock sheet only (FB-103; with no sheet, the mock and the notes only). Settle
+each answer where it and the key disagree with the checker (a new `value()` when it is computable)
+or the source, and fix the question (a convention it didn't state) or the key. A part it says the
+notes can't answer is outside what the student studied: reword or drop it (a dropped true-or-false
+part's statement joins the Variants, step 4.3), or, when the exam does test it, fix the notes as
+"Changing the notes or a sheet" says: this session holds the key, so the obvious fix states the
+answer. Log each in STATUS by its part and what changed, never a value.
 
 ## Step 6: The page
 
@@ -275,7 +281,11 @@ and offers the checks it held (`09-tutor` step 1's Patches and Waiting checks bu
   says (items 2 and 4), which rechecks every part it computes. For a part it can't compute, it
   logs in STATUS `mock key: recheck <mock> parts on <topic> after the attempt`, one line per
   untaken mock, `<topic>` the answer's topic as the notes name it (finding which parts it reaches
-  would mean opening the key); `09-tutor` reads that line when it grades that mock.
+  would mean opening the key); `09-tutor` reads that line when it grades that mock. So the student
+  doesn't mark that mock alone from a stale key, it also adds step 4's rerun clause note to that
+  mock's line in the cram order (bring it to the session before marking it), then runs step 7's
+  items 1 and 2. A mock line alone needs no step 7.4 (the map holds none); a row the source-added
+  path adds reruns 7.4 there.
 - Then the links: the notes page's URL from STATUS, whose top now holds the cram order (step 7.4),
   each mock page's URL, and the cram order's path. One line defines a tier: a block of reading rows
   with a minute budget, ranked by points per minute, read in order until time runs out.
@@ -312,20 +322,20 @@ merge, as that step says.
    to the student, changes and all (FB-137), and printed again; with the LaTeX engine, the student
    compiles it first and this session checks the PDF as `07-cheatsheet` checks a LaTeX sheet
    (`check_pdf.py --no-layout`). The student takes each mock under exam conditions, its minutes and
-   the mock sheet only, in the cram order's order (the harder set last, since its key holds the
-   Variants), then opens its key, or brings it here first when its cram order line says so (step 4's
-   rerun clause).
+   the mock sheet only (with no sheet, no aid), in the cram order's order (the harder set last,
+   since its key holds the Variants), then opens its key, or brings it here first when its cram
+   order line says so (step 4's rerun clause).
 2. Record the attempt in STATUS: the mock, then each miss (the part, and why it went wrong), or
    `no misses`, or `misses: from the walk-through` while `09-tutor` walks the student through it
    (its log's misses replace that before step 3). From here the mock counts as taken.
-3. Run `07-cheatsheet`, section "The final sheet", with the misses, and the cold solver's
-   conventions and final-sheet items STATUS logs for the taken mocks or for no mock: an item logged
-   against an untaken mock waits for its attempt. A later mock's misses and items add to the final
-   sheet already built. While a mock is untaken, the final sheet's first build and every change to
-   it run as "Changing the notes or a sheet" says, with the untaken mocks' keys (before the first
-   build, its baseline has no hits). It starts once no polish pass runs and no patch is open
-   (`09-tutor` step 5, "One open patch"), and a patch approved meanwhile waits until its work is
-   committed.
+3. With a sheet, run `07-cheatsheet`, section "The final sheet", with the misses, and the cold
+   solver's conventions and final-sheet items STATUS logs for the taken mocks or for no mock: an
+   item logged against an untaken mock waits for its attempt. A later mock's misses and items add to
+   the final sheet already built. While a mock is untaken, the final sheet's first build and every
+   change to it run as "Changing the notes or a sheet" says, with the untaken mocks' keys (before
+   the first build, its baseline has no hits). It starts once no polish pass runs and no patch is
+   open (`09-tutor` step 5, "One open patch"), and a patch approved meanwhile waits until its work
+   is committed.
 4. In the cram order, delete the taken mock's line and move a section the misses point at to the
    first reading rows after it, before the next mock's line (renumbered, its tier's minutes and
    the intro's total adjusted), since the student has read the rows above it. With no reading row
@@ -339,33 +349,36 @@ merge, as that step says.
 
 ## Changing the notes or a sheet
 
-Until the last mock is taken, the notes and the sheets are pages the student reads before an
-attempt. Every change to them (step 5, the cram order audit in step 7, the final sheet and a fix
-or a question on the cram night) runs this, with the keys of the mocks not yet taken (before any
-attempt, `practice/*-key.md`):
+Until the last mock is taken, the notes, the review page and the sheets are pages the student reads
+before an attempt. Every change to them (step 5, the cram order audit in step 7, the final sheet and
+a fix or a question on the cram night) runs this, with the keys of the mocks not yet taken (before
+any attempt, `practice/*-key.md`):
 
 1. The baseline: step 4.5's command, run now, on the notes (plain-text notes:
-   `notes/combined.md`) and on each sheet the student reads before that attempt. Keep the hit
-   lines.
-2. Make the change as `05-verify` step 5 says (every copy of the fact), teaching a method in
-   general or with an example of its own, never a mock's instance. A new number or trace comes
-   from the checker (`examples.py`, `05-verify` step 2), never by hand. A wrong fact on a sheet
-   is corrected on both sheets; a line the mock prompted goes into the final sheet only
-   (FB-133), logged in STATUS as a final-sheet item, with the mock that prompted it (or none),
-   for step 8.3. FB-137 wants the student to see a draft before a printed sheet changes: before
-   step 8, while they look away, log the change, and step 8.1 shows it before the reprint; in
-   step 8, show the draft once item 4 passes, before item 5.
+   `notes/combined.md`), on the review page (`_build/review/_build/notes.html`) when 07 built one,
+   and on each sheet the student reads before that attempt. Keep the hit lines.
+2. Make the change as `05-verify` step 5 says (every copy of the fact, a copy in the review page's
+   `_build/review/notes/` included), teaching a method in general or with an example of its own,
+   never a mock's instance. A new number or trace comes from the checker (`examples.py`, `05-verify`
+   step 2), never by hand. A wrong fact on a sheet is corrected on both sheets; a line the mock
+   prompted goes into the final sheet only (FB-133), logged in STATUS as a final-sheet item, with
+   the mock that prompted it (or none), for step 8.3. FB-137 wants the student to see a draft before
+   a printed sheet changes: before step 8, while they look away, log the change, and step 8.1 shows
+   it before the reprint; in step 8, show the draft once item 4 passes, before item 5.
 3. Rebuild what changed: the section's fragment (`06-site` step 3) and `06-site` step 5
    (plain-text notes: `notes/combined.md` from the section files); an HTML sheet, `07-cheatsheet`
    step 4. A LaTeX sheet is checked as its `.tex` in item 4; the student compiles it before the
-   next attempt (step 8.1).
+   next attempt (step 8.1). The review page, whenever the notes change: its fragments for the
+   files item 2 changed, then `assemble.py --root _build/review` and its checks, as
+   `07-cheatsheet`'s "The condensed review page" item 3 says.
 4. Run item 1 again and compare the hit lines with the baseline's (count them, since every hit
    on the notes reads "(the page)" and a second copy of an answer adds one). A new hit on a
    number, order or table answer is a leak: reword the change and repeat from item 2. Judge and
    log any other new hit as step 4.5 does. During the build (steps 2 to 7.5), commit a change
    only once this item passes, and a session that must end first finishes it: a `09-tutor` tab
    running meanwhile reads the notes and the sheets as committed (its step 1).
-5. Republish what is published (`06-site` step 6; the mock sheet as `07-cheatsheet` publishes it).
+5. Republish what is published (`06-site` step 6; the review page and the mock sheet as
+   `07-cheatsheet` publishes them).
    The student may have printed the mock sheet at `07-cheatsheet`: a changed one is logged in
    STATUS, and the cram order's next mock line says to print it again, or with the LaTeX engine
    to compile it and bring the PDF to the session first (step 7 writes it so when the cram order
@@ -375,20 +388,21 @@ Log each change in STATUS by its part and what changed, never a value.
 
 ## Done when
 
-Each mock's instances are compared across the mocks and with the notes' worked examples (step 3.4);
-each mock's `mock_key.py` line says KEY OK (with no checker, every key value cited too); the cold
-solver's disagreements are settled and logged, and a changed notes page or mock sheet is
-republished; `mockpage.py`, `mock_leak.py`, `linkcheck.py --html` and `verify_page.mjs --views`
-pass, and you looked at the screenshots; the page is published privately and its URL is in STATUS;
-`cram_check.py` prints CRAM OK; `mock_leak.py` prints LEAK OK on the cram order and STATUS, and on
-the notes and the mock sheet every hit is judged and logged (step 4.5); each key but the last one's
-prints LEAK OK with `--no-markers` against the keys taken after it; the audit's findings are
-applied; the mocks, keys, `practice/mock-values-key.md`, `_build/mock-plan.md`,
-`_build/verify/mock_key.py`, the mock pages and the cram order are committed, handed off, STATUS's
-next-step line starts `08 step 8, the cram night` and it records `Stage 08 built: <exam-slug>,
-<date>`, the notes page's exam-day map holds the cram order and renders open (step 7.4; plain-text
-notes: no page), and step 7.5's last line asks for `/clear`. Then, on the cram night: STATUS LEAK OK
-against the untaken mocks' keys after each write; before each attempt the changed mock sheet shown
-and reprinted (with LaTeX, its PDF checked first); after it, the attempt and its misses in STATUS,
-the final sheet (changed as "Changing the notes or a sheet" says while a mock is untaken), the cram
-order updated with CRAM OK (and LEAK OK while a mock is untaken), and a commit and handoff.
+Each mock's instances are compared across the mocks and with the notes' worked examples, and the
+review page's when 07 built one (step 3.4); each mock's `mock_key.py` line says KEY OK (with no
+checker, every key value cited too); the cold solver's disagreements are settled and logged, and a
+changed notes page, review page or mock sheet is republished; `mockpage.py`, `mock_leak.py`,
+`linkcheck.py --html` and `verify_page.mjs --views` pass, and you looked at the screenshots; the
+page is published privately and its URL is in STATUS; `cram_check.py` prints CRAM OK; `mock_leak.py`
+prints LEAK OK on the cram order and STATUS, and on the notes, the review page and the mock sheet
+(each that exists) every hit is judged and logged (step 4.5); each key but the last one's prints
+LEAK OK with `--no-markers` against the keys taken after it; the audit's findings are applied; the
+mocks, keys, `practice/mock-values-key.md`, `_build/mock-plan.md`, `_build/verify/mock_key.py`, the
+mock pages and the cram order are committed, handed off, STATUS's next-step line starts `08 step 8,
+the cram night` and it records `Stage 08 built: <exam-slug>, <date>`, the notes page's exam-day map
+holds the cram order and renders open (step 7.4; plain-text notes: no page), and step 7.5's last
+line asks for `/clear`. Then, on the cram night: STATUS LEAK OK against the untaken mocks' keys
+after each write; before each attempt the changed mock sheet shown and reprinted (with LaTeX, its
+PDF checked first); after it, the attempt and its misses in STATUS, the final sheet (changed as
+"Changing the notes or a sheet" says while a mock is untaken), the cram order updated with CRAM OK
+(and LEAK OK while a mock is untaken), and a commit and handoff.

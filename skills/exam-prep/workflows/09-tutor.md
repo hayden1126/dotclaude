@@ -255,12 +255,13 @@ At each set's end, its score in the reply and the log: verdicts right, and reaso
       stopped it.
    2. `git diff --no-renames --name-status <hub branch>...<branch>` (three dots: the branch's own
       changes) lists only `M` lines (a patch adds and deletes no file) under `notes/`,
-      `_build/frag/` and `cheatsheet/`, and `_build/notes.html`, and with a page a changed
-      `notes/NN-*.md` comes with its `_build/frag/sec<N>.html` (`N` without a leading zero, as
-      `assemble.py` maps it) and `_build/notes.html`; any other
-      list (`practice/`, STATUS.md, a notes file alone) merges nothing, as in item 1. With no mock
-      untaken, `git diff <hub branch>...<branch> -- notes/ _build/frag/ cheatsheet/` shows the
-      change as drafted; while one is, the change waits for item 7, after the leak compare.
+      `_build/frag/`, `cheatsheet/` and `_build/review/` (the review page's Markdown and build,
+      `08-practice`'s "Changing the notes or a sheet" item 3), and `_build/notes.html`, and with a
+      page a changed `notes/NN-*.md` comes with its `_build/frag/sec<N>.html` (`N` without a leading
+      zero, as `assemble.py` maps it) and `_build/notes.html`; any other list (`practice/`,
+      STATUS.md, a notes file alone) merges nothing, as in item 1. With no mock untaken, `git diff
+      <hub branch>...<branch> -- notes/ _build/frag/ cheatsheet/` shows the change as drafted; while
+      one is, the change waits for item 7, after the leak compare.
    3. Mark the line `merging <branch>`; at the patch's first merge, add `before <sha>`, the hub's
       head (`git rev-parse HEAD`), and while a mock is untaken run "Changing the notes or a sheet"
       item 1 now, its hit lines (part ids only) to `_build/logs/patch-baseline.txt`. Commit, so a
@@ -279,23 +280,27 @@ At each set's end, its score in the reply and the log: verdicts right, and reaso
       notes file, then `06-site` step 5, all of it, the browser check in the background so the next
       answer isn't held, its result and the patched section's screenshots seen. With plain-text
       notes, instead: the touched references checked by eye (`04-write` step 6), and
-      `notes/combined.md` rebuilt whenever it exists. Under `cheatsheet/`: `07-cheatsheet`'s "After
-      shipping", its audit and step 4 (the refit the main session's, Step 7), its republish waiting
-      for item 8; a LaTeX sheet is checked as its `.tex` here (`08-practice`'s "Changing the notes
-      or a sheet" item 3), and the student compiles it only at item 8, after the leak compare.
-   5. While a mock is untaken: "Changing the notes or a sheet" item 4, the compare with the
-      baseline in `_build/logs/patch-baseline.txt`.
-   6. A check in item 4 that fails, a new leak hit in item 5, a wording cut or an audit finding is
-      this patch's follow-up, whether or not a mock is untaken: a fix (new wording goes to the
-      student first, as Step 5.2 offers it, but after a leak hit naming the subsection, never the
-      line it replaces), or for a check's failure what the check reported and where. Put each fix on
-      the line as it is approved, a field `fix "<text>"`, so a fresh session finds it. Wait for
-      every result of items 4 and 5, the background browser check and the audit included, then
-      dispatch one follow-up with every `fix` (Step 5.4), which become the line's field `follow-up
-      "<the approved texts>"`; its hand-back runs this list again from item 1. While the line is
-      `dispatched`, the main session changes nothing under `notes/`, `_build/frag/` or `cheatsheet/`
-      (a refit waits for that hand-back), so the merge stays clean. Nothing is republished until
-      items 4 and 5 pass.
+      `notes/combined.md` rebuilt whenever it exists. Under `_build/review/`: the review page's
+      checks, as `07-cheatsheet`'s "The condensed review page" item 3 says. Under `cheatsheet/`:
+      `07-cheatsheet`'s "After shipping", its audit and step 4 (the refit the main session's, Step
+      7), its republish waiting for item 8; a LaTeX sheet is checked as its `.tex` here
+      (`08-practice`'s "Changing the notes or a sheet" item 3), and the student compiles it only at
+      item 8, after the leak compare.
+   5. Under `notes/`: `05-verify` step 5's questions check (`mock_leak.py --questions` on the
+      unattempted sets that step lists from MANIFEST.md, skipped when there is none) prints
+      QUESTIONS OK (FB-191). While a mock is untaken: "Changing the notes or a sheet" item 4, the
+      compare with the baseline in `_build/logs/patch-baseline.txt`.
+   6. A check in item 4 that fails, a questions hit or a new leak hit in item 5, a wording cut or an
+      audit finding is this patch's follow-up, whether or not a mock is untaken: a fix (new wording
+      goes to the student first, as Step 5.2 offers it, but after a leak hit naming the subsection,
+      never the line it replaces), or for a check's failure what the check reported and where. Put
+      each fix on the line as it is approved, a field `fix "<text>"`, so a fresh session finds it.
+      Wait for every result of items 4 and 5, the background browser check and the audit included,
+      then dispatch one follow-up with every `fix` (Step 5.4), which become the line's field
+      `follow-up "<the approved texts>"`; its hand-back runs this list again from item 1. While the
+      line is `dispatched`, the main session changes nothing under `notes/`, `_build/frag/` or
+      `cheatsheet/` (a refit waits for that hand-back), so the merge stays clean. Nothing is
+      republished until items 4 and 5 pass.
    7. When item 2 showed nothing (a mock was untaken then), show the student the change now,
       `git diff <before> HEAD -- notes/ _build/frag/ cheatsheet/`, as that section's item 2 says
       (FB-137), even when that mock has since been taken.
@@ -405,15 +410,18 @@ already attempted in full gets `yes, attempted` in the new row at once (Step 7).
   and the cram night own that.
 - When every part of a set has been attempted or its solution shown, in walk-throughs and quizzes
   together, the MANIFEST.md row whose Notes say `solutions to <that set>`, if there is one, gets
-  `yes, attempted` in its Answers cell: the notes and sheets may quote it from then on
-  (`04-write`). A check waiting on the set (Step 6) runs then. During a build the cell waits
-  under `## Waiting checks` for the build's end (Step 1).
-- Once a set is attempted, each `_build/held.md` entry that names it is offered back as a patch
-  (FB-191): a passage `05-verify` step 5 cut or held back because it overlapped that set. Show the
-  student its section and its original text, and on their yes dispatch it as Step 5 says. Remove
-  the entry once its patch merges or the student declines it. While another set is unattempted,
-  the passage runs `05-verify` step 5's questions check against that set first, and a hit waits
-  for that set too.
+  `yes, attempted` in its Answers cell: the notes and sheets may quote it from then on (`04-write`).
+  With no such row, the set's own row's Answers cell becomes `no, attempted YYYY-MM-DD` (today's
+  date), the one place `05-verify` step 5's questions check reads it. A check waiting on the set
+  (Step 6) runs then. During a build the cell waits under `## Waiting checks` for the build's end
+  (Step 1).
+- Once a set is attempted (its solutions row reads `yes, attempted`, or with no solutions row its
+  own row's Answers cell reads `no, attempted YYYY-MM-DD`), each `_build/held.md` entry that names
+  it is offered back as a patch (FB-191): a passage `05-verify` step 5 cut or held back because it
+  overlapped that set. Show the student its section and its original text, and on their yes dispatch
+  it as Step 5 says. Remove the entry once its patch merges or the student declines it. While
+  another set is unattempted, the passage runs `05-verify` step 5's questions check against that set
+  first, and a hit waits for that set too.
 - This bookkeeping (the log, STATUS, MANIFEST.md's Answers cell) and `_build/verify/` are the
   main session's. Every change to the notes' or a sheet's text is a writer's (hard rule 9);
   refitting a sheet after one (`07-cheatsheet` step 4's `--fs`, a block moved between sides) is a

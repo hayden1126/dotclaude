@@ -81,8 +81,8 @@ student who skipped the lectures, and lists by line:
 - each term or symbol used before it is defined (S14, S15);
 - each sentence that can't be understood alone (S18);
 - each pitfall or table cell without its exact condition and a mini-instance (S23);
-- each pair of look-alike notions (marks, operators, variants) with no single comparison table
-  (S31);
+- each pair of look-alike notions (symbols, operators, variants of one procedure) with no single
+  comparison table (S31);
 - each optional notation without when it is required, when it is allowed, and whether leaving it
   out costs marks (S28).
 
@@ -111,11 +111,16 @@ same audit when they exist.
   `mock_key.py` reruns too (its step 4's rerun clause).
 - With no checker, a `TODO-VERIFY` a writer left anyway is replaced with the value its cited
   source gives, or the working that derives it.
-- Before anything is published, check the notes against every set the student hasn't attempted
-  (FB-191): a worked example has rebuilt a practice question's setup, and a gloss has named a
-  practice step. Those sets are every MANIFEST row marked `Answers: yes` and every question set
-  whose solutions aren't yet `yes, attempted`. With no such set, skip the run and log `no
-  unattempted set` in STATUS. Otherwise give each set's extract
+- Before anything is published, the questions check: check the notes against every set the
+  student hasn't attempted (FB-191), since a worked example has rebuilt a practice question's
+  setup, and a gloss has named a practice step. Those sets, all read from MANIFEST.md: each set
+  answered by a row whose Answers cell is exactly `yes` (not `yes, attempted`); and each question
+  set that no row's `solutions to <doc>` names, unless its own row's Answers cell reads `no,
+  attempted YYYY-MM-DD` (the one place a set with no solutions row records its attempt:
+  `00-intake` and `11-next-exam` write it from the student's word, `09-tutor` Step 7 when its last
+  part is done).
+  With no such set, skip the run and log `no unattempted set` in STATUS. Otherwise give each set's
+  extract
   (`_build/extract/<name>.md`) as a question file, and the lecture extracts the notes cite as
   allowed sources:
   `python3 -I <skill>/scripts/mock_leak.py --questions <the sets' extracts> --allow <the lecture

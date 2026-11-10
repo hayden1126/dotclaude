@@ -168,6 +168,13 @@ class Html(unittest.TestCase):
         self.assertEqual(code, 0, out)
         self.assertIn("2 in-page links, 1 ids; 0 unresolved; 0 duplicate ids", out)
 
+    def test_a_link_to_another_published_page_is_not_an_in_page_link(self):
+        # The review page links each row to its subsection on the notes page (CONVERT.md).
+        code, out = self.check('<h2 id="sec-1">A</h2><a href="https://claude.ai/artifact/abc#sec-2-walks" '
+                               'target="_blank" rel="noopener">2.1 Walks</a><a class="xref" href="#sec-1">A</a>')
+        self.assertEqual(code, 0, out)
+        self.assertIn("1 in-page links, 1 ids; 0 unresolved", out)
+
     def test_every_citation_links_into_the_page(self):
         # assemble.py links each a.slink to its row in the source key (FB-123).
         code, out = self.check('<tr id="src-D1"><td>D1</td></tr><p><a class="slink" href="#src-D1">D1 p.2</a></p>')

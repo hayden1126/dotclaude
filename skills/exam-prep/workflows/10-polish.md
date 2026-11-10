@@ -210,7 +210,11 @@ step 1 says.
    untaken mocks' keys. When the pass changed the cram order's tiers, rows or skip list (a cut
    moved a row to the skip list, a row reworded), then its item 4: the map's cram copy rewritten
    and `06-site` step 5 run again, its compare as item 5 says and its republish left to step 7.1.
-5. While a mock is untaken, "Changing the notes or a sheet" item 4: rerun the baseline's command and
+5. When the pass changed the notes, `05-verify` step 5's questions check (`mock_leak.py
+   --questions` on the unattempted sets that step lists from MANIFEST.md, skipped when there is
+   none) prints QUESTIONS OK (FB-191): a hit is reworded with fresh numbers and setup (S7), logged
+   as the item's `changed (how)`, and repeats from item 3. While a mock is untaken, also "Changing
+   the notes or a sheet" item 4: rerun the baseline's command and
    compare with the pass's baseline file (a `.tex` is read as its source). A new hit on a
    number, order or table answer is a leak: reword it, log the reword as the item's `changed
    (how)` (step 6 takes it as the approved text, and the look-back shows it), and repeat from item

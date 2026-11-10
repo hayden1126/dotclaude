@@ -36,12 +36,14 @@ Topic cuts: {{none | one line each:}}
   own notes), or a few words of free text. Optional: a table without the column still reads, and
   its key then has no Made by column.
 - **Notes:** what the source is, in a few words ("Lecture 4: search"), which the source key shows;
-  an empty cell leaves that column blank (the key's File column still names it). A remark on the row (why a range is cut) follows
-  it.
+  an empty cell leaves only the file name under it (the key's What it is column shows both). A
+  remark on the row (why a range is cut) follows it.
 - **Answers:** `yes` marks a file that holds answers (official solutions, a past exam's key), with
   `solutions to <doc>` in Notes naming the set it answers. Mock writers never read it. Nothing
   published quotes it until the student has attempted that set, which the cell then records as
-  `yes, attempted`.
+  `yes, attempted`. A question set that no row's `solutions to <doc>` names records the student's
+  attempt in its own Answers cell, `no, attempted YYYY-MM-DD`: until then `05-verify` step 5's
+  questions check treats it as unattempted.
 - **Topic cuts** name what the exam leaves out inside an `in` range, which no page range can say
   ("negative weights are not on Exam 1", from a staff post). They are a list under the table, never
   a second table, and scope like the rows: `03-backbone` marks the subsections a cut reaches and
