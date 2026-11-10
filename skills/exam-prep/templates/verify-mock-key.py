@@ -35,8 +35,11 @@ SKIP leaves named parts out of the run: a part whose question would need rewordi
 key recheck writer may not do (08-practice step 8), so KEY OK still holds every other part to its
 value. A skipped part's value() and reasoned() calls do nothing, it needs neither, its key answer
 isn't compared (the writer replaces it with a `Skipped tonight:` line, which no value would
-match), and the KEY OK line lists it as skipped; an assert about its instance goes under
-`if not skipped(slug, part):`. SKIP naming a slug not in MOCKS or a part the mock lacks fails.
+match), and the KEY OK line lists it as skipped. Python works out a call's arguments before the
+call, so value() can't keep a skipped part's computation from running: everything about that part
+(the reference's run on its instance, each assert about it, its value() or reasoned() call) goes
+under `if not skipped(slug, part):`, else a reference that raises on its degenerate instance stops
+the whole run. A run that stops while SKIP names a part says so. SKIP naming a slug not in MOCKS or a part the mock lacks fails.
 KEY OK prints only when the whole run passes. The terminal shows part ids, never an answer: the
 student may be watching. With no key written yet it still writes the values (NO KEY) and exits
 1. A run that crashes keeps the last good values file."""
@@ -110,9 +113,10 @@ def reasoned(slug, part, why):
 def values():
     # ---- Fill in: import the reference and compute every computable part. -------------------
     # from reference import dijkstra
-    # order, dist = dijkstra(GRAPH_Q2, "S", tie="alpha")
-    # assert len(set(dist.values())) == len(dist), "exam1-1 Q2(a): a tie on distance"
-    # value("exam1-1", "Q2(a)", f"{' '.join(order)}, dist(T) = {dist['T']}")
+    # if not skipped("exam1-1", "Q2(a)"):  # the part's whole computation, as SKIP needs
+    #     order, dist = dijkstra(GRAPH_Q2, "S", tie="alpha")
+    #     assert len(set(dist.values())) == len(dist), "exam1-1 Q2(a): a tie on distance"
+    #     value("exam1-1", "Q2(a)", f"{' '.join(order)}, dist(T) = {dist['T']}")
     # reasoned("exam1-1", "Q3(b)", "a proof")
     pass
 
@@ -290,6 +294,9 @@ def main():
         stopped = run_values()
         if stopped:
             print(stopped)
+            if SKIP:
+                print("mock_key.py: SKIP names a part: its whole computation, its asserts and its value() "
+                      "or reasoned() call go under `if not skipped(slug, part):`, so they never run")
             return 1
         with open(tmp, "w", encoding="utf-8") as out:
             out.write("# KEY VALUES: the mocks' computed answers (written by _build/verify/mock_key.py: "

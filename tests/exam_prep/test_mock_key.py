@@ -15,10 +15,11 @@ missing key (the values still written), no slugs, and a value() or reasoned() ca
 isn't one or whose part isn't a part id (swapped arguments print no value). A stop in values()
 prints an assert's message only when the assert is the checker's own, and an exit's or a
 print's never. A run that crashes keeps
-the last good values file. SKIP leaves a part out (its value, its answer and an assert under
-skipped() aside, listed as skipped on the KEY OK line, its answer the writer's `Skipped tonight:`
-line or any other) while every other part is still checked,
-and a SKIP naming a slug or part the mocks lack fails."""
+the last good values file. SKIP leaves a part out (its value, its answer and its whole computation
+under skipped() aside, one that raises included, listed as skipped on the KEY OK line, its answer
+the writer's `Skipped tonight:` line or any other) while every other part is still checked; a run
+that stops while SKIP names a part says the computation goes under skipped(); and a SKIP naming a
+slug or part the mocks lack fails."""
 import importlib.util
 import os
 import re
@@ -200,6 +201,29 @@ class MockKey(unittest.TestCase):
                          "skipped: Q2(a)")
         # Unskipped, the same key fails on that part: the line is no answer.
         self.fails("FAIL  exam1 Q2(a)")
+
+    def test_a_skipped_part_whose_computation_raises_is_never_run(self):
+        # A reference that raises on a skipped part's degenerate instance: under skipped(), the
+        # whole computation never runs, and every other part is still checked.
+        body = BODY.replace('    value("exam1", "Q1(b)", degree4(5, 9))\n',
+                            '    if not skipped("exam1", "Q1(b)"):\n'
+                            '        value("exam1", "Q1(b)", degree4(5, 99))\n')
+        rc, out = self.run_key(fill(body, skip='{"exam1": ["Q1(b)"]}'))
+        self.assertEqual(rc, 0, out)
+        self.assertIn("PASS  exam1 Q2(a)", out)
+        self.assertEqual(out.strip().splitlines()[-1],
+                         "KEY OK: exam1: 3 of 9 parts asserted; reasoned: Q2(b), Q4(a), Q4(b), Q4(c), Q4(d); "
+                         "skipped: Q1(b)")
+        self.edit("mock-exam1-key.md", "**(a)** Answer: 6", "**(a)** Answer: 5")
+        self.fails("FAIL  exam1 Q1(a)", fill(body, skip='{"exam1": ["Q1(b)"]}'))
+
+    def test_an_unguarded_skipped_computation_that_raises_says_where_it_goes(self):
+        # value()'s arguments run before value() can drop the part, so the run stops; it says so.
+        body = BODY.replace("degree4(5, 9)", "degree4(5, 99)")
+        out = self.fails("values() stopped: AssertionError", fill(body, skip='{"exam1": ["Q1(b)"]}'))
+        self.assertIn("go under `if not skipped(slug, part):`", out)
+        out = self.fails("values() stopped: AssertionError", fill(body))
+        self.assertNotIn("skipped(slug, part)", out)
 
     def test_a_skip_naming_no_part_of_the_mock_fails(self):
         self.fails("exam1 SKIP NAMES Q9(a), NOT IN THE MOCK", fill(skip='{"exam1": ["Q9(a)"]}'))
