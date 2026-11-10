@@ -94,11 +94,16 @@ evidence ids.
     only, so no answer reaches the student's chat, which the hub CLAUDE.md's key rule now allows.
     The writer ends every source-added path while a mock is untaken, and a reference change's
     failing parts go to the brief's reference-change variant; one runs at a time, in the background
-    with its transcript unopened, under a `Key recheck: dispatched <date>` STATUS line that
-    blocks the next attempt; its merge takes only the untaken keys, the values file and
-    `mock_key.py`, and a conflict is aborted, never resolved in the chat; a part whose question
-    would need rewording goes into the key checker's new `SKIP` and onto the mock's cram order
-    line, and a `blocked` report gets the main session's fix before any redispatch.
+    with its transcript unopened, its whole reply the JSON block (part ids and file names only),
+    spawned once everything uncommitted is committed; a `Key recheck: owed <date>` STATUS line,
+    committed where the recheck becomes owed and rewritten to `dispatched` at the spawn, blocks
+    the next attempt until the merge, so a `/clear` or a lost session leaves the recheck owed, and
+    a merge with no report takes its `question` parts from the key checker's skipped list. Its
+    merge takes only the untaken keys, the values file and `mock_key.py`, and a conflict is
+    aborted, never resolved in the chat; a part whose question would need rewording goes into the
+    key checker's new `SKIP`, its key answer replaced by a `Skipped tonight:` line, and onto the
+    mock's cram order line, and a `blocked` report gets the main session's fix before any
+    redispatch.
     The student chose opening the keys over the spoiler risk a review logged. It replaces a first
     form that opened no key, logging a recheck in STATUS for grading and a "bring it before
     marking" note on the mock's cram order line (D1.C23, E1.C15, E1.C19, E1 (section 2)).
