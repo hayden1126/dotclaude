@@ -185,7 +185,7 @@ naming the id that replaces it, if one does.
 | FB-156 | A script asserts every key value. | w08 | B1 (stage 05), B4 (section 5a) |
 | FB-157 | The night before, offer a cram order: a reading list ranked by points per minute, in tiers with minute budgets, a skip list and an "out of time" fallback to the Must-know lists, pointing into the verified notes rather than new text. | w08 | B3.C1, B3.C2, B3.C10, B4.C15 |
 | FB-158 | The cram night opens with the notes page's link and each mock's, defines a tier in one line, and starts from what the student has already read. | w08, w06 | E1.C5, E1.C6, D1.C22 |
-| FB-159 | The cram night offers an Ed re-pull first, and new staff answers go through the source-added path; then one writer in its own worktree opens each untaken mock's key, fixes the parts the answer touches, reruns the key checker and reports part ids only, so no answer reaches the student's chat. | w08, w09, w11, t:briefs, t:hub, t:verify-mock-key | D1.C23, E1.C15, E1.C19, E1 (section 2) |
+| FB-159 | The cram night offers an Ed re-pull first, and new staff answers go through the source-added path; before each attempt, when the key checker fails or a source came in after the mock's last key check, one writer in its own worktree opens each untaken mock's key, fixes the parts the answer touches, reruns the key checker and reports part ids only, so no answer reaches the student's chat. | w08, w09, w11, t:briefs, t:hub, t:verify-mock-key | D1.C23, E1.C15, E1.C19, E1 (section 2) |
 
 ## 09-tutor
 

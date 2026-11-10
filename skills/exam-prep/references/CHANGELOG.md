@@ -92,13 +92,15 @@ evidence ids.
     then one `writer` in its own worktree, from the new "Key recheck" brief, opens each untaken
     mock's key, fixes the parts the answer touches, reruns the key checker and reports part ids
     only, so no answer reaches the student's chat, which the hub CLAUDE.md's key rule now allows.
-    The writer ends every source-added path while a mock is untaken, and a reference change's
-    failing parts go to the brief's reference-change variant; one runs at a time, in the background
-    with its transcript unopened, its whole reply the JSON block (part ids and file names only),
-    spawned once everything uncommitted is committed; a `Key recheck: owed <date>` STATUS line,
-    committed where the recheck becomes owed and rewritten to `dispatched` at the spawn, blocks
-    the next attempt until the merge, so a `/clear` or a lost session leaves the recheck owed, and
-    a merge with no report takes its `question` parts from the key checker's skipped list. Its
+    A key gate before each attempt (`08-practice` step 8.1, never inside a build) spawns the writer
+    when the key checker fails or STATUS gained a `Source added: ... done` or `Reference changed:`
+    line after the mock's `Key checked: <slug> <date> at <sha>` line (git's order, not the dates),
+    and a merge rewrites that line to the writer's base, so a `/clear`, a lost report or a failed
+    merge leaves the check due with no state of its own; this replaced stored STATUS lines for a
+    pending and a running recheck, which review found could start a writer mid-build. One writer
+    runs at a time, in the background with its transcript unopened, its whole reply the JSON block
+    (part ids and file names only), spawned once everything uncommitted is committed, and a merge
+    with no report takes its `question` parts from the key checker's skipped list. Its
     merge takes only the untaken keys, the values file and `mock_key.py`, and a conflict is
     aborted, never resolved in the chat; a part whose question would need rewording goes into the
     key checker's new `SKIP`, its key answer replaced by a `Skipped tonight:` line, and onto the
