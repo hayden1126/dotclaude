@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 r"""The mock key's checker: every computable answer in a mock's key comes from the reference.
 
-exam-prep template verify-mock-key.py, baseline as of 2026-10-20; changes only via `12-retro`.
+exam-prep template verify-mock-key.py, baseline as of 2026-11-10; changes only via `12-retro`.
 Copy it to _build/verify/mock_key.py and fill the marked part. Run from the hub root:
 
   python3 -I _build/verify/mock_key.py      exit 0 only with a KEY OK line per mock

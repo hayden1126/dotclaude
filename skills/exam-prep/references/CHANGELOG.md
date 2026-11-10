@@ -38,7 +38,10 @@ evidence ids.
   `workflows/08-practice.md`, `workflows/09-tutor.md`, `workflows/10-polish.md`,
   `workflows/11-next-exam.md` and `workflows/12-retro.md`, each baseline 2026-11-10;
   `templates/compare-notes.py` and `templates/fidelity.py`, new, baseline 2026-11-10;
-  `templates/chassis-shots/`, regenerated, with a new `-key` shot at each width;
+  `templates/verify-mock-key.py`, baseline 2026-11-10;
+  `templates/chassis-shots/`, regenerated, with a new `-key` shot at each width and the 12
+  `-review` shots of the Review view (`1280-light-review-*` and `390-dark-review-*`: top, map,
+  key, wex and two subsections);
   `scripts/assemble.py`, `scripts/cram_check.py`, `scripts/extract_check.py`,
   `scripts/linkcheck.py`, `scripts/mock_leak.py`, `scripts/pw.mjs` and `scripts/verify_page.mjs`,
   which carry no date.
@@ -68,7 +71,11 @@ evidence ids.
     sheet questions are asked only when a sheet is allowed. A Review / Full notes toggle shows the
     Must-know lists, the exam-day map and the worked examples and pitfalls the notes tag `.rv`, and
     copies nothing. `07-cheatsheet`'s "Tag the review" tags by rank; `assemble.py` holds the view to
-    its minutes at 150 words a minute and refuses a misplaced tag; CONVERT and `fidelity.py` carry
+    its minutes at 150 words a minute, the map's cram block left out of the count (a reading list
+    into the notes, not review text), and refuses a misplaced tag; a rebuild over the minutes is
+    untagged, lowest-ranked first, before anything else (`07`, `08`, `09`); a section whose `Not
+    on <exam>` or `Unverified` banner comes before its first `h3` is left out of the view whole,
+    and a load or hash change to a hidden target switches to Full notes; CONVERT and `fidelity.py` carry
     the marker; `verify_page.mjs` checks and shoots both views; `11-next-exam` asks the minutes on a
     reopen whose exam allows no sheet and takes the finished exam's tags off; a `10-polish` scope cut
     untags cut material. The view replaces the separate condensed review page this round first
@@ -85,6 +92,13 @@ evidence ids.
     then one `writer` in its own worktree, from the new "Key recheck" brief, opens each untaken
     mock's key, fixes the parts the answer touches, reruns the key checker and reports part ids
     only, so no answer reaches the student's chat, which the hub CLAUDE.md's key rule now allows.
+    The writer ends every source-added path while a mock is untaken, and a reference change's
+    failing parts go to the brief's reference-change variant; one runs at a time, in the background
+    with its transcript unopened, under a `Key recheck: dispatched <branch>` STATUS line that
+    blocks the next attempt; its merge takes only the untaken keys, the values file and
+    `mock_key.py`, and a conflict is aborted, never resolved in the chat; a part whose question
+    would need rewording goes into the key checker's new `SKIP` and onto the mock's cram order
+    line, and a `blocked` report gets the main session's fix before any redispatch.
     The student chose opening the keys over the spoiler risk a review logged. It replaces a first
     form that opened no key, logging a recheck in STATUS for grading and a "bring it before
     marking" note on the mock's cram order line (D1.C23, E1.C15, E1.C19, E1 (section 2)).
@@ -102,7 +116,7 @@ evidence ids.
   - S33: each subsection states its depth label, carried by the notes, the cram order and the
     exam-day map; the `**Depth:**` line converts to a `p.connects` line (CONVERT,
     `fidelity.py`), and the map shows the label's words after each section's link; a Must-know
-    list ends with what is memorized and what is provided; FB-064's Home gains it (F1.C12, D1.C5,
+    list's last two items say what is memorized and what is provided; FB-064's Home gains it (F1.C12, D1.C5,
     D1.C21, E1.C14, E1.C20, E1.C29).
   - FB-043: the exact `sha256sum` command before an original is deleted (D1.C27).
   - FB-089: notation the staff's own sheets use wins over a hub's own conventions, and the
