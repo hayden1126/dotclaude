@@ -127,7 +127,8 @@ evidence ids.
     D1.C17).
   - S33: each subsection states its depth label, carried by the notes, the cram order and the
     exam-day map; the `**Depth:**` line converts to a `p.connects` line (CONVERT,
-    `fidelity.py`), and the map shows the label's words after each section's link; a Must-know
+    `fidelity.py`), and the map shows the label's words after each section's link, which
+    `cram_check.py` checks on each cram row; a Must-know
     list's last two items say what is memorized and what is provided; FB-064's Home gains it (F1.C12, D1.C5,
     D1.C21, E1.C14, E1.C20, E1.C29).
   - FB-043: the exact `sha256sum` command before an original is deleted (D1.C27).

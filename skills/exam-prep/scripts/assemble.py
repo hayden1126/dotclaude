@@ -123,7 +123,7 @@ REVIEW_LINE = re.compile(r"^- Review view:(.*)$")
 OUT_LABEL = re.compile(r"Not on \S.*|Unverified")
 TOGGLE = re.compile(r"<!-- REVIEW TOGGLE -->(.*?)<!-- /REVIEW TOGGLE -->", re.S)
 CRAM = os.path.join("practice", "cram-order.md")
-DEPTH = re.compile(r"(Know cold|Use|Recognize|Not on [^:]+): (\S.*)")
+DEPTH = cram_check.DEPTH  # one pattern, so cram_check.py at step 7.1 refuses what this refuses
 CRAM_ROW = re.compile(r"^\d+\. \[(§[\d.]+ [^\]]+)\]\([^)\s#]*#([^)\s]+)\) \(\d+ min\): (.*)$")
 # What one cram-order line may hold besides text: math, code, bold and notes links.
 INLINE = re.compile(r"\\\((.*?)\\\)|`([^`]+)`|\*\*(.+?)\*\*|\[([^\]]+)\]\(([^)\s]*)\)")
