@@ -105,7 +105,8 @@ from later corrections. A retired rule is struck through and keeps its number. A
   reconcile them in one place and link there.
 - **S33. Depth labels.** Each subsection states its depth: Know cold (written from memory), Use
   (applied with the definition given), Recognize, or Not on <exam>, citing the instructor's
-  memorization or format statement, or marked inferred with the reason. Each section's Must-know
-  list ends with a "Written from memory:" line and a "Provided on the exam:" line where the
-  exam-format statement says which is which. The notes, the cram order and the exam-day map
+  memorization or format statement, or marked inferred with the reason. Where the exam-format
+  statement says which is which, each section's Must-know list ends with two list items, a
+  "Written from memory:" line and then a "Provided on the exam:" line, inside the list, where the
+  Review view shows them. The notes, the cram order and the exam-day map
   carry the same label.

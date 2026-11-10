@@ -57,8 +57,9 @@ lines). What every writer is held to, beyond STYLE:
   link into the section (in plain-text notes, step 6, a pointer naming the subsection).
 - **Depth labels** (S33). Each subsection opens with its depth, from CLAUDE.md's exam-format
   statement (the brief quotes its lines on what is memorized and what is provided), or marked
-  inferred with the reason; where the statement sorts them, the Must-know list ends with its
-  `Written from memory:` and `Provided on the exam:` lines.
+  inferred with the reason; where the statement sorts them, the Must-know list's last two items
+  are its `Written from memory:` and `Provided on the exam:` lines, list items like the rest (as
+  paragraphs after the list, the Review view would hide them).
 
 ## Step 4: Check what came back
 

@@ -198,9 +198,10 @@ These are the Markdown forms the page's converter reads (06-site); use them exac
   examples: CONVERT.md keeps them as code, and the notes-to-checker comparison counts a name only
   in backticks (K67).
 - The last subsection is `## {{N}}.K Must know {#sec-{{N}}-must-know}`: one line per point, each
-  ending with a link into this section, `([§{{N}}.2](#<id>))`. {{FORMAT STATEMENT: It ends with a
-  `Written from memory:` line and a `Provided on the exam:` line, each naming this section's
-  points as the statement sorts them. | NONE: drop this sentence.}}
+  ending with a link into this section, `([§{{N}}.2](#<id>))`. {{FORMAT STATEMENT: Its last two
+  items are list items like the rest, `- Written from memory: ...` and then `- Provided on the
+  exam: ...`, each naming this section's points as the statement sorts them (written as
+  paragraphs after the list, the Review view hides them). | NONE: drop this sentence.}}
 - {{PLAIN TEXT: the student reads in a plain-text tool, so no LaTeX (plain Unicode math), pipe
   tables, no `{#id}` anchors, and cross-references and Must-know pointers as text naming the
   section ("§{{M}}.K <its title>").}}
