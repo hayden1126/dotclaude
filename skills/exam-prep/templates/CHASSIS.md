@@ -28,7 +28,7 @@ the skill's.
   and opens the map: a `div.ecram` at the start of `.ebody`, one `.eq` per tier (its `.eqh` the
   tier's name and minutes), one row per reading row (the one thing in `<b>`, the `§N.K Title` as an
   `a.xref` to `#id`, the depth label in parentheses), then the Skip and Out of time lines in an
-  `.edrill`. Mock lines and `## Tonight` stay out. With no file (a writer's worktree), there is no
+  `.edrill`. Mock lines and `## Tonight` stay out. With no file (before `08-practice` step 7), there is no
   cram block and the map stays closed.
 - **Worked examples** are collapsible and closed by default (FB-116).
 - **The Review view**, when PLAN.md's `- Review view: <N> minutes of reading` line keeps it: a
