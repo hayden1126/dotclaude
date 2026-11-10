@@ -4,7 +4,8 @@ A synthetic hub: a backbone with a registry (sections, an example, a figure, a h
 set and template placeholders that must not count) and two note files. Markdown mode: broken
 links, registry ids never defined, duplicates, a `# §N` heading as an implicit id, bare `§N.M`
 references (a failure when the backbone numbers the section, skipped inside that section, a
-warning otherwise). HTML mode: unresolved and duplicate ids, parsed rather than grepped."""
+warning otherwise). HTML mode: unresolved and duplicate ids, parsed rather than grepped, and a source citation
+(a.slink) with no in-page href."""
 import contextlib
 import importlib.util
 import io
@@ -166,6 +167,29 @@ class Html(unittest.TestCase):
                                "<div data-id='sec-9'></div><a href='#sec%2D1'>enc</a>")
         self.assertEqual(code, 0, out)
         self.assertIn("2 in-page links, 1 ids; 0 unresolved; 0 duplicate ids", out)
+
+    def test_a_link_to_another_published_page_is_not_an_in_page_link(self):
+        # The review page links each row to its subsection on the notes page (CONVERT.md).
+        code, out = self.check('<h2 id="sec-1">A</h2><a href="https://claude.ai/artifact/abc#sec-2-walks" '
+                               'target="_blank" rel="noopener">2.1 Walks</a><a class="xref" href="#sec-1">A</a>')
+        self.assertEqual(code, 0, out)
+        self.assertIn("1 in-page links, 1 ids; 0 unresolved", out)
+
+    def test_every_citation_links_into_the_page(self):
+        # assemble.py links each a.slink to its row in the source key (FB-123).
+        code, out = self.check('<tr id="src-D1"><td>D1</td></tr><p><a class="slink" href="#src-D1">D1 p.2</a></p>')
+        self.assertEqual(code, 0, out)
+        self.assertIn("0 citations with no in-page link", out)
+        code, out = self.check('<tr id="src-D1"><td>D1</td></tr><p><a class="slink">D1 p.2</a> '
+                               '<a class="note slink" href="https://x.example/d1">D1 p.3</a> '
+                               '<a class="xref">not a citation</a></p>')
+        self.assertEqual(code, 1, out)
+        self.assertIn("2 citations with no in-page link", out)
+        self.assertIn("CITATION WITH NO IN-PAGE LINK: D1 p.2", out)
+        self.assertIn("CITATION WITH NO IN-PAGE LINK: D1 p.3", out)
+        code, out = self.check('<p><a class="slink" href="#src-D9">D9 p.1</a></p>')
+        self.assertEqual(code, 1, out)
+        self.assertIn("UNRESOLVED #src-D9 (defined 0x)", out)
 
     def test_a_missing_page_is_a_usage_error(self):
         err = io.StringIO()

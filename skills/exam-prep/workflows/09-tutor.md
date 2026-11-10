@@ -1,6 +1,6 @@
 # 09 Tutor
 
-Baseline as of 2026-10-20; changes only via `12-retro`.
+Baseline as of 2026-11-10; changes only via `12-retro`.
 
 The student studies with the hub: walks through a set one part at a time, takes a true-or-false
 quiz, or asks about the material. The main session tutors and only answers; every change to the
@@ -22,13 +22,14 @@ picks it up.
   exists and STATUS records no attempt of it (`08-practice` step 8.2 records each one, its misses
   or none). While one is, `08-practice` step 8's rules bind the tutor: it opens no untaken mock's
   key, `practice/mock-values-key.md` or `_build/verify/mock_key.py`, and keeps every search inside
-  `notes/`, `cheatsheet/`, `_build/frag/` and `_build/extract/` (which holds no mock); every STATUS
-  write is followed by that stage's STATUS check with the untaken mocks' keys (its step 4's
-  opening); every notes or sheet change runs its "Changing the notes or a sheet"; a one-line sheet
-  addition goes where its step 8 says (Step 5.2); and the next-step line stays as it stands.
+  `notes/`, `cheatsheet/`, `_build/frag/` and `_build/extract/` (which hold no mock), but for Step
+  5.5.4's grep of `practice/cram-order.md`; every STATUS write is followed by that stage's STATUS check with the untaken mocks' keys
+  (its step 4's opening); every notes or sheet change runs its "Changing the notes or a sheet"; a
+  one-line sheet addition goes where its step 8 says (Step 5.2); and the next-step line stays as it
+  stands.
 - A build runs while STATUS has the line `Build running: <date>` (SKILL.md, hard rule 1): the
   unattended build session's, from its launch until its last stage removes it (`08-practice` step
-  7.4 puts `Stage 08 built: <exam-slug>, <date>` in its place), or a stage's run alone. It changes
+  7.5 puts `Stage 08 built: <exam-slug>, <date>` in its place), or a stage's run alone. It changes
   the notes, the sheets, `_build/verify/` and STATUS, and from `08-practice` step 2 its window shows
   mocks and answers. Any end of a build removes the line (hard rule 1). Read STATUS for the line
   before each part, quiz item and answer, so a tab open since before the build finds it. While it
@@ -38,14 +39,14 @@ picks it up.
     unless its official solutions are extracted (Step 3), and so does a part that needs the
     reference extended;
   - it makes no fresh true-or-false statement, keeps every search inside `notes/`, `cheatsheet/`,
-    `_build/frag/` and `_build/extract/`, and never opens `_build/mock-plan.md`: before any mock
-    file exists, the plan already holds the mocks' questions and their variants;
-  - it reads `notes/`, `cheatsheet/` and `_build/frag/` as committed, never from disk: the build
-    edits them in place, and from 08's step 2 commits a change only once its leak compare passes
-    (`08-practice`'s "Changing the notes or a sheet", item 4), so a line on disk may state a mock's
-    answer. Search
-    them with `git grep -n -e <phrase> HEAD -- notes/ cheatsheet/ _build/frag/`, and read a passage
-    with `git show HEAD:<path> | sed -n '<from>,<to>p'`. `_build/extract/` is searched and read
+    `_build/frag/` and `_build/extract/`, and never opens `_build/mock-plan.md`:
+    before any mock file exists, the plan already holds the mocks' questions and their variants;
+  - it reads `notes/`, `cheatsheet/` and `_build/frag/` as committed, never from
+    disk: the build edits them in place, and from 08's step 2 commits a change only once its leak
+    compare passes (`08-practice`'s "Changing the notes or a sheet", item 4), so a line on disk may
+    state a mock's answer. Search them with `git grep -n -e <phrase> HEAD -- notes/ cheatsheet/
+    _build/frag/`, and read a passage with `git show HEAD:<path> | sed -n
+    '<from>,<to>p'`. `_build/extract/` is searched and read
     from disk with the Grep and Read tools, whose output stays folded (Step 3): a part's block holds
     its `Solution [` line; but not a file `git status --short -- _build/extract/` lists, which a
     build's `02-extract` is still writing (`11-next-exam`'s builds too);
@@ -121,7 +122,9 @@ Settle it before the first part:
   worked example from a lecture or from a set MANIFEST.md marks `yes, attempted`, the self-test
   rerun: any other set's would show its official answer in the self-test's edit, so ask first, as
   Step 6 does), and once mocks exist `08-practice` step 4's rerun clause for a changed reference
-  follows (items 2 and 4; a changed part of an untaken mock is logged, as it says): it isn't graded
+  follows (items 2 and 4; on the cram night a changed part of an untaken mock is left to the key
+  recheck writer, as it says, its `Reference changed:` STATUS line committed with the reference
+  change, so `08-practice` step 8.1's key gate rechecks it before the next attempt): it isn't graded
   until its `value()` replaces the call, and the other parts go first. A set whose official
   solutions give final answers only gets values here too when the student's partial work needs its
   intermediate values.
@@ -204,9 +207,12 @@ At each set's end, its score in the reply and the log: verdicts right, and reaso
 
 ## Step 5: Questions and patches
 
-1. Answer first (FB-164). A fact question gets a direct answer and a tiny sanity case ("3 bits
-   give 0 to 7"); the answer text is short and exam-ready, in the course's words. "Be even
-   clearer" gets a clearer version. A number or trace in an answer comes from the checker
+1. Answer a definition or yes/no question from what you know first, in the course's words; then
+   check the notes and say if they differ. Answer first (FB-164). A fact question gets a direct
+   answer and a tiny sanity case ("3 bits give 0 to 7"); the answer text is short and exam-ready,
+   in the course's words. In chat, write symbols as Unicode or plain text, never LaTeX delimiters,
+   and never coin a label the course doesn't use (FB-192). "Be even clearer" gets a clearer
+   version. A number or trace in an answer comes from the checker
    (`_build/verify/examples.out.md`, or the reference run on the example), never by hand.
 2. Then search `notes/` for the point. When the notes don't say it where the student was reading, or
    say it unclearly there, offer the patch: the exact sentence (one short sentence at the point of
@@ -232,10 +238,12 @@ At each set's end, its score in the reply and the log: verdicts right, and reaso
    and the log again: a `Build running` line or another open line that came meanwhile puts this line
    back as it was, committed, with no spawn. Else spawn it unnamed with `isolation: "worktree"` on
    the call, and tell the student to go on (FB-167), and while a mock is untaken, that the next mock
-   waits until you say this patch is done (Step 5.5.9). While a mock is untaken, the change runs
-   `08-practice`'s "Changing the notes or a sheet": its item 2 and the notes' rebuild by the writer,
-   the rest at the merge (Step 5.5), item 1 included, since the hub without the patch is its
-   baseline.
+   waits until you say this patch is done (Step 5.5.9). Every patch runs `08-practice`'s
+   "Changing the notes or a sheet", the one list of what a change does to each published product:
+   its item 2 (but the cram order) and item 3's rebuild of the notes page by the writer, the rest
+   at the merge (Step 5.5), item 1 included while a mock is untaken, since the hub without the
+   patch is its baseline. The patch's paths, in every git command below, are `notes/ _build/frag/
+   cheatsheet/`.
 5. When the hand-back arrives, answer a waiting student first; it goes by its line's mark as it
    stands now ("One open patch"). One that arrives while a `Build running` line stands waits, its
    line still `dispatched`, for the build's end (Step 1). On a line with the `drop` field nothing
@@ -246,15 +254,20 @@ At each set's end, its score in the reply and the log: verdicts right, and reaso
       one, unless the Agent tool already did) and the branch (`git branch -D <branch>`: its work
       is redone, not kept), mark the line `held: <why>`, its fields kept, and tell the student
       why. On their go it is dispatched again, the brief changed where the report says what
-      stopped it.
+      stopped it. A report blocked on the Review view's minutes (the Notes patch brief stops
+      there) gets the main session's untag first, as `07-cheatsheet`'s "Tag the review" says,
+      lowest-ranked first, committed on the hub before any redispatch: a bare redispatch fails the
+      same way. Once no `.rv` tag is left, the main session asks the student for new minutes on
+      PLAN.md's `Review view:` line instead (the student is here, so that section's opening has
+      them asked), logs them in STATUS and commits both first.
    2. `git diff --no-renames --name-status <hub branch>...<branch>` (three dots: the branch's own
       changes) lists only `M` lines (a patch adds and deletes no file) under `notes/`,
-      `_build/frag/` and `cheatsheet/`, and `_build/notes.html`, and with a page a changed
+      `_build/frag/` and `cheatsheet/`, and `_build/notes.html`; with a page a changed
       `notes/NN-*.md` comes with its `_build/frag/sec<N>.html` (`N` without a leading zero, as
-      `assemble.py` maps it) and `_build/notes.html`; any other
-      list (`practice/`, STATUS.md, a notes file alone) merges nothing, as in item 1. With no mock
-      untaken, `git diff <hub branch>...<branch> -- notes/ _build/frag/ cheatsheet/` shows the
-      change as drafted; while one is, the change waits for item 7, after the leak compare.
+      `assemble.py` maps it) and `_build/notes.html`; any other list
+      (`practice/`, STATUS.md, a notes file alone) merges nothing, as in item 1. With no mock
+      untaken, `git diff <hub branch>...<branch> -- <the patch's paths>` shows the change as
+      drafted; while one is, the change waits for item 7, after the leak compare.
    3. Mark the line `merging <branch>`; at the patch's first merge, add `before <sha>`, the hub's
       head (`git rev-parse HEAD`), and while a mock is untaken run "Changing the notes or a sheet"
       item 1 now, its hit lines (part ids only) to `_build/logs/patch-baseline.txt`. Commit, so a
@@ -268,42 +281,37 @@ At each set's end, its score in the reply and the log: verdicts right, and reaso
       path>` (the branch has merged, so only what the writer left uncommitted goes; a sandboxed
       remove can fail busy or leave it half removed, and a sandbox-off `git worktree prune` clears
       one `git worktree list` marks prunable, L46), and `git branch -d <branch>`.
-   4. The checks follow what the stat named. Under `notes/` or `_build/frag/`: `06-site` step 3's
-      fidelity compare (`_build/verify/fidelity.py`) of the patched section's fragment with its
-      notes file, then `06-site` step 5, all of it, the browser check in the background so the next
-      answer isn't held, its result and the patched section's screenshots seen. With plain-text
-      notes, instead: the touched references checked by eye (`04-write` step 6), and
-      `notes/combined.md` rebuilt whenever it exists. Under `cheatsheet/`: `07-cheatsheet`'s "After
-      shipping", its audit and step 4 (the refit the main session's, Step 7), its republish waiting
-      for item 8; a LaTeX sheet is checked as its `.tex` here (`08-practice`'s "Changing the notes
-      or a sheet" item 3), and the student compiles it only at item 8, after the leak compare.
-   5. While a mock is untaken: "Changing the notes or a sheet" item 4, the compare with the
-      baseline in `_build/logs/patch-baseline.txt`.
-   6. A check in item 4 that fails, a new leak hit in item 5, a wording cut or an audit finding is
-      this patch's follow-up, whether or not a mock is untaken: a fix (new wording goes to the
-      student first, as Step 5.2 offers it, but after a leak hit naming the subsection, never the
-      line it replaces), or for a check's failure what the check reported and where. Put each fix on
-      the line as it is approved, a field `fix "<text>"`, so a fresh session finds it. Wait for
-      every result of items 4 and 5, the background browser check and the audit included, then
-      dispatch one follow-up with every `fix` (Step 5.4), which become the line's field `follow-up
-      "<the approved texts>"`; its hand-back runs this list again from item 1. While the line is
-      `dispatched`, the main session changes nothing under `notes/`, `_build/frag/` or `cheatsheet/`
-      (a refit waits for that hand-back), so the merge stays clean. Nothing is republished until
-      items 4 and 5 pass.
+   4. The checks: "Changing the notes or a sheet" item 3 for each product the stat named, the
+      notes page's browser check in the background so the next answer isn't held, its result and
+      the patched section's screenshots seen. Once the cram order exists, the cram row first: the
+      writer never opens `practice/`, so the main session greps `practice/cram-order.md` for the
+      patch's old phrase (its one read under `practice/`, Step 1) and, when a row quotes the changed
+      fact, fixes the row itself and runs `08-practice` step 7's items 1 and 2; only then the notes
+      page's rebuild, which renders the fixed row into the map (`06-site` step 4). A sheet's refit is the main session's (Step 7), and
+      a LaTeX sheet is read as its `.tex` here; the student compiles it only at item 8, after the
+      leak compare.
+   5. That section's item 4: the questions check when the stat named `notes/`,
+      and while a mock is untaken the leak compare with the baseline in
+      `_build/logs/patch-baseline.txt`.
+   6. A check in item 4 that fails, a questions hit or a new leak hit in item 5, a wording cut or an
+      audit finding is this patch's follow-up, whether or not a mock is untaken: a fix (new wording
+      goes to the student first, as Step 5.2 offers it, but after a leak hit naming the subsection,
+      never the line it replaces), or for a check's failure what the check reported and where. Put
+      each fix on the line as it is approved, a field `fix "<text>"`, so a fresh session finds it.
+      Wait for every result of items 4 and 5, the background browser check and the audit included,
+      then dispatch one follow-up with every `fix` (Step 5.4), which become the line's field
+      `follow-up "<the approved texts>"`; its hand-back runs this list again from item 1. While the
+      line is `dispatched`, the main session changes nothing under the patch's paths (a refit waits
+      for that hand-back), so the merge stays clean. Nothing is republished until items 4 and 5
+      pass.
    7. When item 2 showed nothing (a mock was untaken then), show the student the change now,
-      `git diff <before> HEAD -- notes/ _build/frag/ cheatsheet/`, as that section's item 2 says
-      (FB-137), even when that mock has since been taken.
-   8. Republish what changed and is published (`06-site` step 6; the mock sheet as `07-cheatsheet`
-      publishes it), and bump the page's version on its STATUS line: `v2` after its URL at the
-      first republish, then `v3` and on; tell the student the version. While a mock is untaken, the
-      rest of that section's item 5 too (a changed mock sheet logged, the cram order rechecked). A
-      sheet the student has printed and that changed is printed again: tell them, and log it in
-      STATUS until they say it is done. A changed LaTeX sheet is compiled by the student, printed
-      or not: mark the line `waiting for the PDF` and commit; when they bring the PDF, commit it
-      and check it as `08-practice` step 8.1 checks one, and a failing check (an overflow, text
-      under the floor) is this patch's follow-up (item 6); item 9 follows its pass. Plain-text
-      notes have no page: tell the student which sections to paste again, and log it in STATUS
-      until they say it is done.
+      `git diff <before> HEAD -- <the patch's paths>`, as that section's item 2 says (FB-137), even
+      when that mock has since been taken.
+   8. Republish as that section's item 5 says: each changed product that is published, its version
+      bumped on its STATUS line and told to the student, and what the student must redo logged. A
+      changed LaTeX sheet: mark the line `waiting for the PDF` and commit; when they bring the PDF,
+      commit it and check it as `08-practice` step 8.1 checks one, and a failing check (an
+      overflow, text under the floor) is this patch's follow-up (item 6); item 9 follows its pass.
    9. Strike the line through, log it, and commit (Step 7). While a mock is untaken, tell the
       student it can start; with a pending line waiting, ask which goes first: the mock (mark each
       unmarked pending line `held: mock first`, and log a patch approved before the attempt the same
@@ -337,7 +345,7 @@ and `follow-up "<text>"`, its latest follow-up's approved texts (Step 5.5.6); ea
 "<text>"` stays until its follow-up is dispatched; `drop`, the
 student's drop of a dispatched line (below), stays until its RESTORE follow-up goes. A line with a
 `before` never rewrites the baseline file, and its change is in HEAD while `git diff --quiet
-<before> HEAD -- notes/ _build/frag/ cheatsheet/` fails.
+<before> HEAD -- <the patch's paths>` fails.
 
 | Mark | Open | Where it goes on |
 |---|---|---|
@@ -356,12 +364,12 @@ sheet may build on it. A line marked `dispatched` gets the field `drop` and wait
 hand-back, which merges nothing (Step 5.5), so no live writer loses its worktree and no earlier
 writer's hand-back passes for a later one's; a line marked `merging` finishes its merge first (Step
 5.5.3). Then a line whose change isn't in HEAD (it has no `before`, or `git diff --quiet <before>
-HEAD -- notes/ _build/frag/ cheatsheet/` passes) is struck through as `dropped`, once any worktree
+HEAD -- <the patch's paths>` passes) is struck through as `dropped`, once any worktree
 and branch its mark names are removed. One whose change is in HEAD gets a follow-up from the brief's
 RESTORE form (its `drop` field cleared), which puts the files `git diff --name-only <before> HEAD --
-notes/ _build/frag/ cheatsheet/` lists back as they stood at `before` (each one modified, never
+<the patch's paths>` lists back as they stood at `before` (each one modified, never
 added or deleted, Step 5.5.2; `--stat` would shorten a long path), checked like any follow-up. The
-student sees `git diff <before> HEAD -- notes/ _build/frag/ cheatsheet/` first, but while a mock is
+student sees `git diff <before> HEAD -- <the patch's paths>` first, but while a mock is
 untaken its `--stat` only, and the follow-up is offered as "back to the text at `before`": the
 change itself waits for Step 5.5.7.
 
@@ -399,9 +407,18 @@ already attempted in full gets `yes, attempted` in the new row at once (Step 7).
   and the cram night own that.
 - When every part of a set has been attempted or its solution shown, in walk-throughs and quizzes
   together, the MANIFEST.md row whose Notes say `solutions to <that set>`, if there is one, gets
-  `yes, attempted` in its Answers cell: the notes and sheets may quote it from then on
-  (`04-write`). A check waiting on the set (Step 6) runs then. During a build the cell waits
-  under `## Waiting checks` for the build's end (Step 1).
+  `yes, attempted` in its Answers cell: the notes and sheets may quote it from then on (`04-write`).
+  With no such row, the set's own row's Answers cell becomes `no, attempted YYYY-MM-DD` (today's
+  date), the one place `05-verify` step 5's questions check reads it. A check waiting on the set
+  (Step 6) runs then. During a build the cell waits under `## Waiting checks` for the build's end
+  (Step 1).
+- Once a set is attempted (its solutions row reads `yes, attempted`, or with no solutions row its
+  own row's Answers cell reads `no, attempted YYYY-MM-DD`), each `_build/held.md` entry that names
+  it is offered back as a patch (FB-191): a passage `05-verify` step 5 cut or held back because it
+  overlapped that set. Show the student its section and its original text, and on their yes dispatch
+  it as Step 5 says. Remove the entry once its patch merges or the student declines it. While
+  another set is unattempted, the passage runs `05-verify` step 5's questions check against that set
+  first, and a hit waits for that set too.
 - This bookkeeping (the log, STATUS, MANIFEST.md's Answers cell) and `_build/verify/` are the
   main session's. Every change to the notes' or a sheet's text is a writer's (hard rule 9);
   refitting a sheet after one (`07-cheatsheet` step 4's `--fs`, a block moved between sides) is a

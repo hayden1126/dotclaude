@@ -16,7 +16,8 @@ key's answer is searched in each reading of its Markdown and as written (a lone 
 true-or-false answer's witness on its own, however the verdict leads into it. The output names
 the key, the part and the place (no part once past an article), never an answer. An Answer:
 line outside a bare ## Question N block (a titled heading, Variants, before any heading) is
-refused, and so is bad usage (a file that isn't UTF-8 among it): exit 2."""
+refused, and so is bad usage (a file that isn't UTF-8 among it): exit 2, on stderr. The result,
+each hit and the LEAK or LEAK OK line, goes to stdout."""
 import os
 import subprocess
 import sys
@@ -144,8 +145,8 @@ class Leak(unittest.TestCase):
             with self.subTest(name):
                 rc, out, err = self.run_on(page)
                 self.assertEqual(rc, 1, out + err)
-                self.assertIn(message, err)
-                self.assertTrue(out.startswith("LEAK: "), out)
+                self.assertIn(message, out)
+                self.assertTrue(out.splitlines()[-1].startswith("LEAK: "), out)
 
     def test_every_format_character_is_invisible(self):
         # A browser draws none of them, so none splits a phrase (round 10).
@@ -158,11 +159,18 @@ class Leak(unittest.TestCase):
                   if unicodedata.category(chr(c)) == "Cf" and not leak.INVISIBLE.match(chr(c))]
         self.assertEqual(missed, [])
 
+    def test_the_result_goes_to_stdout(self):
+        # A build reads one stream: each hit and the LEAK line on stdout, nothing on stderr.
+        rc, out, err = self.run_on(self.edit("</main>", "<p>False: two disjoint triangles</p></main>"))
+        self.assertEqual((rc, err), (1, ""))
+        self.assertEqual(out.splitlines()[0][:52], "mock_leak: mock-exam1-key.md Q4(c): its answer is in")
+        self.assertTrue(out.splitlines()[-1].startswith("LEAK: 1 found"), out)
+
     def test_every_hit_is_listed(self):
         rc, out, err = self.run_on(self.edit("</main>", "<p>False: two disjoint triangles</p>"
                                                         "<p>False: two disjoint triangles</p></main>"))
         self.assertEqual(rc, 1)
-        self.assertEqual(err.count("mock-exam1-key.md Q4(c): its answer is in the page"), 2)
+        self.assertEqual(out.count("mock-exam1-key.md Q4(c): its answer is in the page"), 2)
         self.assertIn("LEAK: 2 found", out)
 
     def test_a_longer_word_and_a_short_value_dont_count(self):
@@ -176,16 +184,16 @@ class Leak(unittest.TestCase):
         with open(key, "w", encoding="utf-8") as f:
             f.write("# ANSWER KEY: x\n\n## Question 4\n\n**(b)** Answer: **False**: a *triangle* plus "
                     "an isolated `vertex`.\n")
-        rc, _, err = self.run_on(self.edit("</main>", "<p>False: a triangle plus an isolated vertex</p></main>"),
+        rc, out, err = self.run_on(self.edit("</main>", "<p>False: a triangle plus an isolated vertex</p></main>"),
                                  key=key)
         self.assertEqual(rc, 1)
-        self.assertIn("styled-key.md Q4(b): its answer", err)
+        self.assertIn("styled-key.md Q4(b): its answer", out)
         with open(key, "w", encoding="utf-8") as f:
             f.write("# ANSWER KEY: x\n\n## Question 4\n\n**(b)** Answer: _False_: a __triangle__ plus an isolated vertex\n")
-        rc, _, err = self.run_on(self.edit("</main>", "<p>False: a triangle plus an isolated vertex</p></main>"),
+        rc, out, err = self.run_on(self.edit("</main>", "<p>False: a triangle plus an isolated vertex</p></main>"),
                                  key=key)
         self.assertEqual(rc, 1)
-        self.assertIn("styled-key.md Q4(b): its answer", err)
+        self.assertIn("styled-key.md Q4(b): its answer", out)
 
     def test_each_reading_of_an_answer_is_searched(self):
         # Round 5: a < in a Markdown page's math opened a "tag" that hid the rest; LaTeX markup,
@@ -208,9 +216,9 @@ class Leak(unittest.TestCase):
         }
         for name, (text, needle) in cases.items():
             with self.subTest(name):
-                rc, _, err = self.run_on(args=[self.write(name, text), key])
+                rc, out, err = self.run_on(args=[self.write(name, text), key])
                 self.assertEqual(rc, 1, err)
-                self.assertIn(f"read-key.md {needle} is in the page", err)
+                self.assertIn(f"read-key.md {needle} is in the page", out)
         # The other ways a key writes a verdict with its witness, a lone ** kept, Markdown a page
         # shows as written, and LaTeX's escapes (round 6).
         key2 = self.write("read2-key.md", "# ANSWER KEY: x\n\n## Question 1\n\n"
@@ -234,9 +242,9 @@ class Leak(unittest.TestCase):
         }
         for name, (text, needle) in cases.items():
             with self.subTest(name):
-                rc, _, err = self.run_on(args=[self.write(name, text), key2])
+                rc, out, err = self.run_on(args=[self.write(name, text), key2])
                 self.assertEqual(rc, 1, err)
-                self.assertIn(f"read2-key.md {needle} is in the page", err)
+                self.assertIn(f"read2-key.md {needle} is in the page", out)
         for name, text, needle in (("esc.tex", "x\\_1 = 3 and x\\_2 = 5\\\\", "Q1(b): its answer"),
                                    ("hyph.tex", "False: two dis\\-joint\\,triangles", "Q1(d): its answer"),
                                    ("bf.tex", "{\\bf False}: two disjoint\\\\\ntriangles", "Q1(d): its answer"),
@@ -252,9 +260,9 @@ class Leak(unittest.TestCase):
                                    ("quote.md", "> **False**: two disjoint\n> triangles", "Q1(d): its answer"),
                                    ("link.md", "False: two [disjoint](https://x.example/d) triangles", "Q1(d): its answer")):
             with self.subTest(name):
-                rc, _, err = self.run_on(args=[self.write(name, text), key])
+                rc, out, err = self.run_on(args=[self.write(name, text), key])
                 self.assertEqual(rc, 1, err)
-                self.assertIn(f"read-key.md {needle} is in the page", err)
+                self.assertIn(f"read-key.md {needle} is in the page", out)
         # Past an SVG text, a block still splits a word (round 10).
         rc, out, err = self.run_on(self.edit("</main>", "<svg><text>x</text></svg><p>False: two dis</p>"
                                                         "<p>joint triangles</p></main>"))
@@ -270,13 +278,13 @@ class Leak(unittest.TestCase):
         self.assertEqual(rc, 0, out)
         cram = self.write("cram-order.md", read(os.path.join(FIXTURE, "cram-order.md")).replace(
             "## Tonight", "**False**: two *disjoint* `triangles`, and _False_: a __triangle__ plus an isolated vertex\n\n## Tonight"))
-        rc, _, err = self.run_on(args=[cram, KEY])
+        rc, out, err = self.run_on(args=[cram, KEY])
         self.assertEqual(rc, 1)
-        self.assertIn("Q4(c): its answer is in the page (the page)", err)
-        self.assertIn("Q4(b): its answer is in the page (the page)", err)
-        self.assertEqual(err.count("Q4(c): its answer is in the page"), 1, "one copy, read three ways, counts once")
-        rc, _, err = self.run_on("<p>False: two disjoint triangles</p>")
-        self.assertIn("Q4(c): its answer is in the page (the page)", err)
+        self.assertIn("Q4(c): its answer is in the page (the page)", out)
+        self.assertIn("Q4(b): its answer is in the page (the page)", out)
+        self.assertEqual(out.count("Q4(c): its answer is in the page"), 1, "one copy, read three ways, counts once")
+        rc, out, err = self.run_on("<p>False: two disjoint triangles</p>")
+        self.assertIn("Q4(c): its answer is in the page (the page)", out)
 
     def write(self, name, text):
         path = os.path.join(self.tmp.name, name)
@@ -290,15 +298,15 @@ class Leak(unittest.TestCase):
         page = self.edit("</main>", "<p>Kruskal picks AB first, giving eleven spanning trees.</p></main>")
         rc, out, err = self.run_on(page, args=[os.path.join(self.tmp.name, "edited.html"), KEY, other, values])
         self.assertEqual(rc, 1, out + err)
-        self.assertIn("mock-exam1-2-key.md Q1(a): its answer is in the page", err)
-        self.assertIn("mock-values-key.md exam1-2 Q3(b): its answer is in the page", err)
+        self.assertIn("mock-exam1-2-key.md Q1(a): its answer is in the page", out)
+        self.assertIn("mock-values-key.md exam1-2 Q3(b): its answer is in the page", out)
 
     def test_a_values_file_with_no_values_is_fine(self):
         values = self.write("mock-values-key.md", "# KEY VALUES: the mocks' computed answers\n\n> **STOP.**\n\n## proofs\n")
         rc, out, err = self.run_on(args=[os.path.join(self.tmp.name, "edited.html"), KEY, values])
         self.assertEqual(rc, 0, err)
         other = self.write("plain-key.md", "# ANSWER KEY: x\n\n## Question 1\n")
-        rc, _, err = self.run_on(args=[os.path.join(self.tmp.name, "edited.html"), KEY, other])
+        rc, out, err = self.run_on(args=[os.path.join(self.tmp.name, "edited.html"), KEY, other])
         self.assertEqual(rc, 2)
         self.assertIn("plain-key.md has no **(x)** Answer: lines", err)
 
@@ -307,14 +315,14 @@ class Leak(unittest.TestCase):
                            ("under Variants", "## Question 1\n\n**(a)** Answer: 6\n\n## Variants\n\n**(b)** Answer: x\n"),
                            ("before any heading", "**(a)** Answer: twelve edges\n")):
             with self.subTest(name):
-                rc, _, err = self.run_on(key=self.write("bad-key.md", "# ANSWER KEY: x\n\n" + text))
+                rc, out, err = self.run_on(key=self.write("bad-key.md", "# ANSWER KEY: x\n\n" + text))
                 self.assertEqual(rc, 2)
                 self.assertIn("an Answer: line outside a bare ## Question N block", err)
 
     def test_a_hit_after_a_part_names_no_part(self):
-        rc, _, err = self.run_on(self.edit("<p>The directed graph below", "<p>False: two disjoint triangles. The directed graph below"))
+        rc, out, err = self.run_on(self.edit("<p>The directed graph below", "<p>False: two disjoint triangles. The directed graph below"))
         self.assertEqual(rc, 1)
-        self.assertIn("Q4(c): its answer is in the page (view-paper)", err)
+        self.assertIn("Q4(c): its answer is in the page (view-paper)", out)
 
     def test_an_earlier_key_as_the_page(self):
         # The student reads an earlier mock's key before the later attempts; its own title and
@@ -323,12 +331,12 @@ class Leak(unittest.TestCase):
         later = self.write("mock-exam1-2-key.md", "# ANSWER KEY: x\n\n## Question 1\n\n**(a)** Answer: Kruskal picks AB first\n")
         rc, out, err = self.run_on(args=["--no-markers", earlier, later])
         self.assertEqual(rc, 1, out + err)
-        self.assertIn("mock-exam1-2-key.md Q1(a): its answer is in the page", err)
-        self.assertNotIn("the key's phrase", err)
+        self.assertIn("mock-exam1-2-key.md Q1(a): its answer is in the page", out)
+        self.assertNotIn("the key's phrase", out)
         rc, out, err = self.run_on(args=["--no-markers", self.write("plain-key.md", read(KEY)), later])
         self.assertEqual((rc, err), (0, ""), out)
-        rc, _, err = self.run_on(args=[earlier, later])
-        self.assertIn('the key\'s phrase "answer key" is in the page', err)
+        rc, out, err = self.run_on(args=[earlier, later])
+        self.assertIn('the key\'s phrase "answer key" is in the page', out)
 
     def test_a_file_that_isnt_utf8_is_bad_usage(self):
         latin = os.path.join(self.tmp.name, "latin-key.md")
@@ -340,9 +348,10 @@ class Leak(unittest.TestCase):
         for args, name in (([os.path.join(self.tmp.name, "edited.html"), KEY, latin], "latin-key.md"),
                            ([page, KEY], "latin.html")):
             with self.subTest(name):
-                rc, _, err = self.run_on(args=args)
+                rc, out, err = self.run_on(args=args)
                 self.assertEqual(rc, 2, err)
                 self.assertIn(f"{name} isn't UTF-8 text", err)
+                self.assertEqual(out, "")
 
     def test_bad_usage(self):
         empty = os.path.join(self.tmp.name, "empty-key.md")
@@ -353,9 +362,116 @@ class Leak(unittest.TestCase):
                                       ("a missing page", {"args": [missing, KEY]}, "none.html"),
                                       ("one argument", {"args": [KEY]}, "usage:")):
             with self.subTest(name):
-                rc, _, err = self.run_on(**kwargs)
+                rc, out, err = self.run_on(**kwargs)
                 self.assertEqual(rc, 2)
                 self.assertIn(message, err)
+                self.assertEqual(out, "")
+
+
+# A synthetic set's extract, as 02-extract writes one: a part block with its notes lines.
+SET = """# HW9 extract
+
+### [HW9 Q2 stem] Setup
+Pages: [HW9 p.1]
+Consider the weighted graph on the vertices P, Q, R and S described below.
+
+### [HW9 Q2c] Path weights
+Pages: [HW9 p.2]
+Starting at vertex P, the courier relaxes every outgoing edge before choosing the cheapest unvisited
+vertex. The edges P to Q, Q to R and R to S weigh 14, 23 and 31 in that order.
+**Shape:** trace
+**Conventions:** ties broken alphabetically
+"""
+PHRASE = "the courier relaxes every outgoing edge before choosing the cheapest"
+
+
+class Questions(unittest.TestCase):
+    """The questions mode (FB-191): a notes page that rebuilds an unattempted set's question, by 8
+    words in a row or 3 numbers in order within a sentence, fails, naming the page's line and the
+    question file's line and part, never the matched text; a page with neither passes, and a run
+    that an --allow file also holds doesn't count."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tmp = tempfile.TemporaryDirectory()
+        cls.questions = cls.write("hw9.md", SET)
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.tmp.cleanup()
+
+    @classmethod
+    def write(cls, name, text):
+        path = os.path.join(cls.tmp.name, name)
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(text)
+        return path
+
+    def run_on(self, page, *extra):
+        r = subprocess.run([sys.executable, os.path.join(SCRIPTS, "mock_leak.py"), "--questions", self.questions,
+                            *extra, "--pages", page], capture_output=True, text=True, timeout=60)
+        shown = (r.stdout + r.stderr).lower()
+        self.assertNotIn("courier", shown, "the output shows the question's text")
+        self.assertNotIn("relaxes every", shown, "the output shows the question's text")
+        return r.returncode, r.stdout, r.stderr
+
+    def test_eight_words_in_a_row_are_caught_without_the_text(self):
+        page = self.write("sec2.md", "# 2 Shortest paths\n\nIn this trace *The* courier relaxes every\n"
+                                     "outgoing edge, before choosing the **cheapest** one we keep.\n")
+        rc, out, err = self.run_on(page)
+        self.assertEqual((rc, err), (1, ""), out)
+        self.assertIn(f"{page}:3: 10 words in a row match {self.questions}:9 (HW9 Q2c)", out)
+        self.assertTrue(out.splitlines()[-1].startswith("QUESTIONS: 1 found"), out)
+        # Seven words aren't enough: shorter runs are common phrasing.
+        short = self.write("sec3.md", "Here the courier relaxes every outgoing edge before stopping.\n")
+        self.assertEqual(self.run_on(short)[0], 0)
+
+    def test_an_html_fragment_split_by_tags_is_caught(self):
+        page = self.write("sec2.html", "<section>\n<p>Here <em>the courier</em> relaxes every outgoing\n"
+                                       "edge before choosing the che&shy;apest.</p>\n</section>\n")
+        rc, out, err = self.run_on(page)
+        self.assertEqual(rc, 1, out + err)
+        self.assertIn(f"{page}:2: 10 words in a row match", out)
+
+    def test_three_numbers_in_order_are_caught(self):
+        page = self.write("sec4.md", "## Example\n\nTake a path whose legs cost 14, then 23, and last 31 units.\n")
+        rc, out, err = self.run_on(page)
+        self.assertEqual(rc, 1, out + err)
+        self.assertIn(f"{page}:3: 3 numbers in the same order match {self.questions}:10 (HW9 Q2c)", out)
+        self.assertNotIn("words in a row", out)
+        # Split across two sentences, or out of order, they don't count.
+        for text in ("Legs cost 14 and 23. The last costs 31.\n", "Legs cost 23, 14 and 31.\n"):
+            with self.subTest(text):
+                self.assertEqual(self.run_on(self.write("sec5.md", text))[0], 0)
+
+    def test_a_normal_fragment_passes(self):
+        page = self.write("sec6.md", "# 2 Shortest paths [D4 p.17]\n\nDijkstra's algorithm settles one vertex per "
+                                     "round: the unvisited vertex of least tentative distance. With edges of "
+                                     "weight 5, 2 and 9 from the source, it settles the weight 2 neighbour first.\n")
+        rc, out, err = self.run_on(page)
+        self.assertEqual((rc, err), (0, ""))
+        self.assertEqual(out.strip(), "QUESTIONS OK: 1 pages checked against 1 question files")
+
+    def test_allow_drops_a_run_a_source_shares(self):
+        page = self.write("sec7.md", f"Recall that {PHRASE} vertex, as in lecture.\n")
+        self.assertEqual(self.run_on(page)[0], 1)
+        lecture = self.write("d4.md", f"### [D4 p.9] Relaxation\nIn the lecture's story {PHRASE} vertex.\n")
+        rc, out, err = self.run_on(page, "--allow", lecture)
+        self.assertEqual((rc, err), (0, ""), out)
+
+    def test_bad_usage(self):
+        page = self.write("sec8.md", "Nothing here.\n")
+        for name, args, message in (
+                ("a missing question file", ["--questions", os.path.join(self.tmp.name, "none.md"), "--pages", page],
+                 "none.md"),
+                ("no pages", ["--questions", self.questions], "usage:"),
+                ("an empty directory", ["--questions", tempfile.mkdtemp(dir=self.tmp.name), "--pages", page],
+                 "no question file")):
+            with self.subTest(name):
+                r = subprocess.run([sys.executable, os.path.join(SCRIPTS, "mock_leak.py"), *args],
+                                   capture_output=True, text=True, timeout=60)
+                self.assertEqual((r.returncode, r.stdout), (2, ""))
+                self.assertIn(message, r.stderr)
 
 
 if __name__ == "__main__":

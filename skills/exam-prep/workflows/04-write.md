@@ -1,6 +1,6 @@
 # 04 Write
 
-Baseline as of 2026-10-20; changes only via `12-retro`.
+Baseline as of 2026-11-10; changes only via `12-retro`.
 
 Writing turns the extracts into the topic notes, `notes/NN-<slug>.md`, one file per backbone
 section. The notes are the source of truth: the page, the cheat sheet and the mock all derive from
@@ -55,6 +55,11 @@ lines). What every writer is held to, beyond STYLE:
   it as a banner.
 - **Each section ends with its Must-know checklist** (FB-078), `sec-N-must-know`, every point a
   link into the section (in plain-text notes, step 6, a pointer naming the subsection).
+- **Depth labels** (S33). Each subsection opens with its depth, from CLAUDE.md's exam-format
+  statement (the brief quotes its lines on what is memorized and what is provided), or marked
+  inferred with the reason; where the statement sorts them, the Must-know list's last two items
+  are its `Written from memory:` and `Provided on the exam:` lines, list items like the rest (as
+  paragraphs after the list, the Review view would hide them).
 
 ## Step 4: Check what came back
 

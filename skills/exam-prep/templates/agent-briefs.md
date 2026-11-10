@@ -1,6 +1,6 @@
 # Agent briefs
 
-Baseline as of 2026-10-20; changes only via `12-retro`.
+Baseline as of 2026-11-10; changes only via `12-retro`.
 
 One brief per role the pipeline spawns. Fill the `{{...}}` slots per agent and keep the rest as
 written. Each brief follows the delegation skill's shape (purpose, end state, scope, hard
@@ -189,8 +189,19 @@ These are the Markdown forms the page's converter reads (06-site); use them exac
   for their conventions only, never quoted. No mock key appears in the notes.
 - Depth: {{concise | full}}, as the backbone marks it. A slide-only derivation that no practice
   question asks for goes in a Background quote (Format).
+- Depth label (STYLE.md S33): each subsection opens, under its heading, with `**Depth:** <Know
+  cold | Use | Recognize | Not on {{EXAM}}>`, then the instructor's memorization or format
+  statement it rests on, cited, or `(inferred: <why>)`. {{FORMAT STATEMENT: the exam-format
+  statement's lines on what is memorized and what is provided, quoted from CLAUDE.md with their
+  source | NONE: no statement says; mark each label inferred}}.
+- Names in a trace or a state (nodes, states, variables, table rows) go in backticks in worked
+  examples: CONVERT.md keeps them as code, and the notes-to-checker comparison counts a name only
+  in backticks (K67).
 - The last subsection is `## {{N}}.K Must know {#sec-{{N}}-must-know}`: one line per point, each
-  ending with a link into this section, `([§{{N}}.2](#<id>))`.
+  ending with a link into this section, `([§{{N}}.2](#<id>))`. {{FORMAT STATEMENT: Its last two
+  items are list items like the rest, `- Written from memory: ...` and then `- Provided on the
+  exam: ...`, each naming this section's points as the statement sorts them (written as
+  paragraphs after the list, the Review view hides them). | NONE: drop this sentence.}}
 - {{PLAIN TEXT: the student reads in a plain-text tool, so no LaTeX (plain Unicode math), pipe
   tables, no `{#id}` anchors, and cross-references and Must-know pointers as text naming the
   section ("§{{M}}.K <its title>").}}
@@ -234,7 +245,8 @@ main session checks each finding and applies the fixes.
      coverage matrix maps to it, except the official answers of the sets named below.
   3. Direction and causation: which condition guarantees which result, which proof needs which
      property; no ambiguous implication.
-  4. STYLE: the rest of STYLE.md.
+  4. STYLE: the rest of STYLE.md, S33 among it: each subsection states its depth, citing the
+     instructor's statement or marked inferred with the reason.
 - Answers: the notes quote an answer only from a set MANIFEST.md marks `yes, attempted`.
   {{UNATTEMPTED: The student hasn't attempted <those sets>: their official answers sit in the
   extracts for their conventions only, a quote from one in the notes is a blocker, and no finding
@@ -268,6 +280,48 @@ often than any other. Every line must be true, carry its conditions, and point w
   there (never a `*-key.md` file or the mock), not {{ROOT}}/_build/verify/mock_key.py, and no file
   MANIFEST.md marks `reserved`. A search (Grep, Glob) stays inside the notes, the extracts and
   {{CONDENSATION}}: one over {{ROOT}} returns key lines.
+```
+
+## Cold read (stage 05)
+
+Role: `reviewer`: it reads and reports; the main session checks each finding and applies the
+fixes (`05-verify` step 3b, FB-109). One per two or three section files, spawned with the section
+reviewers. It sees the notes alone, so what it can't follow is what a student who skipped the
+lectures can't follow.
+
+```text
+# Brief: read §{{SECTIONS}} of the notes cold, as a student who skipped the lectures
+
+## Purpose
+The student may learn these sections from the notes alone, with no lecture behind them. A section
+reviewer reads with the sources open and fills a gap without noticing it. You read only the notes,
+so each place you can't follow is a place the student can't either. You report; the main session
+checks each finding and applies the fixes.
+
+## End state
+- Done means: every finding below, each with its line in the notes file, the words quoted, and
+  what is missing. Each is a major.
+- Artifact path: report only.
+- Report: at most 700 words, then the JSON block (status, summary, artifacts, blocked_actions).
+
+## Scope
+- Work in: {{ROOT}}, read only.
+- Read {{ROOT}}/notes/{{FILES}} in order, and nothing else: no extract, no source, no checker
+  output, no backbone. A term another section defines counts as defined only when the text links
+  to it.
+- List, by line:
+  1. each term or symbol used before it is defined (STYLE S14, S15);
+  2. each sentence that can't be understood alone, without the lecture (S18);
+  3. each pitfall or table cell that doesn't state its exact condition and give a mini-instance
+     (S23);
+  4. each pair of look-alike notions (symbols, operators, variants of one procedure) with no single
+     table comparing them (S31);
+  5. each optional notation that doesn't say when it is required, when it is allowed, and whether
+     leaving it out costs marks (S28).
+- Don't flag: whether a fact is correct, typos, rendering and citations. Other reviews own those.
+- Out of scope: never open anything under {{ROOT}}/practice/, which holds answer keys,
+  {{ROOT}}/_build/, {{ROOT}}/sources/, or a file MANIFEST.md marks `reserved`. A search (Grep,
+  Glob) stays inside {{ROOT}}/notes/: one over {{ROOT}} returns key lines.
 ```
 
 ## Mock writer (stage 08)
@@ -465,7 +519,7 @@ meanwhile and merges your branch when you report.
 
 ## Scope
 - Work in: your worktree of {{ROOT}}. Write only inside `notes/`, `_build/frag/` and
-  `cheatsheet/`{{PAGE:, plus the rebuilt `_build/notes.html`}}, never in a subfolder of
+  `cheatsheet/`{{PAGE:, plus the rebuilt `_build/notes.html`}}; never in a subfolder of
   `cheatsheet/`: each holds a finished exam's sheets, frozen.
 - The change, exactly as the student approved it, in the notes, a sheet or both:
   - {{NOTES: `notes/{{FILE}}`, {{WHERE: after the line that starts "<its first words>" |
@@ -479,12 +533,20 @@ meanwhile and merges your branch when you report.
     report.}}
   - {{RESTORE: The student dropped an earlier change: put each file below back as it stood at
     commit `{{BEFORE}}`, `git show {{BEFORE}}:<path> > <path>`, then rebuild as below
-    (`_build/notes.html` is rebuilt, never restored): {{THE FILES `git diff --name-only {{BEFORE}}
+    (`notes.html` is rebuilt, never restored): {{THE FILES `git diff --name-only {{BEFORE}}
     HEAD -- notes/ _build/frag/ cheatsheet/` LISTS}}.}}
 - Every copy (FB-106): search `notes/`, `_build/frag/` and `cheatsheet/` for {{THE OLD PHRASE OR
   FACT}}, and make the same change wherever the fact is stated (a Must-know line, a pitfall box, a
   sheet line), except in a subfolder of `cheatsheet/`. A wrong fact is fixed on both sheets; a line
   a mock prompted goes on the final sheet only.
+- The exam-day map's cram block is generated: `assemble.py` renders it from
+  `practice/cram-order.md` on every build, and it lives in no fragment. Never write a cram block or
+  an `open` attribute into `_build/frag/examnav.html` (`assemble.py` refuses both); a cram row that
+  states the old fact is the main session's to fix after the merge.
+- A worked example or pitfall tagged `.rv` (the Review view, `_build/CONVERT.md`) keeps its tag in
+  the notes and in the fragment. When `assemble.py` fails on the Review view's minutes after your
+  change, stop and report it, blocked: the main session untags (`07-cheatsheet`, "Tag the
+  review").
 - {{PAGE: From the worktree root, `python3 -I {{SKILL}}/scripts/assemble.py` and `python3 -I
   {{SKILL}}/scripts/linkcheck.py --html _build/notes.html` both exit 0. | PLAIN TEXT: There is no
   page and no link check (the notes have no anchors): check by eye that each `§N.M` reference you
@@ -500,8 +562,133 @@ meanwhile and merges your branch when you report.
   by you, and an example is the notes' own or a fresh one from that file: never a homework's, a
   recitation's or a mock's numbers.
 - Out of scope: everything under `practice/` (quarantined keys), `_build/verify/` but
-  `examples.out.md`, `sources/`, and any search outside the three directories above: one over the
+  `examples.out.md`, `sources/`, and any search outside the directories above: one over the
   hub root returns key lines. Note anything else that looks wrong in your report; don't fix it.
+```
+
+## Key recheck (stage 08, the cram night)
+
+Role: `writer`, spawned with `isolation: "worktree"`, `run_in_background: true` and the description
+`Key recheck` on the Agent call, only from `08-practice` step 8.1's key gate: it opens the untaken
+mocks' keys, which the cram night's session never opens, since the student reads that session's
+chat (FB-159). The student is told not to open its transcript. The gate spawns one before a mock's
+attempt when the key checker fails that mock, when its leak checks hit a leak part (a part whose
+answer a page the student reads holds, and whose remedy edits the mock or its key), or when STATUS
+gained a `Source added: <doc> <date>: done` or a `Reference changed:` line after the mock's `Key
+checked:` line; one writer covers every such cause and every untaken mock, and never two run at
+once (both rewrite `practice/mock-values-key.md`). The attempt waits for its merge. The
+reference-change variant below serves a gate whose causes hold no new source, and the leak-part
+case after it adds the leak parts to either brief.
+
+```text
+# Brief: recheck the untaken {{EXAM}} mock keys against new sources on {{TOPICS}}
+
+## Purpose
+New sources came in after the mock keys were written (a staff answer, a recitation the student
+brought, say), and the notes now carry them. A key written before them may mark a right answer
+wrong. The student takes {{THE UNTAKEN MOCKS}} tonight and marks each against its key, so every
+part the new sources touch must be right before then. The student reads the main session's chat,
+so nothing you report may show a key: part ids only.
+
+## End state
+- Done means: every part of {{THE UNTAKEN MOCKS}} the new sources touch checked against them,
+  each wrong one's key fixed, in one commit on your branch (none when no part needed a change and
+  Scope names no leak part), and each mock's line from the key checker says KEY OK, a `question` part left out of the run as
+  Scope says.
+- Artifact path: your branch, in your worktree of {{ROOT}}.
+- Report: your whole reply is the JSON block (status, summary, artifacts, blocked_actions), with
+  no text before or after it: you run in the background, and your reply reaches the student's
+  chat as its completion notice. artifacts[0] is `<branch>@<sha>`: your commit, or, when nothing
+  needed a change and you committed nothing, your worktree's HEAD (`git rev-parse --short HEAD`),
+  the hub commit you started from. The summary lists, per mock,
+  each part id you checked and one word for it: `changed`, `unchanged`, or `question` (the
+  question itself would need rewording). A `blocked` report's summary and blocked_actions name
+  what stopped you by part id and file name only. Nothing else, in the reply or the commit
+  message: no key text, value, verdict, witness or working.
+
+## Scope
+- Work in: your worktree of {{ROOT}}. Write only `practice/mock-<slug>-key.md` for the slugs
+  {{SLUGS}}, `practice/mock-values-key.md` (the key checker writes it) and
+  `_build/verify/mock_key.py`.
+- The new sources: {{EACH NEW SOURCE'S TEXT, QUOTED, WITH ITS SOURCE}}. The notes sections they
+  changed: {{§N.M LIST}}.
+- Read: `_build/MOCK.md` (the key format), each of those mocks and its key,
+  `_build/verify/mock_key.py`, `practice/mock-values-key.md`, the notes (`notes/`, read only) and
+  `_build/verify/examples.out.md`.
+- The parts: each part whose `Topic:` is a section a new source changed, and each part the key
+  checker now fails. Check each one's answer against the new sources and the notes as they now
+  stand.
+- Fix as `08-practice` step 4 says: a computed answer is copied from `practice/mock-values-key.md`
+  after `python3 -I _build/verify/mock_key.py` writes it, never worked by hand; a reasoned answer
+  is cited from the notes. Leave the mock files as they are: a part whose question would need
+  rewording is reported `question`. Its key's answer goes: its line reads `**(x)** Answer:
+  Skipped tonight: <slug> <part id> needs rewording.` and the working under it is deleted, since
+  the student reads the key after the attempt and must not find an answer you judged no longer
+  fits (the slug and part id keep the line from being another key's answer, which the leak check
+  would flag). Its part id goes into `SKIP` in `_build/verify/mock_key.py` (`{"<slug>":
+  ["Q2(a)"]}`), and everything about that part in `values()` goes under `if not
+  skipped("<slug>", "Q2(a)"):`: the reference's run on its instance, each assert about it, and its
+  `value()` or `reasoned()` call. Python works out `value()`'s arguments before `value()` can drop
+  the part, so an unguarded computation that raises on a degenerate instance stops the whole run.
+  The checker then leaves the part out and holds every other part to KEY OK.
+- Run the key checker from the worktree root, `python3 -I _build/verify/mock_key.py`, until each
+  mock's line says KEY OK. Survey with `git status` and `git diff --stat` only, never a command
+  that prints a diff, and commit with the subject `Keys: recheck {{SLUGS}} after a new source`.
+  A run that stops short commits nothing.
+- Never written: `notes/` and `cheatsheet/` (a notes fix is the main session's: report it,
+  blocked). Out of scope: a taken mock's key, every subfolder of `practice/` (a finished exam's
+  archive), `_build/verify/` but the files above (a change to the reference is the main session's:
+  report it, blocked), `sources/`, and any search outside the files above.
+```
+
+**Reference-change variant** (the key gate's causes hold no new source: `Reference changed:`
+lines, left by `08-practice` step 4's rerun clause, parts the key checker fails, or leak parts
+alone. The parts of an untaken mock the key checker now fails need their answers rewritten from
+the new values; there is no source text and no section list). Replace the title, Purpose, the End
+state's "Done means" line, and the Scope's new-sources and parts lines with the text below, and end
+the commit subject `after a reference change`, or `after a leak hit` when leak parts are the only
+cause. The Report line stands as it is: the whole reply is the JSON block, part ids and file names
+only.
+
+```text
+# Brief: fix the untaken {{EXAM}} mock keys' parts the key gate names
+
+## Purpose
+{{WITH A `Reference changed:` LINE: The reference that computes the mock keys changed (WHAT
+CHANGED, NO VALUE), so a key answer copied from the old values may now be wrong. | WITH A FAILING
+PART AND NO SUCH LINE: The key checker fails a part, so its key answer no longer matches the
+values. | WITH LEAK PARTS ONLY: drop this sentence.}} The student takes {{THE UNTAKEN MOCKS}}
+tonight and marks each against its key, so every part named below must be right, or skipped,
+before then. The student reads the main session's chat, so nothing you report may show a key:
+part ids only.
+
+- Done means: every part of {{THE UNTAKEN MOCKS}} the key checker fails rewritten from the new
+  values, in one commit on your branch (none when no part fails and Scope names no leak part), and
+  each mock's line from the key checker says KEY OK, a `question` part left out of the run as
+  Scope says.
+- The parts: run `python3 -I _build/verify/mock_key.py` first, before any change; each part it
+  reports FAIL on. A part whose instance the new reference makes degenerate (an assert names it)
+  would need fresh numbers: report it `question` and skip it as Scope says.
+```
+
+**Leak-part case** (either brief, when the key gate's leak checks hit a leak part, `08-practice`
+step 8.1): the gate names each one by slug and part id, and the writer skips it, since its remedy
+(fresh numbers, a reworded question) is no writer's. Add the paragraph below to the Purpose, after
+its first; the Done means line to the End state, after the brief's own; and the leak parts line to
+the Scope, right after the brief's parts line, so "the next item" is the Fix item.
+
+```text
+The main session's leak checks found the answers of {{EACH LEAK PART: `<slug> <part id>`, ...}}
+on a page the student reads before the attempt. Its remedy (fresh numbers, a reworded question) is
+not yours to make, so tonight each of those parts is skipped.
+
+- Done means, too: each leak part in `SKIP` in `_build/verify/mock_key.py`, its key's answer
+  replaced by the `Skipped tonight` line Scope gives and its working deleted, in the same one
+  commit, and reported `question`.
+
+- The leak parts: {{EACH LEAK PART: `<slug> <part id>`, ...}}. Report each `question`, unchecked,
+  and skip it as the next item says. A leak part is skipped, never rewritten, even when the key
+  checker also fails it.
 ```
 
 ## Polish reader (stage 10)
@@ -661,11 +848,12 @@ Cite timestamps and the workflow step.
 ### 4. The hub's records
 {{RECORDS: One line per record you read, saying what it holds for the retro and which C or G items
 cite it: the tutor log's tables and every `## Patterns` line, quoted; each polish log's pass and
-approved list; the reopen log; each hunk of the hub-local edits (the hub's copy against the skill's)
-that looks like an edit made in the hub, not a change the skill made since the hub copied it
-({{SKILL}}/references/CHANGELOG.md lists those); each source-added log; STATUS's judgment calls;
-PLAN.md's Decisions. A record that is missing or empty says so. | NONE: "Another reader has the
-hub's records."}}
+approved list; each `_build/logs/skill-fixes.md` entry (a skill-file bug fixed in the hub, FB-014:
+its date, what, where, the hub's diff); the reopen log; each hunk of the hub-local edits (the hub's
+copy against the skill's) that looks like an edit made in the hub, not a change the skill made since
+the hub copied it ({{SKILL}}/references/CHANGELOG.md lists those); each source-added log; STATUS's
+judgment calls; PLAN.md's Decisions. A record that is missing or empty says so. | NONE: "Another
+reader has the hub's records."}}
 
 Stage tags: `00-intake`, `01-ingest`, `02-extract`, `03-backbone`, `04-write`, `05-verify`,
 `06-site`, `07-cheatsheet`, `08-practice`, `09-tutor`, `10-polish`, `11-next-exam`, `12-retro`,
@@ -688,8 +876,8 @@ Stage tags: `00-intake`, `01-ingest`, `02-extract`, `03-backbone`, `04-write`, `
   clipped`). Don't open the full transcript: it holds whole tool calls and results, a key's among
   them.
 - {{RECORDS: The hub's records, under {{ROOT}}: STATUS.md, PLAN.md, MANIFEST.md, CLAUDE.md, and
-  {{ROOT}}/_build/logs/ (`tutor.md`, `polish-*.md`, `source-*.md`, and any other log there but the
-  `reopen-*` files). The window is {{SINCE: from {{SINCE}} | NONE: from the start}} to {{UNTIL}}:
+  {{ROOT}}/_build/logs/ (`tutor.md`, `polish-*.md`, `source-*.md`, `skill-fixes.md`, and any other
+  log there but the `reopen-*` files). The window is {{SINCE: from {{SINCE}} | NONE: from the start}} to {{UNTIL}}:
   leave out what the records date outside it (a log's date is in its name, a tutor section's in its
   heading, a line's beside it), and mark an item from an undated line `undated`.{{REOPENED: The hub
   was reopened for its next exam: read {{SAVED STATUS}} and {{SAVED PLAN}} in place of its STATUS.md

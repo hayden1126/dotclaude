@@ -1,6 +1,6 @@
 # Lessons: tool and environment gotchas
 
-Baseline as of 2026-10-20; changes only via `12-retro`.
+Baseline as of 2026-11-10; changes only via `12-retro`.
 
 Each lesson was hit in a past run. Ids are stable (`L01`), struck through when retired, never
 renumbered. Evidence ids work as in `feedback-log.md`. The stage column says where a workflow
@@ -43,6 +43,7 @@ should warn about it.
 | L22 | 06 | An ES module ignores `NODE_PATH`, so `import 'playwright'` fails outside a project with `node_modules`. | `verify_page.mjs` imports Playwright from an absolute path (`EXAM_PREP_PLAYWRIGHT`, else a probed install). | B4.G7 |
 | L23 | 06 | A full-page screenshot of a tall `pre` produced an unusable 720 by 20914 image. | Screenshot the element. | B3.G11 |
 | L24 | 06 | The Google Fonts link was missing, so every font silently fell back. | `verify_page.mjs` checks that the declared families loaded. | A1.G4 |
+| L25 | 06 | `scrollIntoView` on a rail link scrolls the page as well and cancels a smooth anchor jump in flight, in WebKit only; headless Chromium passes. | Scroll the rail element itself (CHASSIS C1); `verify_page.mjs` runs the long jump in WebKit. | E1.C12, E1.G13, D1.C19 |
 
 ## Publishing
 

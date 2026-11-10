@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 r"""The mock key's checker: every computable answer in a mock's key comes from the reference.
 
-exam-prep template verify-mock-key.py, baseline as of 2026-10-20; changes only via `12-retro`.
+exam-prep template verify-mock-key.py, baseline as of 2026-11-10; changes only via `12-retro`.
 Copy it to _build/verify/mock_key.py and fill the marked part. Run from the hub root:
 
   python3 -I _build/verify/mock_key.py      exit 0 only with a KEY OK line per mock
@@ -31,6 +31,17 @@ none. Parts with no value are listed as reasoned in the KEY OK line. It fails wh
 a part the mock lacks or names one twice, and when the key's parts differ from the mock's, a
 part's answer is empty, or an Answer: line sits outside a bare `## Question N` block (mock_leak.py
 would miss it), and stops, naming the file, at a mock or key that isn't UTF-8 text.
+SKIP leaves named parts out of the run: a part whose question would need rewording, which the
+key recheck writer may not do (08-practice step 8.1), so KEY OK still holds every other part to its
+value. A skipped part's value() and reasoned() calls do nothing, it needs neither, its key answer
+isn't compared (the writer replaces it with a `Skipped tonight:` line, which no value would
+match), and the KEY OK line lists it as skipped. Python works out a call's arguments before the
+call, so value() can't keep a skipped part's computation from running: everything about that part
+(the reference's run on its instance, each assert about it, its value() or reasoned() call) goes
+under `if not skipped(slug, part):`, else a reference that raises on its degenerate instance stops
+the whole run. A run that stops in a part SKIP names (its line or its own assert's message names
+it) says so; one whose line names no part says so as an if, and one in another part says nothing
+of SKIP. SKIP naming a slug not in MOCKS or a part the mock lacks fails.
 KEY OK prints only when the whole run passes. The terminal shows part ids, never an answer: the
 student may be watching. With no key written yet it still writes the values (NO KEY) and exits
 1. A run that crashes keeps the last good values file."""
@@ -57,6 +68,7 @@ ANSWER = re.compile(r"^\*\*\(([a-z])\)\*\* Answer:\s*(.*)$")
 BREAK = re.compile("[\n\r\x0b\x0c\x1c-\x1e\x85\u2028\u2029]")
 
 MOCKS = []  # ---- Fill in: the slugs of the mocks this hub has, e.g. ["exam1-1", "exam1-2"].
+SKIP = {}  # Parts left out of the run, e.g. {"exam1-1": ["Q2(a)"]}: only as 08-practice step 8.1 says.
 VALUES = {}
 REASONED = {}
 
@@ -75,9 +87,16 @@ def called(fn, slug, part):
         raise Refused(f"mock_key.py:{line}: {fn}()'s second argument isn't a part id like Q2(a)")
 
 
+def skipped(slug, part):
+    """Whether SKIP leaves this part out of the run."""
+    return part in SKIP.get(slug, ())
+
+
 def value(slug, part, computed):
     """The reference's answer to one part, formatted as the key writes it, on one line."""
     called("value", slug, part)
+    if skipped(slug, part):
+        return
     if BREAK.search(str(computed)):
         raise Refused(f"mock_key.py: value({slug!r}, {part!r}) spans lines: the key's answer is one line")
     VALUES.setdefault(slug, []).append((part, str(computed)))
@@ -86,6 +105,8 @@ def value(slug, part, computed):
 def reasoned(slug, part, why):
     """A part the reference can't compute, with why (a proof, a choice the course leaves open)."""
     called("reasoned", slug, part)
+    if skipped(slug, part):
+        return
     if not str(why).strip():
         raise Refused(f"mock_key.py: reasoned({slug!r}, {part!r}) needs a why")
     REASONED.setdefault(slug, []).append(part)
@@ -94,9 +115,10 @@ def reasoned(slug, part, why):
 def values():
     # ---- Fill in: import the reference and compute every computable part. -------------------
     # from reference import dijkstra
-    # order, dist = dijkstra(GRAPH_Q2, "S", tie="alpha")
-    # assert len(set(dist.values())) == len(dist), "exam1-1 Q2(a): a tie on distance"
-    # value("exam1-1", "Q2(a)", f"{' '.join(order)}, dist(T) = {dist['T']}")
+    # if not skipped("exam1-1", "Q2(a)"):  # the part's whole computation, as SKIP needs
+    #     order, dist = dijkstra(GRAPH_Q2, "S", tie="alpha")
+    #     assert len(set(dist.values())) == len(dist), "exam1-1 Q2(a): a tie on distance"
+    #     value("exam1-1", "Q2(a)", f"{' '.join(order)}, dist(T) = {dist['T']}")
     # reasoned("exam1-1", "Q3(b)", "a proof")
     pass
 
@@ -207,11 +229,13 @@ def check(slug):
     if not parts:
         return [], "", [f"{slug}: no parts read from {os.path.relpath(mock, HUB)} (templates/MOCK.md's format)"]
     got = VALUES.get(slug, [])
+    skip = list(SKIP.get(slug, []))
     named = [p for p, _ in got] + REASONED.get(slug, [])
     bad = [f"{slug} TWICE {p}" for p in sorted({p for p in named if named.count(p) > 1})]
     bad += [f"{slug} NOT IN THE MOCK {p}" for p in sorted(set(named) - set(parts))]
+    bad += [f"{slug} SKIP NAMES {p}, NOT IN THE MOCK" for p in skip if p not in parts]
     bad += [f"{slug} UNCHECKED {p} ({', '.join(t)}): add a value(), or a reasoned() with why"
-            for p, t in parts.items() if COMPUTABLE & set(t) and p not in named]
+            for p, t in parts.items() if COMPUTABLE & set(t) and p not in named and p not in skip]
     lines = []
     if not os.path.isfile(key):
         return lines, "", bad + [f"NO KEY {os.path.relpath(key, HUB)}: write it from practice/mock-values-key.md"]
@@ -227,30 +251,52 @@ def check(slug):
             if not ok:
                 bad.append(f"{slug} FAIL {p}")
     asserted = {p for p, _ in got}
-    rest = [p for p in parts if p not in asserted]
+    rest = [p for p in parts if p not in asserted and p not in skip]
     ok = (f"KEY OK: {slug}: {len(asserted)} of {len(parts)} parts asserted"
-          + (f"; reasoned: {', '.join(rest)}" if rest else ""))
+          + (f"; reasoned: {', '.join(rest)}" if rest else "")
+          + (f"; skipped: {', '.join(p for p in parts if p in skip)}" if skip else ""))
     return lines, ok, bad
 
 
 def run_values():
-    """values(), or a line saying where it stopped: a refused call or an assert of this file's with
-    its message (a mock and a part), anything else, an exit too, with its type and place only (its
-    message may hold a value). What the reference prints goes nowhere: a trace may show values."""
+    """None, or where values() stopped: a line to print and the text that names the stop's part,
+    which is never printed. The line: a refused call, or an assert of this file's with its message
+    (a mock and a part), anything else, an exit too, with its type and place only (its message may
+    hold a value). The text: this file's source line where it stopped, with an own assert's
+    message; None for a refused call, which no skip explains. What the reference prints goes
+    nowhere: a trace may show values."""
     try:
         with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
             values()
     except Refused as e:
-        return str(e)
+        return str(e), None
     except BaseException as e:
         frames = traceback.extract_tb(e.__traceback__)
         here = [f for f in frames if os.path.abspath(f.filename) == os.path.abspath(__file__)]
         line, last = here[-1].lineno, frames[-1]
+        source = here[-1].line or ""
         if isinstance(e, AssertionError) and last in here:
-            return f"mock_key.py:{line}: assert failed: {e}"
+            return f"mock_key.py:{line}: assert failed: {e}", f"{source}\n{e}"
         return (f"mock_key.py:{line}: values() stopped: {type(e).__name__} at {os.path.basename(last.filename)}:"
-                f"{last.lineno} (its message isn't printed: it may hold a value)")
+                f"{last.lineno} (its message isn't printed: it may hold a value)"), source
     return None
+
+
+def skip_hint(where):
+    """What a stop says of SKIP: that a skipped part's computation goes under skipped() when the
+    stop's line or message names a part SKIP names, said as an if when they name no part, and
+    nothing when they name another part (an unskipped part's own assert) or SKIP is empty."""
+    if not SKIP or where is None:
+        return None
+    rest = "its whole computation, its asserts and its value() or reasoned() call go under `if not " \
+           "skipped(slug, part):`, so they never run"
+    named = [f"{slug} {p}" for slug, parts in SKIP.items() for p in parts
+             if p in where and re.search(rf"(?<![\w-]){re.escape(slug)}(?![\w-])", where)]
+    if named:
+        return f"mock_key.py: SKIP names {', '.join(named)}, where this stop is: {rest}"
+    if PART_ID.search(where):
+        return None
+    return f"mock_key.py: if this stop is in a part SKIP names, {rest}"
 
 
 def main():
@@ -262,9 +308,19 @@ def main():
         if "values" in MOCKS:
             print("mock_key.py: a mock can't be called 'values': practice/mock-values-key.md is this script's")
             return 1
+        for slug, skip in SKIP.items():
+            if slug not in MOCKS or isinstance(skip, str) or not all(
+                    isinstance(p, str) and PART_ID.fullmatch(p) for p in skip):
+                print("mock_key.py: SKIP: a key that isn't a slug in MOCKS, or a value that isn't a list of "
+                      "part ids like Q2(a)")
+                return 1
         stopped = run_values()
         if stopped:
-            print(stopped)
+            line, where = stopped
+            print(line)
+            hint = skip_hint(where)
+            if hint:
+                print(hint)
             return 1
         with open(tmp, "w", encoding="utf-8") as out:
             out.write("# KEY VALUES: the mocks' computed answers (written by _build/verify/mock_key.py: "

@@ -1,6 +1,6 @@
 # 07 Cheat sheet
 
-Baseline as of 2026-10-20; changes only via `12-retro`.
+Baseline as of 2026-11-10; changes only via `12-retro`.
 
 The sheet the student may bring into the exam: one HTML document printed to PDF, built only when
 the exam rules allow it (FB-130). It condenses the verified notes, organized by task, the way the
@@ -8,13 +8,16 @@ student will reach for it mid-question (FB-141). When PLAN.md includes a mock (`
 this stage builds the mock sheet, `cheatsheet/<exam-slug>-mock.html`: it holds nothing derived
 from the mock and is the one published. The final sheet adds the mock-derived items after the
 attempt ("The final sheet" below, which 08 runs). Without a mock there is one sheet,
-`cheatsheet/<exam-slug>.html` (FB-133).
+`cheatsheet/<exam-slug>.html` (FB-133). With no sheet allowed, this stage tags the notes page's
+Review view instead ("Tag the review" below).
 
 ## Step 1: Check the inputs
 
-- CLAUDE.md's rules allow a sheet. Quote the rule in STATUS: its size, one side or two, whether
-  it is collected and whether it must carry a name (FB-130). Not allowed: skip this stage and log
-  it (as the build's last stage, or run alone, removing the `Build running` line).
+- CLAUDE.md's rules allow a sheet. Quote the rule in STATUS: its size, one side or two, whether it
+  is collected and whether it must carry a name (FB-130). Not allowed: when PLAN.md's `Review
+  view:` line gives minutes (intake offered it, FB-143), tag the review instead, as "Tag the review"
+  below says, in place of steps 2 to 6. Otherwise skip this stage and log it (as the build's last
+  stage, or run alone, removing the `Build running` line).
 - `05-verify` is done. The sheet derives from the notes and the checker's output
   (`_build/verify/examples.out.md`) only: never from a key, the mock, or a source MANIFEST marks
   `reserved`, and never an answer from a set it doesn't mark `yes, attempted`.
@@ -147,17 +150,71 @@ when it was built: it fills like any sheet. So the final sheet makes room for it
 
 ## After shipping
 
-- Any change to a shipped sheet, a fix or an addition: show the student the draft first (FB-137;
-  while a mock is untaken, as `08-practice` says in "Changing the notes or a sheet"); during
-  study Q&A a dispatched writer makes it (hard rule 9; `09-tutor` step 5). Then step 5's audit
-  limited to the change, step 4, and a republish of the published sheet as `06-site` step 6 says.
+- Any change to a shipped sheet, a fix or an addition, runs `08-practice`'s
+  "Changing the notes or a sheet", the one list of the published products and what a change does
+  to each: the draft shown first (FB-137), every copy of the fact changed, the rebuild and its
+  checks, the republish. During study Q&A a dispatched writer makes it (hard rule 9; `09-tutor`
+  step 5). For a sheet, that list's rebuild is step 5's audit limited to the change, then step 4.
   A fix to a fact goes into both sheets; an addition the mock prompted goes into the final sheet
   only (FB-133).
 - Space a later scope cut frees stays blank for the final sheet's items. Check which sections it
   would help, list them in STATUS, and ask the student when they are next here (FB-140).
 
+## Tag the review (no sheet allowed)
+
+When the exam allows no sheet, the student still needs a recall layer shorter than the notes
+(FB-143). It is the notes page's Review view (`_build/CHASSIS.md`): a Review / Full notes toggle
+whose Review view shows each section's Must-know list, the exam-day map and the blocks the notes
+tag `.rv`, and hides the rest. It copies nothing: this stage only tags worked examples and pitfalls
+the verified notes already hold. Its budget is PLAN.md's `- Review view: <N> minutes of reading`
+line, asked at intake, and changed only when nothing is left to untag (below). `assemble.py` counts
+the view's words at 150 a minute (`READING_RATE`, an unmeasured estimate for dense study notes) and
+fails the build when they take more than N minutes, printing both numbers. The map's cram block (`08-practice` step 7) is left out of the
+count: it is a reading list into the notes, not review text. Any later rebuild can still fail on
+the minutes (a patch that lengthens a tagged block, a new Must-know line); the remedy is item 4's:
+untag from the last ranked subsection up, before anything else. Once no `.rv` tag is left (the
+Must-know lists, the headings and the map count untagged), untagging can't help: PLAN.md's `Review
+view:` line gets new minutes, logged in STATUS. This is the one rule for who sets them, and every
+other site points here. When the student can't be asked, the session sets the minutes the view now
+takes, rounded up, and logs that in STATUS as a judgment call for the student to confirm or change.
+The student can't be asked during an unattended build (hard rule 1: a build stage, either
+`11-next-exam` source path among them), nor in a `10-polish` pass while a mock is untaken. In a pass
+or a source path while a mock is untaken, the student looks away, so the confirm is logged `held for
+the look-back` and asked there (as `10-polish` step 6 holds a question). Otherwise (a pass once every
+mock is taken, a `09-tutor` patch's merge, `08-practice` step 8.4) the main session asks the student.
+
+1. **Rank the subsections.** Before the cram order exists, by the backbone's How it's tested
+   weights; once it exists (`08-practice` step 7), in its rows' order. A subsection under a `Not on
+   <exam>` banner, or one a MANIFEST.md topic cut takes out, has no rank.
+2. **Tag**, in that order, in the Markdown: per subsection one worked example, `> **Worked example
+   N.K: title** {#ex-N-slug .rv}`, and the pitfall that goes with it, `> **Pitfall:** {.rv} ...`
+   (`_build/CONVERT.md`'s `.rv`), until the budget is spent. Only a block directly inside its
+   section takes the tag, never one inside a list, another callout, a `Not on <exam>` banner or an
+   `Unverified` callout, nor any block of a section whose banner comes before its first `##`
+   subsection (its first `h3` on the page: cut or unverified whole, so the view leaves it out,
+   Must-know list and all): `assemble.py` refuses
+   each. Must-know lists are otherwise always in the view, untagged. No text is added: a subsection with no worked example or pitfall shows only through
+   its Must-know line.
+3. **The fragments.** Make the same edit in each `_build/frag/sec<N>.html`, class `rv` on the
+   block as CONVERT.md maps it (or have the section converted again, `06-site` step 3), then
+   `06-site` step 3's `fidelity.py`, which compares the marker like an id.
+4. **Assemble and check**, `06-site` step 5, all of it. `assemble.py` enforces the budget: over
+   it, untag from the last ranked subsection up and rerun from item 3; once no `.rv` tag is left,
+   new minutes on PLAN.md's `Review view:` line, asked or set and logged as this section's opening
+   says, and rerun. `verify_page.mjs` checks and
+   shoots both views; look at the `-review` screenshots too. Since no text changes, `05-verify`
+   step 5's questions check needs no extra pages (FB-191), and there is no audit of copied text.
+5. **Republish** the notes page to its same URL, as `06-site` step 6 says, its version bumped on
+   its STATUS line as `08-practice`'s "Changing the notes or a sheet" item 5 does. Then commit and
+   hand off as step 6 does for a sheet (the `Build running` line removed in that commit when this
+   stage ends the build). A later change to the notes runs that list like any other: the view is
+   part of the notes page.
+
 ## Done when
 
 `check_pdf.py` passes on each sheet with every warning judged; the audit's findings are applied;
 the page images look right; the published sheet's URL is in STATUS (an HTML sheet); it is
-committed.
+committed. Or, with no sheet allowed, the Review view when PLAN.md gives it minutes: tagged in the
+notes and the fragments, `fidelity.py`, `assemble.py` (within the minutes), `linkcheck.py --html`
+and `verify_page.mjs` passing, both views' screenshots seen, the notes page republished to its URL,
+and committed.

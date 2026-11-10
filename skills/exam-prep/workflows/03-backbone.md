@@ -1,6 +1,6 @@
 # 03 Backbone
 
-Baseline as of 2026-10-20; changes only via `12-retro`.
+Baseline as of 2026-11-10; changes only via `12-retro`.
 
 The backbone turns source-ordered extracts into the notes' plan: concept order, every section
 number, title and link id, the conventions, the figures, how each part is tested, and a coverage
@@ -42,7 +42,9 @@ sets are lettered once, here, with their source. Each section ends with a "Must 
 Every convention an answer depends on (a tie-break order, when a check runs, how a board is
 numbered) goes in the Conventions block with the one subsection that states it; every other use
 links there (FB-065). Where the slides and the official solutions disagree, say which one the
-answers follow, in that same place.
+answers follow, in that same place. The block also lists each notation the answers use, each with
+its staff source (the staff sheet, solution or post that writes it so): notation the staff's own
+sheets use wins over the slides' and over a hub's own conventions (FB-089).
 
 ## Step 5: Shortlist the figures
 

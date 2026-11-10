@@ -91,7 +91,8 @@
     border-left:3px solid var(--sec-accent);padding-left:.65rem;
     scroll-margin-top:calc(env(safe-area-inset-top,0px) + 4rem)}
   h4{font-size:1.02rem;margin:1.8rem 0 .5rem;color:var(--ink-soft)}
-  h4[id],.callout[id],ol.steps>li[id]{scroll-margin-top:calc(env(safe-area-inset-top,0px) + 4rem)}
+  h4[id],.callout[id],ol.steps>li[id],tr[id]{scroll-margin-top:calc(env(safe-area-inset-top,0px) + 4rem)}
+  tr:target>td{background:var(--sec-accent-hl)}
   p{margin:.95rem 0}
   ul,ol{margin:.6rem 0;padding-left:1.4rem}
   li{margin:.28rem 0}
@@ -148,6 +149,28 @@
   .examnav .eq li{margin:.32rem 0;line-height:1.38;color:var(--ink-soft)}
   .examnav .eq li b{color:var(--ink);font-weight:650;font-family:var(--f-mono);font-size:.92em}
   .examnav .edrill{font-size:.84rem;color:var(--ink-soft);margin:1.1rem 0 0;padding-top:.7rem;border-top:1px solid var(--hair)}
+  /* the cram block assemble.py renders from practice/cram-order.md, ahead of the hand-written map */
+  .examnav .ecram{margin:0 0 1.3rem;padding-bottom:1.1rem;border-bottom:1px solid var(--hair-strong)}
+  .examnav .ecram .edrill{margin-top:.9rem}
+
+  /* ---- Review view: a filter over the notes' own blocks (CHASSIS.md) ---- */
+  .viewtog{display:inline-flex;flex:none;border:1px solid var(--hair-strong);border-radius:8px;overflow:hidden;background:var(--surface-2)}
+  .viewtog button{font:inherit;font-family:var(--f-display);font-size:.8rem;font-weight:600;border:0;background:transparent;
+    color:var(--ink-soft);padding:.35rem .6rem;min-height:40px;cursor:pointer;white-space:nowrap}
+  .viewtog button+button{border-left:1px solid var(--hair-strong)}
+  .viewtog button[aria-pressed="true"]{background:var(--accent);color:var(--bg)}
+  .rail .viewtog{display:flex;margin:1rem 0 0}
+  .rail .viewtog button{flex:1}
+  .rvlede{display:none}
+  :root[data-notesview="review"] .rvlede{display:block}
+  :root[data-notesview="review"] .rvhide{display:none!important}
+  /* display math sitting loose in a section is typeset after the script marks the rest */
+  :root[data-notesview="review"] section.note>mjx-container{display:none!important}
+  /* sections, and their rail entries, take the cram order: flex lets CSS order move them */
+  :root[data-notesview="review"] .wrap,:root[data-notesview="review"] .toc{display:flex;flex-direction:column}
+  :root[data-notesview="review"] .wrap>*{min-width:0}
+  :root[data-notesview="review"] section.note{margin-top:1.5rem;padding-top:1.5rem}
+  :root[data-notesview="review"] .callout.rv{margin:1.1rem 0}
 
   /* ---- tables ---- */
   .tbl-wrap{overflow-x:auto;margin:1rem 0;border:1px solid var(--hair);border-radius:10px}
@@ -157,6 +180,9 @@
     letter-spacing:.02em;color:var(--ink-soft);border-bottom:1px solid var(--hair-strong)}
   tbody tr:last-child td{border-bottom:0}
   td code{white-space:nowrap}
+  /* a cell's muted small line (the source key's file name under what the source is) */
+  td .mut{color:var(--ink-soft)}
+  td .sm{font-size:.8rem;font-family:var(--f-mono);overflow-wrap:anywhere}
 
   /* ---- figures ---- */
   figure{margin:1.4rem 0;padding:1rem;border:1px solid var(--hair);border-radius:12px;background:var(--surface)}
@@ -190,10 +216,14 @@
   .topbar{display:none;position:sticky;top:env(safe-area-inset-top,0px);z-index:40;
     background:var(--surface);border-bottom:1px solid var(--hair);
     padding:.55rem clamp(1rem,5vw,3.5rem);align-items:center;gap:.7rem}
-  .topbar .brand{font-family:var(--f-display);font-weight:700;font-size:.9rem;margin:0}
+  .topbar .brand{font-family:var(--f-display);font-weight:700;font-size:.9rem;margin:0;
+    min-width:0;flex:1 1 auto;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .menubtn{font:inherit;font-family:var(--f-display);font-size:.85rem;background:var(--surface-2);
-    border:1px solid var(--hair-strong);color:var(--ink);border-radius:8px;padding:.4rem .7rem;min-height:40px;cursor:pointer}
-  .themebtn{margin-left:auto;background:var(--surface-2);border:1px solid var(--hair-strong);color:var(--ink);
+    border:1px solid var(--hair-strong);color:var(--ink);border-radius:8px;padding:.4rem .7rem;min-height:40px;cursor:pointer;
+    flex:none;white-space:nowrap}
+  /* a phone's top bar with the view toggle has no room left for the brand */
+  @media (max-width:480px){ .topbar .brand:has(~ .viewtog){display:none} }
+  .themebtn{flex:none;margin-left:auto;background:var(--surface-2);border:1px solid var(--hair-strong);color:var(--ink);
     border-radius:8px;padding:.4rem .6rem;min-height:40px;cursor:pointer;font-size:.95rem;line-height:1}
   .rail .themebtn{margin:1rem 0 0;width:100%;font-family:var(--f-display);font-size:.8rem}
   .backdrop{display:none;position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:45}
@@ -239,6 +269,7 @@
 <div class="layout">
   <aside class="rail" id="rail" aria-label="Table of contents">
     <p class="brand">Widgets Notes<small>WID 101 · Exam 1</small></p>
+    <!-- REVIEW TOGGLE --><div class="viewtog" role="group" aria-label="Notes view"><button type="button" data-pick="review" aria-pressed="false">Review</button><button type="button" data-pick="full" aria-pressed="true">Full notes</button></div><!-- /REVIEW TOGGLE -->
     <nav><ul class="toc" id="toc"></ul></nav>
     <button class="themebtn" id="themeBtn2" type="button">Toggle theme</button>
   </aside>
@@ -247,12 +278,14 @@
     <div class="topbar">
       <button class="menubtn" id="menuBtn" type="button" aria-expanded="false" aria-controls="rail">☰ Sections</button>
       <p class="brand">Widgets Notes</p>
+      <!-- REVIEW TOGGLE --><div class="viewtog" role="group" aria-label="Notes view"><button type="button" data-pick="review" aria-pressed="false">Review</button><button type="button" data-pick="full" aria-pressed="true">Full notes</button></div><!-- /REVIEW TOGGLE -->
       <button class="themebtn" id="themeBtn" type="button" aria-label="Toggle light or dark theme">◐</button>
     </div>
 
     <header class="pagehead">
       <h1>Widgets 101: Exam 1 Study Notes</h1>
       <p class="lede">A synthetic sample: two short sections that use every component of the chassis.</p>
+      <!-- REVIEW TOGGLE --><p class="lede rvlede">Review view: only the worked examples, pitfalls and Must-know lists picked for a last read. Switch to Full notes for everything else.</p><!-- /REVIEW TOGGLE -->
       <span class="examline">Mon Jan 5 · 10:00 · closed book · scope = §1 and §2</span>
     </header>
 
@@ -332,17 +365,32 @@
   var current=null;
   function setActive(id){ if(id===current)return; current=id;
     links.forEach(function(a){a.classList.toggle('active',a.dataset.target===id);});
-    var a=byId[id]; if(a&&a.scrollIntoView){ /* keep active visible in rail */
-      var r=a.getBoundingClientRect(); if(r.top<80||r.bottom>window.innerHeight-20) a.scrollIntoView({block:'nearest'});
+    var a=byId[id]; if(a){ /* keep active visible in rail: scroll the rail alone, since
+      scrollIntoView also moves the page and cancels a smooth jump in flight (WebKit) */
+      var r=a.getBoundingClientRect(), rr=rail.getBoundingClientRect();
+      if(r.top<rr.top+80) rail.scrollTop+=r.top-rr.top-80;
+      else if(r.bottom>rr.bottom-20) rail.scrollTop+=r.bottom-rr.bottom+20;
     }
   }
-  var spyList=[]; spied.forEach(function(el){if(el.id)spyList.push(el);});
+  var spyList=[];
+  /* the shown headings in the order they sit on screen: the Review view hides some and reorders
+     sections, and the loop below stops at the first one past the line */
+  function rebuildSpy(){
+    spyList=[]; spied.forEach(function(el){if(el.id&&el.getClientRects().length)spyList.push(el);});
+    spyList.sort(function(a,b){return a.getBoundingClientRect().top-b.getBoundingClientRect().top;});
+  }
+  rebuildSpy();
   function onScroll(){
     var line=130, best=spyList.length?spyList[0].id:null;
     for(var i=0;i<spyList.length;i++){
       var top=spyList[i].getBoundingClientRect().top;
       if(top<=line) best=spyList[i].id; else break;
     }
+    /* a short last section (the source key) never reaches the line: at the page's bottom,
+       within 2px, it is the one in view */
+    var se=document.scrollingElement||document.documentElement;
+    if(spyList.length && se.scrollTop>0 && se.scrollTop+window.innerHeight>=se.scrollHeight-2)
+      best=spyList[spyList.length-1].id;
     if(best) setActive(best);
   }
   var ticking=false;
@@ -350,6 +398,93 @@
     if(!ticking){ticking=true;requestAnimationFrame(function(){onScroll();ticking=false;});}
   },{passive:true});
   onScroll();
+
+  // ---- Review view (CHASSIS.md): shows the notes' own rv blocks, Must-know lists, headings, the
+  // map and the source key, and hides the rest; no copy of any text. Present only when assemble.py
+  // keeps the toggle (PLAN.md gives it minutes). ----
+  var picks=[].slice.call(document.querySelectorAll('.viewtog button[data-pick]'));
+  var reviewOn=false;
+  function shown(el){ return el.getClientRects().length>0; }
+  // a Not on <exam> or Unverified banner before a section's first h3 takes the whole section out
+  function outOfReview(sec){
+    for(var i=0;i<sec.children.length;i++){ var k=sec.children[i], lab;
+      if(k.tagName.toLowerCase()==='h3') return false;
+      if(k.classList.contains('callout')&&k.classList.contains('warn')&&(lab=k.querySelector('.lab'))
+         &&/^(Not on .|Unverified$)/.test(lab.textContent.replace(/\s+/g,' ').trim())) return true;
+    }
+    return false;
+  }
+  if(picks.length){
+    main.querySelectorAll('section.note').forEach(function(sec){
+      if(sec.querySelector('tr[id^="src-"]')) return;  // the source key shows whole
+      if(outOfReview(sec)){ sec.classList.add('rvhide'); return; }
+      var h3=null, must=false;
+      [].slice.call(sec.children).forEach(function(k){
+        var tag=k.tagName.toLowerCase();
+        if(tag==='h2') return;
+        if(tag==='h3'){ h3=k; must=/-must-know$/.test(k.id||''); if(!must) k.classList.add('rvhide'); return; }
+        if(k.classList.contains('rv')){ if(h3) h3.classList.remove('rvhide'); return; }
+        if(must&&(tag==='ul'||tag==='ol')){ must=false; return; }
+        k.classList.add('rvhide');
+      });
+    });
+    // sections (and their rail entries) by first appearance among the cram block's rows, the rest
+    // after them in page order
+    var order={}, k=1, secs=[].slice.call(main.querySelectorAll('section.note'));
+    main.querySelectorAll('.ecram .eq a.xref[href^="#"]').forEach(function(a){
+      var t=document.getElementById(decodeURIComponent(a.getAttribute('href').slice(1)));
+      var s=t&&t.closest('section.note'); if(s&&!order[s.id]) order[s.id]=k++;
+    });
+    secs.forEach(function(s){ if(!order[s.id]) order[s.id]=k++; s.style.order=order[s.id]; });
+    links.forEach(function(a){
+      var t=document.getElementById(a.dataset.target), s=t&&t.closest('section.note');
+      if(s) a.parentNode.style.order=order[s.id];
+      if(t&&t.closest('.rvhide')) a.parentNode.classList.add('rvhide');
+    });
+  }
+  function setView(v){
+    reviewOn=v==='review';
+    if(reviewOn) root.setAttribute('data-notesview','review'); else root.removeAttribute('data-notesview');
+    picks.forEach(function(b){b.setAttribute('aria-pressed',String(b.dataset.pick===v));});
+    main.querySelectorAll('details.wex.rv').forEach(function(d){  // open in Review, as they were in Full
+      if(reviewOn){ if(!d.open){d.open=true;d.dataset.rvOpened='1';} }
+      else if(d.dataset.rvOpened){ d.open=false; delete d.dataset.rvOpened; }
+    });
+    rebuildSpy(); current=null;
+  }
+  function remember(v){ try{localStorage.setItem('notes-view',v);}catch(e){} }
+  // a page loaded, or a hash changed, to something the Review view hides: Full notes, then there
+  function hashToHidden(){
+    if(!reviewOn||location.hash.length<2) return;
+    var t=null; try{ t=document.getElementById(decodeURIComponent(location.hash.slice(1))); }catch(e){}
+    if(!t||shown(t)) return;
+    setView('full'); remember('full'); t.scrollIntoView(); onScroll();
+  }
+  if(picks.length){
+    var savedView=null; try{ savedView=localStorage.getItem('notes-view'); }catch(e){}
+    setView(savedView==='review'?'review':'full'); onScroll();
+    hashToHidden();
+    window.addEventListener('hashchange',hashToHidden);
+    picks.forEach(function(b){ b.addEventListener('click',function(){
+      var v=b.dataset.pick; if((v==='review')===reviewOn) return;
+      // keep the heading in view where it still shows; at the page's top, stay at the top
+      var at=window.scrollY>0&&current&&document.getElementById(current);
+      setView(v); remember(v);
+      var y=at&&shown(at)? at.getBoundingClientRect().top+window.scrollY-16 : 0;
+      window.scrollTo({top:Math.max(y,0),behavior:'instant'}); onScroll();
+    }); });
+    // a link to something the Review view hides switches to Full notes, then jumps there
+    document.addEventListener('click',function(e){
+      if(!reviewOn) return;
+      var a=e.target.closest('a[href^="#"]'); if(!a) return;
+      var id=decodeURIComponent(a.getAttribute('href').slice(1)), t=document.getElementById(id);
+      if(!t||shown(t)) return;
+      e.preventDefault();
+      setView('full'); remember('full');
+      if(window.innerWidth<=900&&rail.classList.contains('open')) closeNav();
+      if(location.hash==='#'+id) t.scrollIntoView(); else location.hash=id;
+    });
+  }
 
   // ---- figure interactivity hooks (figures are inserted as inline SVG; controls wire by data-fig) ----
   window.NotesFig = window.NotesFig || {};
