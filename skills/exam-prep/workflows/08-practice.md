@@ -35,15 +35,11 @@ of `practice/` or `_build/verify/`: a diff of those files prints values.
   (`cram_check.py --plain`), and step 6.4's Playwright is installed as `06-site` step 5 says.
 - `05-verify` is done, and `07-cheatsheet` is done or logged as skipped. When 07 built a sheet,
   the mock sheet is `cheatsheet/<exam-slug>-mock.pdf` (with the LaTeX engine, the student's PDF
-  of it, under that name). Otherwise there is no sheet: 07 was skipped, or it built the condensed
-  review page in a sheet's place (PLAN.md's Review page line). Then leave out every sheet item
-  below (the cold solver's sheet, the sheet in the key's STOP line, the cram order's sheet items,
-  the sheet at the attempt, step 8.3, the final-sheet items).
-- The review page, when 07 built one, is no sheet: the cold solver doesn't get it, and the student
-  brings nothing to the exam. It is a page the student reads before the mocks, and its rows carry
-  worked examples. So it joins the notes in step 3.4's comparison, in step 4.5's leak runs and in
-  "Changing the notes or a sheet". Its built page is `_build/review/_build/notes.html` and its
-  Markdown is `_build/review/notes/` (`07-cheatsheet`, "The condensed review page", item 3).
+  of it, under that name). Otherwise there is no sheet: 07 was skipped, or it tagged the notes
+  page's Review view in a sheet's place (PLAN.md's `Review view:` line). Then leave out every sheet
+  item below (the cold solver's sheet, the sheet in the key's STOP line, the cram order's sheet
+  items, the sheet at the attempt, step 8.3, the final-sheet items). The Review view is part of the
+  notes page, so every check of the notes covers it.
 - PLAN.md's Deliverables row for the mock, and its "08 practice" row: how many mocks and the
   question shapes they follow. Its Scope authority line says what the mocks cover (FB-021);
   MANIFEST.md's Scope column and its topic cuts hold the cut.
@@ -101,7 +97,7 @@ The plan holds no answer: the writers read it.
    and rerun until it writes the page.
 3. A part a writer reports it couldn't make fresh gets fresh numbers now (FB-071).
 4. The writers can't see each other's mocks: compare the clones of each source question across the
-   mocks and with the notes' worked examples (and the review page's, when 07 built one), and give
+   mocks and with the notes' worked examples, and give
    any clone with the same instance as another (the same numbers, graph or table) fresh numbers, so
    one mock's key never answers another and no page the student reads first works a mock's instance.
    A justify, prove or classify clone that asks another mock's claim gets another claim (step 2).
@@ -151,8 +147,7 @@ as it stands until step 7.5 changes it, and once item 2 has written the first ke
    listed as reasoned. It also checks that the key's parts are the mock's, with or without a
    checker.
 5. `python3 -I <skill>/scripts/mock_leak.py <page> practice/*-key.md` on the notes
-   (`_build/notes.html`), on the review page when 07 built one (`_build/review/_build/notes.html`),
-   and with a sheet on the mock sheet (`cheatsheet/<exam-slug>-mock.html`, or its `.tex`): the
+   (`_build/notes.html`), and with a sheet on the mock sheet (`cheatsheet/<exam-slug>-mock.html`, or its `.tex`): the
    student reads each before the mocks. A hit on a part whose answer comes from the instance's
    numbers (a number, an order, a table) means the page works the mock's instance: give the question
    fresh numbers (the rerun clause below). Any other hit is the page teaching what the part asks (a
@@ -172,10 +167,10 @@ question to the cold solver again (step 5), and rerun step 6 from item 1 and, on
 exists, step 7's items 1 and 2. A change to a key alone reruns items 4 and 5, step 6 and step 7's
 item 2. A change to the reference at any later point (a `05-verify` step 5 rerun) reruns items 2
 and 4: a part whose value changed fails item 4, and its answer is rewritten from the new values.
-In step 8, for a mock not yet taken, log the part instead, and that mock's cram order line says to
-bring it to the session before marking it (then step 7's items 1 and 2); after the attempt,
-rewrite the answer from that mock's section of the values file printed alone
-(`sed -n '/^## <slug>$/,/^## /p' practice/mock-values-key.md`), never the whole file.
+In step 8, a failing part of a mock not yet taken goes to the key recheck writer (step 8's
+opening), so its answer never reaches this session; for a taken mock, rewrite the answer from that
+mock's section of the values file printed alone (`sed -n '/^## <slug>$/,/^## /p'
+practice/mock-values-key.md`), never the whole file.
 
 ## Step 5: The cold solver
 
@@ -246,14 +241,17 @@ Then:
    FB-105): every row's one thing against the section it links. A finding on a row is fixed in
    the cram order; one on the notes goes through "Changing the notes or a sheet". Then 1 and 2
    again.
-4. **The page's copy** (K02). The cram order is published at the top of the notes page: rewrite
-   the map's cram copy from `practice/cram-order.md` as `06-site` step 4 says (the map then renders
-   open), then run "Changing the notes or a sheet" items 1 and 3 to 5 for the page (its compare
-   against the keys, the rebuild and checks, the republish to the same URL). Plain-text notes have
-   no page: the cram order stays a file. Every later change to the cram order's tiers, rows or skip
-   list reruns this item after items 1 and 2, as "Changing the notes or a sheet" item 3 says (step
-   8.4 names it too, and so do the flows that run that list). A change to a mock line alone
-   doesn't: the map holds none.
+4. **Rebuild and republish the notes page** (K02). The cram order is published at the top of the
+   notes page: `assemble.py` renders the map's cram block from `practice/cram-order.md` on every
+   build and opens the map (`06-site` step 4), so the page needs no edit of its own. Run "Changing
+   the notes or a sheet" items 1 and 3 to 5 for the notes page (its compare against the keys, the
+   rebuild and checks, the republish to the same URL). Plain-text notes have no page: the cram
+   order stays a file. This item runs on its own: after items 1 to 3 here, after step 8.4, and
+   after items 1 and 2 for any other later change to the cram order's tiers, rows or skip list. A
+   change to the cram order inside "Changing the notes or a sheet" (a row that quotes the changed
+   fact) needs no run of it: that list's item 3 rebuilds the page once, and the rebuild takes in
+   the cram order as it stands. A change to a mock line alone needs no rebuild: the map holds
+   none.
 5. Hand off and commit (Done when's list, up to here) as this
    stage's opening says, the next-step line kept as step 4 set it. The student acts on the new
    line, so it comes last, after the handoff's own STATUS edits and just before its commit: set
@@ -276,16 +274,23 @@ and offers the checks it held (`09-tutor` step 1's Patches and Waiting checks bu
 - First, on a course with Ed, offer a re-pull, `ed-pull pull` (`01-ingest`, "Ed Discussion"): staff
   answer late questions the night before. A new staff answer that bears on the exam goes through
   `11-next-exam`'s "A source added to this exam", its `Source added:` STATUS line and source log
-  included. No key is opened to find the parts an answer touches. When the answer changes the
-  reference or a convention, the main session reruns the mock key checker as step 4's rerun clause
-  says (items 2 and 4), which rechecks every part it computes. For a part it can't compute, it
-  logs in STATUS `mock key: recheck <mock> parts on <topic> after the attempt`, one line per
-  untaken mock, `<topic>` the answer's topic as the notes name it (finding which parts it reaches
-  would mean opening the key); `09-tutor` reads that line when it grades that mock. So the student
-  doesn't mark that mock alone from a stale key, it also adds step 4's rerun clause note to that
-  mock's line in the cram order (bring it to the session before marking it), then runs step 7's
-  items 1 and 2. A mock line alone needs no step 7.4 (the map holds none); a row the source-added
-  path adds reruns 7.4 there.
+  included. Then, while a mock is untaken, its keys: once that path ends, the main session spawns
+  one writer from `<skill>/templates/agent-briefs.md`, section "Key recheck", with `isolation:
+  "worktree"` on the call (load the delegation skill first). It opens each untaken mock's key,
+  finds the parts the answer touches (and any part step 4's item 4 now fails), fixes each one's
+  key as step 4 says (a computed answer copied from the new values), reruns step 4's items 2 and
+  4, and reports part ids, each changed, unchanged or `question` (the question itself would need
+  rewording, left as it is), never key text: this session's chat is the student's, so no answer
+  reaches it. A `question` part goes on that mock's cram order line: skip it and score out of the
+  points left, as a scope cut does (`10-polish` step 3). No
+  attempt starts until its branch is merged. On a `done` report whose branch changes only the
+  untaken mocks' files under `practice/` and `_build/verify/mock_key.py` (`git diff --no-renames
+  --name-status <hub branch>...<branch>`, file names only), `git merge --no-edit <branch>`, then
+  remove its worktree and branch as `09-tutor` step 5.5.3 does. Any other report merges nothing:
+  tell the student which mock's key waits, and dispatch it again. After the merge, what a change
+  to a key reruns (step 4's closing paragraph): step 4's items 4 and 5, step 6's item 2 and step
+  7's items 1 and 2, each with the untaken mocks' keys. Log in STATUS each mock's part ids and
+  what the report says of each.
 - Then the links: the notes page's URL from STATUS, whose top now holds the cram order (step 7.4),
   each mock page's URL, and the cram order's path. One line defines a tier: a block of reading rows
   with a minute budget, ranked by points per minute, read in order until time runs out.
@@ -307,25 +312,27 @@ addition (FB-166) goes into the final sheet once step 8.3 has built it, and unti
 STATUS as a final-sheet item with no mock, for step 8.3. Of the mocks' keys, this session opens only
 a taken mock's, never an untaken one's, `practice/mock-values-key.md` or `_build/verify/mock_key.py`
 (they hold every mock's answers; the one exception is step 4's rerun clause, which prints a taken
-mock's section of the values file alone), and keeps every search inside `notes/`, `cheatsheet/`,
-`_build/frag/`, `_build/review/` and `_build/extract/` (which hold no mock): one over the hub root
-prints key lines. The writer `09-tutor` step 5 dispatches (the "Notes patch" brief) makes the change
-of "Changing the notes or a sheet" item 2 and, for the notes and the review page, item 3's
-rebuilds, fenced from `practice/`, from
+mock's section of the values file alone, and the key recheck writer above opens them in its own
+worktree), and keeps every search inside `notes/`, `cheatsheet/`,
+`_build/frag/` and `_build/extract/` (which hold no mock), and `practice/cram-order.md`, which
+step 7.2 keeps free of answers: one over the hub root prints key lines. The writer `09-tutor` step
+5 dispatches (the "Notes patch" brief) makes the change of "Changing the notes or a sheet" item 2,
+but in the cram order, which the main session fixes at the merge (`09-tutor` step 5.5.4), and, for
+the notes, item 3's rebuild, fenced from `practice/`, from
 `_build/verify/` but `examples.out.md` (its numbers come from there, and it holds no mock instance:
 step 3.4) and from any search over the hub root; the main session runs the other items and the
 merge, as that step says.
 
-1. Before an attempt, no `10-polish` pass runs (STATUS has no `Build running` line) and no notes
-   patch is open (`09-tutor` step 5, "One open patch"), so a sheet either changed is logged, and the
+1. Before an attempt, no `10-polish` pass runs (STATUS has no `Build running` line), no notes
+   patch is open (`09-tutor` step 5, "One open patch") and no key recheck writer runs (this step's
+   opening), so a sheet either changed is logged, and the
    log's pending lines are offered first, as `09-tutor` step 5.5.9 offers them (the patch now, or
    the mock first with them marked `held: mock first`); a mock sheet STATUS logs as changed is shown
    to the student, changes and all (FB-137), and printed again; with the LaTeX engine, the student
    compiles it first and this session checks the PDF as `07-cheatsheet` checks a LaTeX sheet
    (`check_pdf.py --no-layout`). The student takes each mock under exam conditions, its minutes and
    the mock sheet only (with no sheet, no aid), in the cram order's order (the harder set last,
-   since its key holds the Variants), then opens its key, or brings it here first when its cram
-   order line says so (step 4's rerun clause).
+   since its key holds the Variants), then opens its key.
 2. Record the attempt in STATUS: the mock, then each miss (the part, and why it went wrong), or
    `no misses`, or `misses: from the walk-through` while `09-tutor` walks the student through it
    (its log's misses replace that before step 3). From here the mock counts as taken.
@@ -343,41 +350,38 @@ merge, as that step says.
    there (the next line is another mock's, or the list ends), they go in a new tier in that place,
    `## Tier <n>: Misses (<M> min)`, the tiers after it renumbered and the intro's tier count up by
    one. Then step 7's item 1 again, and while a mock is untaken item 2 with the untaken mocks'
-   keys; then step 7.4, the page's copy.
+   keys; then step 7.4, the notes page's rebuild and republish.
 5. Commit and hand off as this stage's opening says, then clear each `held: mock first` mark
    (`09-tutor` step 5.5.9), its fields kept, and dispatch the oldest pending patch (`09-tutor` step
    1's Patches bullet).
 
 ## Changing the notes or a sheet
 
-This is the one list of the hub's published products and what a change to the notes, the review
-page or a sheet does to each. Every such change once `05-verify` is done runs it: this stage's own
+This is the one list of the hub's published products and what a change to the notes or a sheet
+does to each. Every such change once `05-verify` is done runs it: this stage's own
 (step 5, the cram order audit in step 7, the final sheet, a fix or a question on the cram night), a
 `09-tutor` patch, a `10-polish` pass, `07-cheatsheet`'s "After shipping", and `11-next-exam`'s "A
 source added to this exam" and "A source added unverified". Those flows run it by reference and add
 only what is their own: who makes the change, where the baseline is kept, when the commit comes.
 
-Until the last mock is taken, the notes, the review page and the sheets are pages the student reads
-before an attempt. So while a mock is untaken, items 1 and 4's leak compare run too, with the keys
+Until the last mock is taken, the notes page and the sheets are pages the student reads before an
+attempt. So while a mock is untaken, items 1 and 4's leak compare run too, with the keys
 of the mocks not yet taken (before any attempt, `practice/*-key.md`). The rest runs on every change.
 
 The products, each one the hub has:
 
 | Product | Its files | Runs when |
 |---|---|---|
-| The notes page | `notes/NN-*.md`, `_build/frag/sec<N>.html`, `_build/notes.html` (plain-text notes: `notes/combined.md`) | the notes change |
-| The condensed review page, when PLAN.md's Review page line holds one | `_build/review/notes/`, `_build/review/_build/frag/`, `_build/review/_build/notes.html` | a fact it copies changes, or its rows change |
+| The notes page, its Review view included | `notes/NN-*.md`, `_build/frag/sec<N>.html`, `_build/notes.html` (plain-text notes: `notes/combined.md`) | the notes change, or the cram order's tiers, rows or skip list, which its map renders |
 | Each sheet | `cheatsheet/<exam-slug>-mock.html` and `-final.html` (or `.tex`), never a subfolder of `cheatsheet/` | a fact it copies changes, or a line is added |
-| The cram order and the page's cram copy | `practice/cram-order.md`, the map's cram block (`06-site` step 4) | a row quotes the changed fact, or its tiers, rows or skip list change |
-| The checks | the questions check (FB-191), and the leak compare | the questions check, on a change to the notes or the review page; the leak compare, on every change while a mock is untaken |
+| The cram order | `practice/cram-order.md`, which `assemble.py` renders into the notes page's map (`06-site` step 4) | a row quotes the changed fact, or its tiers, rows or skip list change |
+| The checks | the questions check (FB-191), and the leak compare | the questions check, on a change to the notes; the leak compare, on every change while a mock is untaken |
 
 1. **The baseline**, while a mock is untaken: step 4.5's command, run now, on the notes
-   (`_build/notes.html`; plain-text notes: `notes/combined.md`), on the review page
-   (`_build/review/_build/notes.html`) when the hub has one, and on each sheet the student reads
-   before that attempt. Keep the hit lines.
+   (`_build/notes.html`; plain-text notes: `notes/combined.md`) and on each sheet the student
+   reads before that attempt. Keep the hit lines.
 2. **Make the change** as `05-verify` step 5 says, in every copy of the fact: search `notes/`,
-   `_build/frag/`, `cheatsheet/`, `_build/review/notes/`, `_build/review/_build/frag/` and
-   `practice/cram-order.md` for the old phrase, and leave a subfolder of `cheatsheet/` as it is (a
+   `_build/frag/`, `cheatsheet/` and `practice/cram-order.md` for the old phrase, and leave a subfolder of `cheatsheet/` as it is (a
    finished exam's frozen archive). A new number or trace comes from the checker (`examples.py`,
    `05-verify` step 2), never by hand. A wrong fact on a sheet is corrected on both sheets. While a
    mock is untaken, the change teaches a method in general or with an example of its own, never a
@@ -387,25 +391,24 @@ The products, each one the hub has:
    before the change is made; before step 8, while they look away, log the change, and step 8.1
    shows it before the reprint; in step 8, show the draft once item 4 passes, before item 5.
 3. **Rebuild and recheck** each product item 2 touched:
-   - The notes page: the section's fragment, in its own markup (`_build/CONVERT.md`), and `06-site`
-     step 3's `fidelity.py` compare of it with its notes file, then `06-site` step 5, all of it,
-     the changed sections' screenshots seen. Plain-text notes: the touched references checked by
-     eye (`04-write` step 6), and `notes/combined.md` rebuilt from the section files when it exists.
-   - The review page: its fragments for the files item 2 changed under `_build/review/notes/`, then
-     `assemble.py --root _build/review` and its checks, as `07-cheatsheet`'s "The condensed review
-     page" item 3 says, its printed pages still within the Review page line's length.
-   - A sheet: an HTML sheet through `07-cheatsheet`'s "After shipping", its audit limited to the
-     change, then its step 4; near a full side, new wording is no longer than what it replaces
-     (FB-137). A LaTeX sheet changes in its `.tex` only and is read as its source in item 4; the
-     student compiles it (item 5).
-   - The cram order, once it exists: step 7's item 1, and while a mock is untaken its item 2. When
-     the change touched its tiers, rows or skip list, step 7.4 too, after the notes page's own
-     rebuild: the map's cram copy rewritten and the page rebuilt again. A mock line alone skips
-     7.4: the map holds none.
-4. **The checks.** When the notes or the review page changed, `05-verify` step 5's questions check
-   prints QUESTIONS OK (FB-191): `mock_leak.py --questions` on the unattempted sets that step lists
-   from MANIFEST.md, skipped when there is none, its `--pages` the notes Markdown (`notes/*.md`)
-   and, when the hub has the review page, its Markdown (`_build/review/notes/*.md`). A hit is
+   - The notes page: each changed section's fragment, in its own markup (`_build/CONVERT.md`), and
+     `06-site` step 3's `fidelity.py` compare of it with its notes file, then `06-site` step 5, all
+     of it, the changed sections' screenshots seen (in both views when the page has the Review
+     view: `assemble.py` holds it to its minutes). `assemble.py` renders the map's cram block from
+     `practice/cram-order.md` as item 2 left it, so this one rebuild carries a change to the cram
+     order's tiers, rows or skip list too, with or without a notes change, and step 7.4 never runs
+     inside this list. Plain-text notes: the touched references checked by eye (`04-write` step 6),
+     and `notes/combined.md` rebuilt from the section files when it exists.
+   - A sheet: an HTML sheet through `07-cheatsheet` step 5, its audit limited to the change, then
+     its step 4; near a full side, new wording is no longer than what it replaces (FB-137). A LaTeX
+     sheet changes in its `.tex` only and is read as its source in item 4; the student compiles it
+     (item 5).
+   - The cram order, once it exists, after the notes page's rebuild (its ids come from it): step
+     7's item 1, and while a mock is untaken its item 2. A change to a mock line alone rebuilds no
+     page: the map holds none.
+4. **The checks.** When the notes changed, `05-verify` step 5's questions check prints QUESTIONS
+   OK (FB-191): `mock_leak.py --questions` on the unattempted sets that step lists from
+   MANIFEST.md, skipped when there is none, its `--pages` the notes Markdown (`notes/*.md`). A hit is
    reworded with fresh numbers and setup (S7) and repeats from item 2. While a mock is untaken, also
    the leak compare: run item 1 again and compare the hit lines with the baseline's (count them,
    since every hit on the notes reads "(the page)" and a second copy of an answer adds one). A new
@@ -414,8 +417,8 @@ The products, each one the hub has:
    change only once this item passes, and a session that must end first finishes it: a `09-tutor`
    tab running meanwhile reads the notes and the sheets as committed (its step 1).
 5. **Republish** what changed and is published, once this item 4 passes: the notes page as
-   `06-site` step 6 says (its live read first when this session didn't build the page), the review
-   page and the mock sheet as `07-cheatsheet` publishes them. Bump each one's version on its STATUS
+   `06-site` step 6 says (its live read first when this session didn't build the page), and the
+   mock sheet as `07-cheatsheet` step 6 publishes it. Bump each one's version on its STATUS
    line (`v2` after its URL at the first republish, then `v3` and on) and tell the student. The
    final sheet isn't published. Then what the student must redo, each logged in STATUS until they
    say it is done: a printed sheet that changed (the final sheet included) is printed again; a
@@ -430,14 +433,14 @@ Log each change in STATUS by its part and what changed, never a value.
 
 ## Done when
 
-Each mock's instances are compared across the mocks and with the notes' worked examples, and the
-review page's when 07 built one (step 3.4); each mock's `mock_key.py` line says KEY OK (with no
-checker, every key value cited too); the cold solver's disagreements are settled and logged, and a
-changed notes page, review page or mock sheet is republished; `mockpage.py`, `mock_leak.py`,
+Each mock's instances are compared across the mocks and with the notes' worked examples (step
+3.4); each mock's `mock_key.py` line says KEY OK (with no checker, every key value cited too); the
+cold solver's disagreements are settled and logged, and a changed notes page or mock sheet is
+republished; `mockpage.py`, `mock_leak.py`,
 `linkcheck.py --html` and `verify_page.mjs --views` pass, and you looked at the screenshots; the
 page is published privately and its URL is in STATUS; `cram_check.py` prints CRAM OK; `mock_leak.py`
-prints LEAK OK on the cram order and STATUS, and on the notes, the review page and the mock sheet
-(each that exists) every hit is judged and logged (step 4.5); each key but the last one's prints
+prints LEAK OK on the cram order and STATUS, and on the notes and the mock sheet (each that
+exists) every hit is judged and logged (step 4.5); each key but the last one's prints
 LEAK OK with `--no-markers` against the keys taken after it; the audit's findings are applied; the
 mocks, keys, `practice/mock-values-key.md`, `_build/mock-plan.md`, `_build/verify/mock_key.py`, the
 mock pages and the cram order are committed, handed off, STATUS's next-step line starts `08 step 8,
