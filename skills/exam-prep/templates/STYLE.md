@@ -107,5 +107,5 @@ from later corrections. A retired rule is struck through and keeps its number. A
   (applied with the definition given), Recognize, or Not on <exam>, citing the instructor's
   memorization or format statement, or marked inferred with the reason. Each section's Must-know
   list ends with a "Written from memory:" line and a "Provided on the exam:" line where the
-  exam-format statement says which is which. The notes, the cram order and any condensed page
+  exam-format statement says which is which. The notes, the cram order and the exam-day map
   carry the same label.
