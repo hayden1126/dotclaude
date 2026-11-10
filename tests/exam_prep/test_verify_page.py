@@ -380,8 +380,13 @@ class BrowserCatchesTest(unittest.TestCase):
                "a.scrollIntoView({block:'nearest'});\n"
                "    }\n")
         self.assertEqual(long.count(fixed), 1)
+        # The old rail code is pinned on a closed map: the sample's open map (K02) moves the page's
+        # geometry so that WebKit cuts the old jump short going up only.
+        opened = '<details class="examnav" open>'
+        self.assertEqual(long.count(opened), 1)
+        closed = long.replace(fixed, old).replace(opened, '<details class="examnav">')
         out = self.fails("jumpold", "long jump webkit 1280px top->last: #sec-4-part-40 landed at top",
-                         page=long.replace(fixed, old), long_jump=True)
+                         page=closed, long_jump=True)
         self.assertIn("long jump webkit 1280px bottom->first: #sec-1 landed at top", out)
 
     def test_overflow_inside_an_open_worked_example(self):

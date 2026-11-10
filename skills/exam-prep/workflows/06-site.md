@@ -90,7 +90,9 @@ From the hub root:
    misnamed fragment, a script, style or unknown class in one, and a FIG marker with no
    step-through. It ends the page with a source key built from `MANIFEST.md` (a row per code the
    page cites, each citation linked to its row), and refuses a citation whose code has no
-   `MANIFEST.md` row.
+   `MANIFEST.md` row. A refusal of a citation that "has an href of its own" means the hub has a
+   hand-built source key: remove it as `11-next-exam` step 5.2 ("Reconcile the templates") says,
+   then rebuild.
 2. `python3 -I <skill>/scripts/linkcheck.py --html _build/notes.html`: every in-page link
    resolves, and no id repeats.
 3. `node <skill>/scripts/verify_page.mjs _build/notes.html _build/shots --steps

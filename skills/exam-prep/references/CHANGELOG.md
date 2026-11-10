@@ -52,15 +52,15 @@ evidence ids.
     `_build/logs/skill-fixes.md` for the retro (each entry dated), and offered to the other open
     hubs; hard rule 13, and the harvest reads the log (E1.C11, E1.C13, D1 (section 2), F1
     (section 2)).
-  - FB-109: `05-verify` step 3b, a cold reader per two or three sections, and its brief (D1.C6,
-    D1.C7, D1.C8, D1.C9, D1.C10, D1.C11, D1.C12, D1.C13, D1.C15, D1.C31, E1.C22, E1.C23, E1.C24,
+  - FB-109: `05-verify` step 3b, a cold reader per two or three sections, and its brief, counted
+    in PLAN.md's 05 roster row (D1.C6, D1.C7, D1.C8, D1.C9, D1.C10, D1.C11, D1.C12, D1.C13, D1.C15, D1.C31, E1.C22, E1.C23, E1.C24,
     E1.C25, E1.C26, E1.C30, F1.C9, F1.C11, F1.C13).
   - FB-123: every citation links to the page's source key, which `assemble.py` builds from
     MANIFEST.md: what the source is (its Notes, blank without them), who made it (MANIFEST's
     new optional By column, a Made by column when a cited row has one) and its file; `linkcheck.py`
     fails a citation with no in-page link, the chassis highlights a targeted key row, and
-    `11-next-exam` removes a hub-local key; the key has three columns at most, so it fits a
-    phone: the code, what it is with the file's base name under it (muted, small), and Made by
+    `11-next-exam` removes a hub-local key, where `06-site` step 5 sends a build that refuses one;
+    the key has three columns at most, so it fits a phone: the code, what it is with the file's base name under it (muted, small), and Made by
     (E1.C10, E1.C11, D1.C20).
   - FB-143: with no sheet allowed, a condensed review page on the notes chassis, offered at intake,
     named in the stage table's 07 row, checked by `verify_page.mjs` with no `--steps`, and archived
@@ -68,6 +68,13 @@ evidence ids.
     PLAN.md's Review page line records it and its length, and its Deliverables and 07 rows name
     it. `08-practice` counts it as no sheet, but checks it with the notes: step 3.4's comparison,
     step 4.5's leak runs and "Changing the notes or a sheet", which rebuilds and republishes it.
+    That section is now the one list of the hub's published products (the notes page, the review
+    page, each sheet, the cram order and the page's cram copy, the questions and leak checks) and
+    what each change does to them; `07-cheatsheet`'s "After shipping", a `09-tutor` patch, a
+    `10-polish` pass and both `11-next-exam` source paths run it by reference. `11-next-exam` asks
+    the review page part of question 5 on a reopen whose exam allows no sheet and names the page
+    in its build table's 07 row, and the Notes patch brief writes, searches and rebuilds the review
+    page.
     CONVERT maps its rows' links to the notes page, `[text](<url>#id)`, to a plain `<a href>`
     (E1.C17, E1.C18, E1.C21, F1.C3, F1.C5, F1.C8).
   - FB-158: the cram night opens with the notes page and mock links, a tier defined, and what is
@@ -76,10 +83,12 @@ evidence ids.
     no key is opened for them: the mock key checker reruns, and a part it can't compute is logged
     in STATUS for `09-tutor` to recheck when it grades that mock, whose cram-order line then says
     to bring it to the session before marking it. The approved "check each mock key part the
-    answer touches" is done this way, without opening a key (D1.C23, E1.C15, E1.C19).
-  - FB-191: before publish, and before each republish after a notes change (a `09-tutor` patch, a
-    `10-polish` pass, either `11-next-exam` source path), `mock_leak.py --questions` checks the
-    notes against every unattempted question set, skipped and logged when there is none; a set
+    answer touches" is done this way, without opening a key (D1.C23, E1.C15, E1.C19, E1 (section
+    2)).
+  - FB-191: before publish, and before each republish after a notes change (an `08-practice`
+    change, a `09-tutor` patch, a `10-polish` pass, either `11-next-exam` source path),
+    `mock_leak.py --questions` checks the notes, and the review page's Markdown when there is one,
+    against every unattempted question set, skipped and logged when there is none; a set
     with no solutions row records its attempt as `no, attempted YYYY-MM-DD` in its own MANIFEST.md
     Answers cell, which `00-intake`, `11-next-exam` and `09-tutor` write and `05-verify` reads;
     held passages go to `_build/held.md`, whose quarantine line an older hub's CLAUDE.md gains,
@@ -107,7 +116,8 @@ evidence ids.
     (section 2), E1 (section 2), F1.G4, F1.G6).
   - K02: the cram order at the top of the notes page, in the exam-day map, which then renders open;
     the map's copy is rewritten from `practice/cram-order.md` by `08-practice` step 7.4 (the
-    handoff is now step 7.5), rerun by step 8.4, `10-polish` step 5.4 and `11-next-exam`'s source
-    added (E1.C5, E1.C6, D1.C22).
+    handoff is now step 7.5), rerun by step 8.4 and by "Changing the notes or a sheet" item 3 for
+    every flow that runs it. The sample hub's map renders open with a cram order and depth labels,
+    and the reference shots show it (E1.C5, E1.C6, D1.C22).
 - **Retired:** none.
 - **Backlog:** K02, K67, K68 `trying (round 2)`; K70 to K75 `open`.
