@@ -510,18 +510,15 @@ meanwhile and merges your branch when you report.
 
 ## End state
 - Done means: the change below made in every copy of the fact{{PAGE: , the section's fragment
-  matching and the page rebuilt}}, and when a copy was on the review page, its fragment matching
-  and that page rebuilt, in one commit on your branch.
+  matching and the page rebuilt}}, in one commit on your branch.
 - Artifact path: your branch, in your worktree of {{ROOT}}.
 - Report: end your reply with the JSON block (status, summary, artifacts, blocked_actions), with
   artifacts[0] `<branch>@<sha>`. The summary lists each file and line number you changed, never the
   text, and anything that looked wrong elsewhere, unfixed.
 
 ## Scope
-- Work in: your worktree of {{ROOT}}. Write only inside `notes/`, `_build/frag/`, `cheatsheet/`,
-  `_build/review/notes/` and `_build/review/_build/frag/` (the condensed review page, when the hub
-  has one){{PAGE:, plus the rebuilt `_build/notes.html`}}, and the rebuilt
-  `_build/review/_build/notes.html` when you changed the review page; never in a subfolder of
+- Work in: your worktree of {{ROOT}}. Write only inside `notes/`, `_build/frag/` and
+  `cheatsheet/`{{PAGE:, plus the rebuilt `_build/notes.html`}}; never in a subfolder of
   `cheatsheet/`: each holds a finished exam's sheets, frozen.
 - The change, exactly as the student approved it, in the notes, a sheet or both:
   - {{NOTES: `notes/{{FILE}}`, {{WHERE: after the line that starts "<its first words>" |
@@ -535,15 +532,20 @@ meanwhile and merges your branch when you report.
     report.}}
   - {{RESTORE: The student dropped an earlier change: put each file below back as it stood at
     commit `{{BEFORE}}`, `git show {{BEFORE}}:<path> > <path>`, then rebuild as below
-    (each `notes.html` is rebuilt, never restored): {{THE FILES `git diff --name-only {{BEFORE}}
-    HEAD -- notes/ _build/frag/ cheatsheet/ _build/review/notes/ _build/review/_build/frag/`
-    LISTS}}.}}
-- Every copy (FB-106): search `notes/`, `_build/frag/`, `cheatsheet/`, `_build/review/notes/` and
-  `_build/review/_build/frag/` for {{THE OLD PHRASE OR FACT}}, and make the same change wherever the
-  fact is stated (a Must-know line, a pitfall box, a sheet line, a review page row), except in a
-  subfolder of `cheatsheet/`. A wrong fact is fixed on both sheets; a line a mock prompted goes on
-  the final sheet only. A copy in the review page's Markdown changes in its fragment too, in the
-  fragment's markup (`_build/CONVERT.md`).
+    (`notes.html` is rebuilt, never restored): {{THE FILES `git diff --name-only {{BEFORE}}
+    HEAD -- notes/ _build/frag/ cheatsheet/` LISTS}}.}}
+- Every copy (FB-106): search `notes/`, `_build/frag/` and `cheatsheet/` for {{THE OLD PHRASE OR
+  FACT}}, and make the same change wherever the fact is stated (a Must-know line, a pitfall box, a
+  sheet line), except in a subfolder of `cheatsheet/`. A wrong fact is fixed on both sheets; a line
+  a mock prompted goes on the final sheet only.
+- The exam-day map's cram block is generated: `assemble.py` renders it from
+  `practice/cram-order.md` on every build, and it lives in no fragment. Never write a cram block or
+  an `open` attribute into `_build/frag/examnav.html` (`assemble.py` refuses both); a cram row that
+  states the old fact is the main session's to fix after the merge.
+- A worked example or pitfall tagged `.rv` (the Review view, `_build/CONVERT.md`) keeps its tag in
+  the notes and in the fragment. When `assemble.py` fails on the Review view's minutes after your
+  change, stop and report it, blocked: the main session untags (`07-cheatsheet`, "Tag the
+  review").
 - {{PAGE: From the worktree root, `python3 -I {{SKILL}}/scripts/assemble.py` and `python3 -I
   {{SKILL}}/scripts/linkcheck.py --html _build/notes.html` both exit 0. | PLAIN TEXT: There is no
   page and no link check (the notes have no anchors): check by eye that each `§N.M` reference you
@@ -551,9 +553,6 @@ meanwhile and merges your branch when you report.
   from the section files in order. | SHEET ONLY: Every copy of a corrected fact means both sheets,
   and an addition goes only where the change above names: nothing under `notes/` or
   `_build/frag/` changes, so nothing is rebuilt.}}
-- When you changed a file under `_build/review/`, from the worktree root `python3 -I
-  {{SKILL}}/scripts/assemble.py --root _build/review` and `python3 -I
-  {{SKILL}}/scripts/linkcheck.py --html _build/review/_build/notes.html` both exit 0.
 - Commit what you changed in one commit, subject `Notes {{N.M}}: {{WHAT}}` (`Sheets: {{WHAT}}`
   for a sheet alone), and only once every copy is changed and the checks above pass: a run that
   stops short (blocked, partial) commits nothing and reports what is left. Change existing files
@@ -564,6 +563,58 @@ meanwhile and merges your branch when you report.
 - Out of scope: everything under `practice/` (quarantined keys), `_build/verify/` but
   `examples.out.md`, `sources/`, and any search outside the directories above: one over the
   hub root returns key lines. Note anything else that looks wrong in your report; don't fix it.
+```
+
+## Key recheck (stage 08, the cram night)
+
+Role: `writer`, spawned with `isolation: "worktree"` on the Agent call: it opens the untaken mocks'
+keys, which the cram night's session never opens, since the student reads that session's chat
+(`08-practice` step 8's opening, FB-159). One per new staff answer, once `11-next-exam`'s "A source
+added to this exam" has taken it into the notes; the next mock attempt waits for its merge.
+
+```text
+# Brief: recheck the untaken {{EXAM}} mock keys against a staff answer on {{TOPIC}}
+
+## Purpose
+Staff answered a question the night before the exam, and the notes now carry the answer. A mock key
+written before it may mark a right answer wrong. The student takes {{THE UNTAKEN MOCKS}} tonight
+and marks each against its key, so every part the answer touches must be right before then. The
+student reads the main session's chat, so nothing you report may show a key: part ids only.
+
+## End state
+- Done means: every part of {{THE UNTAKEN MOCKS}} the staff answer touches checked against it, each
+  wrong one's key fixed, in one commit on your branch, and each mock's line from the key checker
+  says KEY OK.
+- Artifact path: your branch, in your worktree of {{ROOT}}.
+- Report: end your reply with the JSON block (status, summary, artifacts, blocked_actions), with
+  artifacts[0] `<branch>@<sha>`. The summary lists, per mock, each part id you checked and one
+  word for it: `changed`, `unchanged`, or `question` (the question itself would need rewording).
+  Nothing else: no key text, value, verdict, witness or working, in the summary, the JSON or the
+  commit message.
+
+## Scope
+- Work in: your worktree of {{ROOT}}. Write only `practice/mock-<slug>-key.md` for the slugs
+  {{SLUGS}}, `practice/mock-values-key.md` (the key checker writes it) and
+  `_build/verify/mock_key.py`.
+- The staff answer: {{THE STAFF TEXT, QUOTED, WITH ITS SOURCE}}. The notes sections it changed:
+  {{§N.M LIST}}.
+- Read: `_build/MOCK.md` (the key format), each of those mocks and its key,
+  `_build/verify/mock_key.py`, `practice/mock-values-key.md`, the notes and
+  `_build/verify/examples.out.md`.
+- The parts: each part whose `Topic:` is a section the answer changed, and each part the key
+  checker now fails. Check each one's answer against the staff answer and the notes as they now
+  stand.
+- Fix as `08-practice` step 4 says: a computed answer is copied from `practice/mock-values-key.md`
+  after `python3 -I _build/verify/mock_key.py` writes it, never worked by hand; a reasoned answer
+  is cited from the notes. Leave the mock files as they are: a part whose question would need
+  rewording is reported `question`, its key unchanged.
+- Run the key checker from the worktree root, `python3 -I _build/verify/mock_key.py`, until each
+  mock's line says KEY OK. Survey with `git status` and `git diff --stat` only, never a command
+  that prints a diff, and commit with the subject `Keys: recheck {{SLUGS}} after a staff answer`.
+  A run that stops short commits nothing.
+- Out of scope: a taken mock's key, every subfolder of `practice/` (a finished exam's archive),
+  `_build/verify/` but the files above (a change to the reference is the main session's: report
+  it, blocked), `notes/`, `cheatsheet/`, `sources/`, and any search outside the files above.
 ```
 
 ## Polish reader (stage 10)
