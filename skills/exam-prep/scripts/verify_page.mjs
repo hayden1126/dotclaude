@@ -1,4 +1,5 @@
-// Browser checks for an assembled page (the notes page, the mock page), headless Chromium.
+// Browser checks for an assembled page (the notes page, the mock page), headless Chromium, and
+// headless WebKit for the long jump when Playwright's WebKit is installed.
 //
 //   node verify_page.mjs <page.html> <outdir> [--spy id,id,...] [--steps <steps.json>] [--views]
 //
@@ -37,6 +38,12 @@
 //     holds the same parts (distinct data-part values) as the first view, and has no zero-size
 //     math and no horizontal overflow, its closed stems (details) opened too; fewer than two
 //     buttons fail.
+// Then the long jump (CHASSIS.md, C1), at 390 and 1280 px with smooth scrolling on, in Chromium and
+// in WebKit (Safari's engine, where a page scroll the rail starts cancels the jump): from the top it
+// clicks the last rail entry (#toc a), from the bottom the first, the drawer opened first where the
+// rail is one. Once the scroll settles (L18), the target's top sits between 0 and its own
+// scroll-margin-top, plus 24 px (where the page's end stops it short of that, where the end leaves
+// it). A missing WebKit is one WARN line, not a failure; a page with no rail (the mock page) skips it.
 // Screenshots of the viewport (never full page, L23) go to <outdir>: <width>-<scheme>-top.png, one
 // per spy target, one per step-through at its last frame, one per static figure (its id; one inside
 // a closed worked example is shot with it opened), the first worked example opened (-wex)
@@ -45,7 +52,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { loadChromium, launch } from './pw.mjs';
+import { loadPlaywright, installed, launch } from './pw.mjs';
 
 function usage(msg) {
   console.error(`verify_page: ${msg}`);
@@ -83,7 +90,7 @@ if (stepsArg) {
   }
 }
 
-const chromium = await loadChromium('verify_page', pagePath, usage);
+const { chromium, webkit } = await loadPlaywright('verify_page', pagePath, usage);
 
 fs.mkdirSync(outDir, { recursive: true });
 const src = fs.readFileSync(pagePath, 'utf8');
@@ -428,6 +435,97 @@ for (const width of [390, 1280]) {
       }
     }
     await ctx.close();
+  }
+}
+
+// scrollY unchanged for 600 ms: the smooth scroll ended, or something cancelled it (L18).
+async function settle(page) {
+  let last = -1;
+  let still = 0;
+  for (let i = 0; i < 150 && still < 6; i++) {
+    const y = await page.evaluate(() => window.scrollY);
+    still = y === last ? still + 1 : 0;
+    last = y;
+    await page.waitForTimeout(100);
+  }
+}
+
+// The long jump in one engine; false when the page has no rail to jump from.
+const JUMP_TOL = 24;
+async function longJump(engine, b) {
+  for (const width of [390, 1280]) {
+    const ctx = await b.newContext({ viewport: { width, height: 900 }, colorScheme: 'light', reducedMotion: 'no-preference' });
+    const page = await ctx.newPage();
+    await page.goto(pathToFileURL(wrapped).href, { waitUntil: 'networkidle' });
+    if (!(await page.evaluate(() => document.querySelectorAll('#toc a[href^="#"]').length >= 2))) {
+      await ctx.close();
+      return false;
+    }
+    // Typesetting moves every heading, so nothing is measured before MathJax and the fonts finish.
+    const ready = await page.waitForFunction(() => !!(window.MathJax && MathJax.startup && MathJax.startup.promise), null, { timeout: 30000 })
+      .then(() => page.evaluate(() => Promise.race([
+        MathJax.startup.promise.then(() => document.fonts.ready).then(() => true, () => false),
+        new Promise((res) => setTimeout(() => res(false), 20000))])), () => false);
+    if (!ready) {
+      fail(`long jump ${engine} ${width}px: MathJax never finished, so nothing measured`);
+      await ctx.close();
+      continue;
+    }
+    for (const dir of ['top->last', 'bottom->first']) {
+      const toFirst = dir === 'bottom->first';
+      await page.evaluate((toEnd) => {
+        const html = document.documentElement;
+        const was = html.style.scrollBehavior;
+        html.style.scrollBehavior = 'auto';
+        window.scrollTo(0, toEnd ? html.scrollHeight : 0);
+        html.style.scrollBehavior = was;
+      }, toFirst);
+      await settle(page);
+      if (await page.isVisible('#menuBtn')) {
+        await page.click('#menuBtn');
+        await page.waitForTimeout(400);
+      }
+      const link = page.locator('#toc a[href^="#"]')[toFirst ? 'first' : 'last']();
+      const id = decodeURIComponent((await link.getAttribute('href')).slice(1));
+      await link.click();
+      await page.waitForTimeout(100);
+      await settle(page);
+      const r = await page.evaluate((i) => {
+        const el = document.getElementById(i);
+        if (!el) return null;
+        const top = el.getBoundingClientRect().top;
+        const margin = parseFloat(getComputedStyle(el).scrollMarginTop) || 0;
+        const max = document.documentElement.scrollHeight - innerHeight;
+        const at = top + window.scrollY;
+        return { top: Math.round(top), want: Math.round(at - Math.min(Math.max(at - margin, 0), max)) };
+      }, id);
+      const label = `long jump ${engine} ${width}px ${dir}`;
+      if (!r) fail(`${label}: no #${id} on the page`);
+      else if (r.top < -2 || r.top > r.want + JUMP_TOL) {
+        fail(`${label}: #${id} landed at top ${r.top} px, want 0 to ${r.want + JUMP_TOL} px (a jump cut short, C1)`);
+      } else console.log(`  ${label} ok: #${id} at top ${r.top} px`);
+    }
+    await ctx.close();
+  }
+  return true;
+}
+
+if (!mathjaxDown) {
+  console.log('[long jump]');
+  if (!(await longJump('chromium', browser))) console.log('  long jump skipped: no rail entries (#toc a)');
+  else if (!installed(webkit)) {
+    console.log('  WARN long jump: WebKit is not installed, so only Chromium ran it: npx playwright install webkit');
+  } else {
+    let wk = null;
+    try {
+      wk = await launch(webkit);
+    } catch (e) {
+      fail(`long jump webkit: WebKit is installed but won't launch: ${String(e.message || e).split('\n')[0]}`);
+    }
+    if (wk) {
+      await longJump('webkit', wk);
+      await wk.close();
+    }
   }
 }
 await browser.close();

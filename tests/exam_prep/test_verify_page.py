@@ -17,7 +17,8 @@ Prev that doesn't step back, a mode button that doesn't reset, a TeX error or un
 an overflow that shows only with the worked examples open, a MathJax startup that never finishes
 or fails,
 and an element named currentScript, which the pinned loader path ignores but which, unpinned,
-moves MathJax's loader to its host; and --views on the mock page (its own class)."""
+moves MathJax's loader to its host; a long page whose rail scrolls the page with scrollIntoView,
+which cuts a long jump short in WebKit (C1); and --views on the mock page (its own class)."""
 import contextlib
 import importlib.util
 import io
@@ -36,6 +37,15 @@ SAMPLE = os.path.join(REPO, "tests", "exam_prep", "fixtures", "site")
 MOCK = os.path.join(REPO, "tests", "exam_prep", "fixtures", "mock")
 MOCKPAGE = os.path.join(REPO, "skills", "exam-prep", "scripts", "mockpage.py")
 NODE = shutil.which("node")
+
+
+def webkit_installed():
+    """Whether the Playwright in $EXAM_PREP_PLAYWRIGHT has its WebKit build on disk."""
+    probe = ("import(process.argv[1]).then((m) => { const p = m.webkit.executablePath(); "
+             "console.log(require('fs').existsSync(p) ? 'yes' : 'no'); })")
+    r = subprocess.run([NODE, "-e", probe, os.path.join(os.environ["EXAM_PREP_PLAYWRIGHT"], "index.mjs")],
+                       capture_output=True, text=True, timeout=60)
+    return r.stdout.strip() == "yes"
 
 
 @unittest.skipUnless(NODE, "node is not on PATH")
@@ -312,6 +322,36 @@ class BrowserCatchesTest(unittest.TestCase):
             '<p>Setup: the range 3 to 7.</p><figure id="fig-1-hidden" style="display:none"><svg '
             'viewBox="0 0 10 10" role="img" aria-label="A dot"><circle cx="5" cy="5" r="4"/></svg>'
             '</figure>'))
+
+    def test_a_long_jump_cut_short_in_webkit(self):
+        # The rail kept its active link in view with scrollIntoView, which in WebKit moves the page
+        # too and cancels the smooth jump the click started (C1): Safari stopped short of the target.
+        # The jump must still be moving when the spy reaches a link the rail has to scroll to, so
+        # the page gets a third section with forty subsections.
+        if not webkit_installed():
+            self.skipTest("Playwright's WebKit isn't installed (npx playwright install webkit)")
+        para = "<p>Filler, so the jump from the top to the last rail entry runs a long way.</p>" * 4
+        subs = "".join(f'\n  <h3 id="sec-3-part-{i}">3.{i} Part {i}</h3>\n  {para}' for i in range(1, 41))
+        long = self.edit("    </main>", '<section class="note" id="sec-3">\n  <h2><span class="n">§3</span>'
+                         f'Filler</h2>{subs}\n</section>\n    </main>')
+        r = self.verify("jumpok", long)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("long jump webkit 1280px top->last ok: #sec-3-part-40", r.stdout)
+        self.assertIn("long jump webkit 1280px bottom->first ok: #sec-1", r.stdout)
+        fixed = ("    var a=byId[id]; if(a){ /* keep active visible in rail: scroll the rail alone, since\n"
+                 "      scrollIntoView also moves the page and cancels a smooth jump in flight (WebKit) */\n"
+                 "      var r=a.getBoundingClientRect(), rr=rail.getBoundingClientRect();\n"
+                 "      if(r.top<rr.top+80) rail.scrollTop+=r.top-rr.top-80;\n"
+                 "      else if(r.bottom>rr.bottom-20) rail.scrollTop+=r.bottom-rr.bottom+20;\n"
+                 "    }\n")
+        old = ("    var a=byId[id]; if(a&&a.scrollIntoView){ /* keep active visible in rail */\n"
+               "      var r=a.getBoundingClientRect(); if(r.top<80||r.bottom>window.innerHeight-20) "
+               "a.scrollIntoView({block:'nearest'});\n"
+               "    }\n")
+        self.assertEqual(long.count(fixed), 1)
+        out = self.fails("jumpold", "long jump webkit 1280px top->last: #sec-3-part-40 landed at top",
+                         page=long.replace(fixed, old))
+        self.assertIn("long jump webkit 1280px bottom->first: #sec-1 landed at top", out)
 
     def test_overflow_inside_an_open_worked_example(self):
         self.fails("wexwide", "with the worked examples and map open", page=self.edit(

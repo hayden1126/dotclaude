@@ -1,5 +1,6 @@
 // Playwright for the skill's browser scripts (verify_page.mjs, print_sheet.mjs): where it comes
-// from, and a Chromium launch that goes through the sandbox's proxy (L21).
+// from, and a browser launch (Chromium, or WebKit for verify_page.mjs's long jump) that goes
+// through the sandbox's proxy (L21).
 //
 // An ES module ignores NODE_PATH (L22), so Playwright is imported from an absolute path: the
 // package directory in $EXAM_PREP_PLAYWRIGHT, else the first install found in node_modules/ beside
@@ -36,19 +37,36 @@ function findPlaywright(name, pagePath, usage) {
   process.exit(2);
 }
 
-// The chromium object of the Playwright found for pagePath; `name` prefixes messages and `usage`
-// reports a bad EXAM_PREP_PLAYWRIGHT (it exits 2).
-export async function loadChromium(name, pagePath, usage) {
+// The Playwright module found for pagePath (its chromium and webkit objects); `name` prefixes
+// messages and `usage` reports a bad EXAM_PREP_PLAYWRIGHT (it exits 2).
+export async function loadPlaywright(name, pagePath, usage) {
   const dir = findPlaywright(name, pagePath, usage);
   console.log(`playwright: ${dir}`);
-  return (await import(pathToFileURL(path.join(dir, 'index.mjs')).href)).chromium;
+  return import(pathToFileURL(path.join(dir, 'index.mjs')).href);
 }
 
-export function launch(chromium) {
+// The chromium object of that Playwright.
+export async function loadChromium(name, pagePath, usage) {
+  return (await loadPlaywright(name, pagePath, usage)).chromium;
+}
+
+// True when Playwright's own build of this browser (chromium, webkit) is on disk: `npx playwright
+// install <browser>` puts it there.
+export function installed(browserType) {
+  try {
+    return fs.existsSync(browserType.executablePath());
+  } catch {
+    return false;
+  }
+}
+
+// Launches a browser type (chromium, webkit) with the sandbox's proxy, when there is one: both
+// take Playwright's proxy option alike.
+export function launch(browserType) {
   const raw = process.env.HTTPS_PROXY || process.env.https_proxy;
-  if (!raw) return chromium.launch();
+  if (!raw) return browserType.launch();
   const u = new URL(raw);
-  return chromium.launch({
+  return browserType.launch({
     proxy: {
       server: `${u.protocol}//${u.host}`,
       username: decodeURIComponent(u.username),

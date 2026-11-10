@@ -338,8 +338,11 @@
   var current=null;
   function setActive(id){ if(id===current)return; current=id;
     links.forEach(function(a){a.classList.toggle('active',a.dataset.target===id);});
-    var a=byId[id]; if(a&&a.scrollIntoView){ /* keep active visible in rail */
-      var r=a.getBoundingClientRect(); if(r.top<80||r.bottom>window.innerHeight-20) a.scrollIntoView({block:'nearest'});
+    var a=byId[id]; if(a){ /* keep active visible in rail: scroll the rail alone, since
+      scrollIntoView also moves the page and cancels a smooth jump in flight (WebKit) */
+      var r=a.getBoundingClientRect(), rr=rail.getBoundingClientRect();
+      if(r.top<rr.top+80) rail.scrollTop+=r.top-rr.top-80;
+      else if(r.bottom>rr.bottom-20) rail.scrollTop+=r.bottom-rr.bottom+20;
     }
   }
   var spyList=[]; spied.forEach(function(el){if(el.id)spyList.push(el);});

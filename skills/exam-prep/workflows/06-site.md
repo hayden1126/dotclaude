@@ -81,7 +81,11 @@ From the hub root:
    `allowed_domains` cdnjs.cloudflare.com, fonts.googleapis.com and fonts.gstatic.com (L20 to L22).
    It checks math (TeX errors too), overflow (with the worked examples and the map opened too),
    links, fonts, closed examples, scroll-spy and every step-through's runs, forward and back, at 390
-   and 1280 px in light and dark, and saves screenshots to `_build/shots/` (gitignored). It finds
+   and 1280 px in light and dark, and saves screenshots to `_build/shots/` (gitignored). Its long
+   jump clicks the rail's last entry from the top and its first from the bottom, and checks each
+   heading lands at the top, in Chromium and in WebKit, Safari's engine, where a jump the rail cuts
+   short shows (C1); without Playwright's WebKit it prints a WARN line naming `npx playwright
+   install webkit`, for the user to run in their terminal. It finds
    Playwright in `_build/node_modules/`, the hub's `node_modules/` or npm's global root, or at the
    package directory `EXAM_PREP_PLAYWRIGHT` names. With none, it says so and exits 2: install it
    once outside the hub's tracked files (`npm install playwright` in `_build/`, whose

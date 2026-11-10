@@ -72,6 +72,9 @@ Only a step-through may add unstyled hook classes for its handler, each named `f
 - No math inside SVG text or headings (L14); a label the rail or a cross-reference shows is typed
   text, never a CSS counter (L16); figures stay inside their section (L17).
 - Scroll-spy is a scroll handler, and a check waits for scrolling to settle (L18).
+- **C1.** The rail keeps its active link visible by scrolling the rail alone, never
+  `scrollIntoView`: that moves the page too and cancels a smooth jump in flight in WebKit
+  (L71). `verify_page.mjs` checks the long jump, in WebKit too when it is installed.
 - The page is a fragment (title, font links, style, body content, scripts), as past runs
   published it: the artifact host wraps it in a standards-mode document, and `verify_page.mjs`
   wraps it the same way before checking it, since loaded alone it renders in quirks mode (L19).
