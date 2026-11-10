@@ -184,7 +184,10 @@ In this order, each item logged as it lands:
    MANIFEST.md and refuses a citation with an href of its own. Add any of `00-intake` step 1's
    `.gitignore` lines the hub lacks.
    Then list in the log the STYLE rules the diff adds (their `S` numbers): the old sections may
-   miss them, and the report offers a `10-polish` pass. The diff is for `12-retro`, which tells the
+   miss them, and the report offers a `10-polish` pass. S33 is never left to that offer: the
+   reopened build's `05-verify` gives each old subsection this exam keeps `in` that has no
+   `**Depth:**` line one in S33's inferred form, since `06-site` step 4's map and `08-practice`
+   step 7's cram rows need it. The diff is for `12-retro`, which tells the
    skill's own changes from a hub-local edit; hubs never keep their own copy.
 3. **Reset STATUS.** Take out every line about the finished exam's build, mocks, sheets and cram
    night: `Stage 08 built`, `Reopened build:`, `Tutor:`, `Polish:`, `Source added:`, `Skip asked:`,

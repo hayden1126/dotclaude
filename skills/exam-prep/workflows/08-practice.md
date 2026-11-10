@@ -222,6 +222,8 @@ The night before, the student gets a reading list into the verified notes, never
   section's depth label (S33) and the one thing to take from it, in the notes' own words. The
   label is its words alone (Know cold, Use, Recognize), without the statement it rests on, as
   `06-site` step 4 says: `(15 min): Use: <the one thing>`. `cram_check.py` refuses anything else.
+  An older exam's section on a reopened hub has its label from that build (`11-next-exam` step 5
+  item 2); a row never makes one up.
 - Each row links `<notes URL>#<id>`, the published notes page from STATUS (plain-text notes: it
   names `§x.y Title` as text).
 - A mock the student hasn't taken yet gets its line after the tier that prepares it, the harder
