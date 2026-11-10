@@ -1,6 +1,8 @@
-// Browser checks for an assembled page (the notes page, the mock page), headless Chromium.
+// Browser checks for an assembled page (the notes page, the mock page), headless Chromium, and
+// headless WebKit for the long jump when Playwright's WebKit is installed.
 //
 //   node verify_page.mjs <page.html> <outdir> [--spy id,id,...] [--steps <steps.json>] [--views]
+//                        [--no-long-jump]
 //
 // Playwright comes from pw.mjs: $EXAM_PREP_PLAYWRIGHT, else an install it finds, else it says how
 // to install one and exits 2. Run it with `allowed_domains` cdnjs.cloudflare.com,
@@ -26,7 +28,9 @@
 //     {"<fig-id>": [{"act"?, "frames", "final"}]}) starts without `final` in its status line,
 //     reaches its last frame in exactly `frames` presses of Next, shows `final` there, comes back
 //     to its first frame in as many presses of Prev, and throws nothing; a step-through --steps
-//     doesn't list, and a mode button no run presses, fail (FB-117);
+//     doesn't list, and a mode button no run presses, fail (FB-117). A page with a step-through
+//     (a tag with class fig-controls) and no --steps is bad usage: it says so and exits 2 before
+//     any browser starts, rather than check less;
 //   - no page errors;
 //   - scroll-spy marks each --spy target when it is scrolled to (default: the first section, a
 //     middle subsection and the last subsection the page can scroll to the spy line), after the
@@ -37,19 +41,37 @@
 //     holds the same parts (distinct data-part values) as the first view, and has no zero-size
 //     math and no horizontal overflow, its closed stems (details) opened too; fewer than two
 //     buttons fail.
+// A notes page with the Review / Full notes toggle (.viewtog, CHASSIS.md) runs all of the above a
+// second time in the Review view (pressed through its own button; step-throughs and static
+// figures, which it hides, aside), its shots named <width>-<scheme>-review-..., and checks there
+// that the view shows exactly what CHASSIS.md says (every rv block, worked examples open, each h3
+// over one, each Must-know h3 and its list, the map, the source key, the fixed line) and hides the
+// rest, a section with a Not on <exam> or Unverified banner before its first h3 whole, and that
+// clicking a link to something it hides switches to Full notes and lands on it, as do a hash change
+// to it and a load of the page at its hash with the Review view remembered (near the top, both).
+// Then the long jump (CHASSIS.md, C1), at 390 and 1280 px with smooth scrolling on, in Chromium and
+// in WebKit (Safari's engine, where a page scroll the rail starts cancels the jump): from the top it
+// clicks the last rail entry (#toc a), from the bottom the first, the drawer opened first where the
+// rail is one. Once the scroll settles (L18), the target's top sits between 0 and its own
+// scroll-margin-top, plus 24 px (where the page's end stops it short of that, where the end leaves
+// it), in both views when the page has the toggle (the rail's first and last shown entries, in the
+// order the view puts them). A missing WebKit is one WARN line, not a failure; a page with no rail (the mock page) skips it.
+// --no-long-jump skips it, with one line: the skill's own tests pass it, a build never does.
 // Screenshots of the viewport (never full page, L23) go to <outdir>: <width>-<scheme>-top.png, one
 // per spy target, one per step-through at its last frame, one per static figure (its id; one inside
-// a closed worked example is shot with it opened), the first worked example opened (-wex)
-// and the exam-day map opened (-map), and with --views one per view (-view-<name>). Exit 0 when every check passes, 1 on any failure, 2 on bad
+// a closed worked example is shot with it opened), the first worked example opened (-wex),
+// the exam-day map opened (-map), the source key with its first row targeted (-key; the row must
+// be the :target and on screen, and at the page's bottom, where the shot is taken, the rail's link
+// to the last section must be active), and with --views one per view (-view-<name>). Exit 0 when every check passes, 1 on any failure, 2 on bad
 // usage.
 import fs from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { loadChromium, launch } from './pw.mjs';
+import { loadPlaywright, installed, launch } from './pw.mjs';
 
 function usage(msg) {
   console.error(`verify_page: ${msg}`);
-  console.error('usage: node verify_page.mjs <page.html> <outdir> [--spy id,id] [--steps <steps.json>] [--views]');
+  console.error('usage: node verify_page.mjs <page.html> <outdir> [--spy id,id] [--steps <steps.json>] [--views] [--no-long-jump]');
   process.exit(2);
 }
 
@@ -57,11 +79,13 @@ const args = process.argv.slice(2);
 let spyArg = null;
 let stepsArg = null;
 let viewsArg = false;
+let longJumpArg = true;
 const pos = [];
 for (let i = 0; i < args.length; i++) {
   if (args[i] === '--spy') spyArg = args[++i];
   else if (args[i] === '--steps') stepsArg = args[++i];
   else if (args[i] === '--views') viewsArg = true;
+  else if (args[i] === '--no-long-jump') longJumpArg = false;
   else pos.push(args[i]);
 }
 if (pos.length !== 2) usage('need <page.html> and <outdir>');
@@ -83,10 +107,16 @@ if (stepsArg) {
   }
 }
 
-const chromium = await loadChromium('verify_page', pagePath, usage);
+const src = fs.readFileSync(pagePath, 'utf8');
+// Inside a tag, so a class written as text in a code block (its < escaped) doesn't count.
+if (!stepsArg && /<[a-z][^<>]*\bclass\s*=\s*["']?[^"'<>]*\bfig-controls\b/i.test(src)) {
+  usage('the page has step-throughs (a .fig-controls row) and no --steps: pass --steps ' +
+        '_build/frag/steps.json (06-site, step 2)');
+}
+
+const { chromium, webkit } = await loadPlaywright('verify_page', pagePath, usage);
 
 fs.mkdirSync(outDir, { recursive: true });
-const src = fs.readFileSync(pagePath, 'utf8');
 const doc = /^\s*<!doctype/i.test(src) ? src
   : '<!doctype html><html lang="en"><head><meta charset="utf-8">' +
     '<meta name="viewport" content="width=device-width, initial-scale=1">' + src + '</html>';
@@ -104,6 +134,20 @@ const mjRoot = mjSrc ? mjSrc.replace(/\/[^/]*$/, '') : null;
 const pins = scriptTags.filter((m) => !/\bsrc=/.test(m[1]))
   .map((m) => (m[2].match(/\bpaths\s*:\s*\{\s*mathjax\s*:\s*['"]([^'"]+)['"]/) || [])[1]).filter(Boolean);
 
+// The Review view's toggle, inside a tag so a class named in a code block doesn't count.
+const hasToggle = /<[a-z][^<>]*\bclass\s*=\s*["']?[^"'<>]*\bviewtog\b/i.test(src);
+const pageViews = hasToggle ? ['full', 'review'] : ['full'];
+
+// Press the Review or Full notes button (the first the page has; both drive one state).
+async function pickView(page, v) {
+  return page.evaluate((want) => {
+    const b = document.querySelector(`.viewtog button[data-pick="${want}"]`);
+    if (!b) return false;
+    b.click();
+    return (document.documentElement.getAttribute('data-notesview') === 'review') === (want === 'review');
+  }, v);
+}
+
 const browser = await launch(chromium);
 let failures = 0;
 const fail = (m) => { failures++; console.log('  FAIL ' + m); };
@@ -116,8 +160,10 @@ else if (!pins.includes(mjRoot)) {
 let mathjaxDown = false;
 for (const width of [390, 1280]) {
   if (mathjaxDown) break;
-  for (const scheme of ['light', 'dark']) {
-    const tag = `${width}-${scheme}`;
+  for (const scheme of ['light', 'dark']) for (const view of pageViews) {
+    if (mathjaxDown) break;
+    const review = view === 'review';
+    const tag = `${width}-${scheme}${review ? '-review' : ''}`;
     console.log(`[${tag}]`);
     const ctx = await browser.newContext({ viewport: { width, height: 900 }, colorScheme: scheme, reducedMotion: 'reduce' });
     const page = await ctx.newPage();
@@ -159,6 +205,50 @@ for (const width of [390, 1280]) {
       break;
     }
     await page.evaluate(() => document.fonts.ready);
+    if (review) {
+      if (!(await pickView(page, 'review'))) fail(`${tag}: pressing Review didn't switch the page to the Review view`);
+      await page.waitForTimeout(300);
+      const rv = await page.evaluate(() => {
+        const vis = (e) => e.getClientRects().length > 0;
+        const name = (e) => e.tagName.toLowerCase() + (e.id ? '#' + e.id : '') +
+          (e.className && typeof e.className === 'string' ? '.' + e.className.trim().split(/\s+/).join('.') : '');
+        const bad = [];
+        for (const sec of document.querySelectorAll('#main section.note')) {
+          if (sec.querySelector('tr[id^="src-"]')) { if (!vis(sec)) bad.push('hides the source key'); continue; }
+          // A Not on <exam> or Unverified banner before the first h3 takes the whole section out.
+          let out = false;
+          for (const k of sec.children) {
+            if (k.tagName.toLowerCase() === 'h3') break;
+            const lab = k.classList.contains('callout') && k.classList.contains('warn') && k.querySelector('.lab');
+            if (lab && /^(Not on .|Unverified$)/.test(lab.textContent.replace(/\s+/g, ' ').trim())) { out = true; break; }
+          }
+          if (out) {
+            if (vis(sec)) bad.push(`shows ${name(sec)}, which its banner takes out`);
+            continue;
+          }
+          let h3 = null;
+          let must = false;
+          const want = new Map();
+          for (const k of sec.children) {
+            const tag = k.tagName.toLowerCase();
+            if (tag === 'h2') want.set(k, true);
+            else if (tag === 'h3') { h3 = k; must = /-must-know$/.test(k.id); want.set(k, must); }
+            else if (k.classList.contains('rv')) { want.set(k, true); if (h3) want.set(h3, true); }
+            else if (must && (tag === 'ul' || tag === 'ol')) { want.set(k, true); must = false; } else want.set(k, false);
+          }
+          for (const [k, w] of want) if (w !== vis(k)) bad.push(`${w ? 'hides' : 'shows'} ${name(k)}`);
+        }
+        const closed = [...document.querySelectorAll('#main details.wex.rv')].filter((d) => !d.open).map(name);
+        if (closed.length) bad.push(`leaves worked examples closed: ${closed.join(', ')}`);
+        const map = document.querySelector('details.examnav');
+        if (map && !vis(map)) bad.push('hides the exam-day map');
+        const lede = document.querySelector('.rvlede');
+        if (!lede || !vis(lede)) bad.push('shows no line saying what the view is (.rvlede)');
+        return bad;
+      });
+      for (const b of rv) fail(`${tag}: the Review view ${b}`);
+      if (!rv.length) console.log('  review view shows its blocks and hides the rest');
+    }
     const r = await page.evaluate(() => {
       const main = document.getElementById('main') || document.body;
       const mj = [...document.querySelectorAll('mjx-container')];
@@ -232,7 +322,7 @@ for (const width of [390, 1280]) {
     if (r.dup.length) fail('duplicate ids: ' + r.dup.join(', '));
     if (r.sw > r.cw + 1) fail(`horizontal overflow ${r.sw} > ${r.cw}: ${r.wide.join(' ')}`);
     for (const f of r.fonts) if (!f.loaded) fail(`font ${f.fam} (${f.v}) never loaded: the Google Fonts link, or allowed_domains (L24)`);
-    if (r.openWex) fail(`${r.openWex} worked examples open by default`);
+    if (r.openWex && !review) fail(`${r.openWex} worked examples open by default`);
     if (!r.safe) fail("MathJax's ui/safe isn't loaded: the page's window.MathJax lacks load:['ui/safe'] in its loader (the templates have it)");
     if (r.mathAttrs) fail(`${r.mathAttrs} elements inside math with a class, id or style MathJax's own output never has (a \\class, \\cssId, \\style or \\bbox)`);
     if (r.jsLinks) fail(`${r.jsLinks} javascript: links (a MathJax \\href or \\mmlToken the build let through)`);
@@ -256,11 +346,13 @@ for (const width of [390, 1280]) {
       const where = await page.evaluate((i) => {
         const el = document.getElementById(i);
         if (!el) return 'missing';
+        if (!el.getClientRects().length) return 'hidden';
         if (!window.__spyReachable(el)) return 'end';
         el.scrollIntoView({ block: 'start' });
         return 'ok';
       }, id);
       if (where === 'missing') { fail(`scroll-spy target #${id} not on the page`); continue; }
+      if (where === 'hidden') { console.log(`  spy skip #${id}: hidden in this view`); continue; }
       if (where === 'end') { console.log(`  spy skip #${id}: too near the page's end to reach the spy line`); continue; }
       await page.waitForTimeout(400);
       await page.evaluate(() => window.dispatchEvent(new Event('scroll')));
@@ -271,10 +363,10 @@ for (const width of [390, 1280]) {
       await page.screenshot({ path: path.join(outDir, `${tag}-${id}.png`) });
     }
 
-    const figs = await page.evaluate(() => [...document.querySelectorAll('figure')]
+    const figs = review ? [] : await page.evaluate(() => [...document.querySelectorAll('figure')]
       .filter((f) => f.querySelector('.fig-controls'))
       .map((f) => ({ id: f.id, handler: typeof (window.NotesFig || {})[f.id] === 'function' })));
-    for (const id of Object.keys(steps)) {
+    for (const id of review ? [] : Object.keys(steps)) {
       if (!figs.some((f) => f.id === id)) fail(`--steps lists #${id}, which is no step-through on the page`);
     }
     for (const f of figs) {
@@ -331,7 +423,7 @@ for (const width of [390, 1280]) {
     }
 
     // Every static figure too: only a look catches an edge drawn through a node or a label on a line.
-    const statics = await page.evaluate(() => [...document.querySelectorAll('figure[id]')]
+    const statics = review ? [] : await page.evaluate(() => [...document.querySelectorAll('figure[id]')]
       .filter((f) => !f.querySelector('.fig-controls')).map((f) => f.id));
     for (const id of statics) {
       await page.evaluate((i) => {
@@ -376,7 +468,7 @@ for (const width of [390, 1280]) {
       if (o.zero) fail(`${o.zero} zero-size math in the opened worked examples or map`);
       if (o.sw > o.cw + 1) fail(`horizontal overflow with the worked examples and map open ${o.sw} > ${o.cw}: ${o.wide.join(' ')}`);
       else console.log(`  ${opened} worked examples and maps opened: no overflow`);
-      for (const [sel, name] of [['details.wex', 'wex'], ['details.examnav', 'map']]) {
+      for (const [sel, name] of [[review ? 'details.wex.rv' : 'details.wex', 'wex'], ['details.examnav', 'map']]) {
         if (!(await page.evaluate((q) => !!document.querySelector(q), sel))) continue;
         // Scroll back past the sticky top bar, so the opened summary shows too.
         await page.evaluate((q) => { document.querySelector(q).scrollIntoView({ block: 'start' }); window.scrollBy(0, -90); }, sel);
@@ -384,7 +476,98 @@ for (const width of [390, 1280]) {
         await page.screenshot({ path: path.join(outDir, `${tag}-${name}.png`) });
       }
     }
-    if (viewsArg) {
+    // The source key (FB-123): its first row targeted, as a citation's link leaves it, so its shot
+    // shows the tr:target highlight.
+    const keyRow = await page.evaluate(() => {
+      const r = document.querySelector('tr[id^="src-"]');
+      return r ? r.id : null;
+    });
+    if (keyRow) {
+      await page.evaluate((id) => { location.hash = '#' + id; }, keyRow);
+      await settle(page);
+      const shown = await page.evaluate((id) => {
+        const r = document.getElementById(id);
+        const b = r.getBoundingClientRect();
+        return r.matches(':target') && b.top >= 0 && b.bottom <= innerHeight;
+      }, keyRow);
+      if (!shown) fail(`${tag}: source key row #${keyRow} not targeted and on screen for its shot`);
+      // At the page's bottom the rail marks the last spied section (the key, too short to reach
+      // the spy's line) active.
+      await page.evaluate(() => window.scrollTo({ top: document.documentElement.scrollHeight, behavior: 'instant' }));
+      await settle(page);
+      const lastActive = await page.evaluate(() => {
+        const spied = [...document.querySelectorAll('#main section.note, #main section.note h3[id]')]
+          .filter((e) => e.id && e.getClientRects().length)
+          .sort((a, b) => a.getBoundingClientRect().top - b.getBoundingClientRect().top);
+        const last = spied[spied.length - 1];
+        const a = last && document.querySelector(`#toc a[data-target="${CSS.escape(last.id)}"]`);
+        return a ? { id: last.id, active: a.classList.contains('active') } : null;
+      });
+      if (lastActive && !lastActive.active) fail(`${tag}: at the page's bottom the rail's link to #${lastActive.id}, the last section, is not active`);
+      else if (lastActive) console.log(`  at the bottom the rail marks #${lastActive.id} active`);
+      await page.screenshot({ path: path.join(outDir, `${tag}-key.png`) });
+    }
+    if (review) {
+      // A link to something the Review view hides switches to Full notes and lands there.
+      await page.evaluate(() => window.scrollTo({ top: 0, behavior: 'instant' }));
+      const hid = await page.evaluate(() => {
+        const vis = (e) => e.getClientRects().length > 0;
+        const a = [...document.querySelectorAll('#main a[href^="#"]')].find((x) => {
+          const t = document.getElementById(decodeURIComponent(x.getAttribute('href').slice(1)));
+          return vis(x) && t && !vis(t);
+        });
+        if (!a) return null;
+        a.setAttribute('data-vp-hid', '1');
+        return decodeURIComponent(a.getAttribute('href').slice(1));
+      });
+      if (!hid) console.log('  no link to a hidden target to check');
+      else {
+        await page.click('[data-vp-hid]');
+        await settle(page);
+        const land = await page.evaluate((id) => {
+          const t = document.getElementById(id);
+          const top = t.getBoundingClientRect().top;
+          return { full: !document.documentElement.hasAttribute('data-notesview'), top: Math.round(top),
+            shown: t.getClientRects().length > 0, max: innerHeight };
+        }, hid);
+        if (!land.full) fail(`${tag}: a link to #${hid}, hidden in the Review view, didn't switch to Full notes`);
+        else if (!land.shown || land.top < -2 || land.top > land.max - 20) {
+          fail(`${tag}: a link to #${hid}, hidden in the Review view, switched to Full notes but landed at top ${land.top} px`);
+        } else console.log(`  hidden-target link #${hid}: switched to Full notes, landed at top ${land.top} px`);
+        // The same target reached by its hash, the Review view remembered: a hash change, then a
+        // fresh load of the page at it. Each switches to Full notes and lands near the top.
+        const landed = async (p) => {
+          await settle(p);
+          return p.evaluate((id) => {
+            const t = document.getElementById(id);
+            return { full: !document.documentElement.hasAttribute('data-notesview'), shown: t.getClientRects().length > 0,
+              top: Math.round(t.getBoundingClientRect().top) };
+          }, hid);
+        };
+        const near = (how, l) => {
+          if (!l.full) fail(`${tag}: ${how} to #${hid}, hidden in the Review view, didn't switch to Full notes`);
+          else if (!l.shown || l.top < -2 || l.top > 200) {
+            fail(`${tag}: ${how} to #${hid}, hidden in the Review view, switched to Full notes but landed at top ${l.top} px`);
+          } else console.log(`  ${how} to hidden #${hid}: switched to Full notes, landed at top ${l.top} px`);
+        };
+        await pickView(page, 'review');
+        await page.evaluate(() => {
+          localStorage.setItem('notes-view', 'review');
+          history.replaceState(null, '', location.pathname);
+          window.scrollTo({ top: 0, behavior: 'instant' });
+        });
+        await page.evaluate((id) => { location.hash = id; }, hid);
+        near('a hash change', await landed(page));
+        await page.evaluate(() => localStorage.setItem('notes-view', 'review'));
+        const fresh = await ctx.newPage();
+        await fresh.goto(pathToFileURL(wrapped).href + '#' + encodeURIComponent(hid), { waitUntil: 'networkidle' });
+        await fresh.waitForFunction(() => !!(window.MathJax && MathJax.startup && MathJax.startup.promise), null, { timeout: 30000 })
+          .then(() => fresh.evaluate(() => MathJax.startup.promise)).catch(() => {});
+        near('a load', await landed(fresh));
+        await fresh.close();
+      }
+    }
+    if (viewsArg && !review) {
       const views = await page.evaluate(() => [...document.querySelectorAll('nav.views button[data-view]')]
         .map((b) => b.dataset.view));
       if (views.length < 2) fail(`--views: ${views.length} view buttons (nav.views button[data-view]); want two or more`);
@@ -428,6 +611,107 @@ for (const width of [390, 1280]) {
       }
     }
     await ctx.close();
+  }
+}
+
+// scrollY unchanged for 600 ms: the smooth scroll ended, or something cancelled it (L18).
+async function settle(page) {
+  let last = -1;
+  let still = 0;
+  for (let i = 0; i < 150 && still < 6; i++) {
+    const y = await page.evaluate(() => window.scrollY);
+    still = y === last ? still + 1 : 0;
+    last = y;
+    await page.waitForTimeout(100);
+  }
+}
+
+// The long jump in one engine; false when the page has no rail to jump from.
+const JUMP_TOL = 24;
+async function longJump(engine, b) {
+  for (const width of [390, 1280]) for (const view of pageViews) {
+    const ctx = await b.newContext({ viewport: { width, height: 900 }, colorScheme: 'light', reducedMotion: 'no-preference' });
+    const page = await ctx.newPage();
+    await page.goto(pathToFileURL(wrapped).href, { waitUntil: 'networkidle' });
+    if (!(await page.evaluate(() => document.querySelectorAll('#toc a[href^="#"]').length >= 2))) {
+      await ctx.close();
+      return false;
+    }
+    // Typesetting moves every heading, so nothing is measured before MathJax and the fonts finish.
+    const ready = await page.waitForFunction(() => !!(window.MathJax && MathJax.startup && MathJax.startup.promise), null, { timeout: 30000 })
+      .then(() => page.evaluate(() => Promise.race([
+        MathJax.startup.promise.then(() => document.fonts.ready).then(() => true, () => false),
+        new Promise((res) => setTimeout(() => res(false), 20000))])), () => false);
+    if (!ready) {
+      fail(`long jump ${engine} ${width}px: MathJax never finished, so nothing measured`);
+      await ctx.close();
+      continue;
+    }
+    const vtag = view === 'review' ? ' review' : '';
+    if (view === 'review' && !(await pickView(page, 'review'))) fail(`long jump ${engine} ${width}px: pressing Review didn't switch views`);
+    for (const dir of ['top->last', 'bottom->first']) {
+      const toFirst = dir === 'bottom->first';
+      await page.evaluate((toEnd) => {
+        const html = document.documentElement;
+        const was = html.style.scrollBehavior;
+        html.style.scrollBehavior = 'auto';
+        window.scrollTo(0, toEnd ? html.scrollHeight : 0);
+        html.style.scrollBehavior = was;
+      }, toFirst);
+      await settle(page);
+      if (await page.isVisible('#menuBtn')) {
+        await page.click('#menuBtn');
+        await page.waitForTimeout(400);
+      }
+      // The rail's first or last shown entry, in the order the view puts them.
+      await page.evaluate(() => {
+        const shown = [...document.querySelectorAll('#toc a[href^="#"]')].filter((a) => a.getClientRects().length)
+          .sort((a, b) => a.getBoundingClientRect().top - b.getBoundingClientRect().top);
+        document.querySelectorAll('#toc a[data-vp-jump]').forEach((a) => a.removeAttribute('data-vp-jump'));
+        if (shown.length) { shown[0].dataset.vpJump = 'first'; shown[shown.length - 1].dataset.vpJump = 'last'; }
+      });
+      const link = page.locator(`#toc a[data-vp-jump="${toFirst ? 'first' : 'last'}"]`);
+      const id = decodeURIComponent((await link.getAttribute('href')).slice(1));
+      await link.click();
+      await page.waitForTimeout(100);
+      await settle(page);
+      const r = await page.evaluate((i) => {
+        const el = document.getElementById(i);
+        if (!el) return null;
+        const top = el.getBoundingClientRect().top;
+        const margin = parseFloat(getComputedStyle(el).scrollMarginTop) || 0;
+        const max = document.documentElement.scrollHeight - innerHeight;
+        const at = top + window.scrollY;
+        return { top: Math.round(top), want: Math.round(at - Math.min(Math.max(at - margin, 0), max)) };
+      }, id);
+      const label = `long jump ${engine} ${width}px${vtag} ${dir}`;
+      if (!r) fail(`${label}: no #${id} on the page`);
+      else if (r.top < -2 || r.top > r.want + JUMP_TOL) {
+        fail(`${label}: #${id} landed at top ${r.top} px, want 0 to ${r.want + JUMP_TOL} px (a jump cut short, C1)`);
+      } else console.log(`  ${label} ok: #${id} at top ${r.top} px`);
+    }
+    await ctx.close();
+  }
+  return true;
+}
+
+if (!longJumpArg) console.log('long jump skipped (--no-long-jump)');
+else if (!mathjaxDown) {
+  console.log('[long jump]');
+  if (!(await longJump('chromium', browser))) console.log('  long jump skipped: no rail entries (#toc a)');
+  else if (!installed(webkit)) {
+    console.log('  WARN long jump: WebKit is not installed, so only Chromium ran it: npx playwright install webkit');
+  } else {
+    let wk = null;
+    try {
+      wk = await launch(webkit);
+    } catch (e) {
+      fail(`long jump webkit: WebKit is installed but won't launch: ${String(e.message || e).split('\n')[0]}`);
+    }
+    if (wk) {
+      await longJump('webkit', wk);
+      await wk.close();
+    }
   }
 }
 await browser.close();

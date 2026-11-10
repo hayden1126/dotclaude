@@ -1,6 +1,6 @@
 # CONVERT: Markdown notes to an HTML fragment
 
-Baseline as of 2026-10-20; changes only via `12-retro`.
+Baseline as of 2026-11-10; changes only via `12-retro`.
 
 A hub keeps a copy in `_build/CONVERT.md`. Every converter follows it exactly, and reads
 `_build/STYLE.md` too: S11 (figures), S12 (links) and S13 (keep the chassis look) bind every
@@ -80,17 +80,34 @@ this one section: a figure placed outside it shifts every later section's accent
   FB-013): `<div class="callout warn"><div class="lab">Unverified</div> ... </div>`.
 - `> **Background:** ...` (a derivation no practice question asks for, with that evidence, S20):
   `<div class="callout"><div class="lab">Background</div> ... </div>`, the whole quote inside.
+- **`.rv`, the Review view's marker.** A worked example or a Pitfall the notes tag for the Review
+  view (CHASSIS.md) carries `.rv` in its attribute block: `> **Worked example N.K: title**
+  {#ex-N-slug .rv}`, and `> **Pitfall:** {.rv} ...`, the block right after the label. It becomes
+  class `rv` on the block itself, `<details class="callout example wex rv" id="ex-N-slug">` and
+  `<div class="callout warn rv">`, and the block stays directly inside the section, never nested in
+  a list or another callout. Nothing else takes it: not a `Not on <exam>` or `Unverified` callout,
+  a heading, a paragraph or a list (Must-know lists are in the view, untagged, unless a banner
+  takes their section out), nor a block in a section whose `Not on <exam>` or `Unverified` banner
+  comes before its first `##` subsection heading, which becomes its first `h3` (CHASSIS.md). `assemble.py` refuses class `rv` anywhere else, and on any block when PLAN.md gives the Review
+  view no minutes; `fidelity.py` compares the marker like an id.
 - `**How it's tested:** ...`: `<p class="connects"><strong>How it's tested:</strong> ...</p>`.
 - `**Connects to:** ...`: `<p class="connects"><strong>Connects to:</strong> ...</p>`.
+- `**Depth:** ...`, the depth label that opens a subsection under its heading (S33):
+  `<p class="connects"><strong>Depth:</strong> ...</p>`, its citation or `(inferred: ...)` kept.
 - `**Conclusion:** ...` outside an example stays a `<p>` with `<strong>Conclusion:</strong>`.
 
 ## Links
 
 - A source citation, `[D5 p.23]`, `[D2 #/14]`, `[HW1 Q2c]` or a section of another document
-  `[W1 §2.1]`, becomes `<a class="slink">D5 p.23</a>`, with no href (the sources are local),
-  inline where it was. The `§` in a bracket that opens with a document id is that document's,
+  `[W1 §2.1]`, becomes `<a class="slink">D5 p.23</a>`, with no href, inline where it was.
+  `assemble.py` adds the rest: a source key, the page's last section, with a row per code the page
+  cites (from `MANIFEST.md`), and on each citation an href to its code's row (`#src-D5`, from its
+  first word) and a title naming the file. A code with no `MANIFEST.md` row fails the build. The `§` in a bracket that opens with a document id is that document's,
   never one of the notes' sections: it is no bare reference.
 - Every Markdown link `[text](#id)` becomes `<a class="xref" href="#id">text</a>`.
+- A link to a section of another published page, `[text](<url>#id)`, becomes `<a href="<url>#id" target="_blank" rel="noopener">text</a>`, with
+  no class: `a.xref` is for in-page links only, which `linkcheck.py --html` resolves and
+  `fidelity.py` compares with the Markdown's `#id` links. The URL is `https://`, from STATUS.
 - Never turn a bare §-mention into a link with a guessed id. Keep it as text and list it in your
   report, so the main session wires it.
 

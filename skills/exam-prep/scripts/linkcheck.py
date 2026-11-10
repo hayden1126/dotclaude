@@ -16,6 +16,8 @@ Warnings, which don't fail: an id defined but not in the registry, and a bare re
 the backbone doesn't have (a section left out of scope, say).
 
 HTML mode. Every href="#id" must match exactly one id="..." in the page, and no id may repeat.
+Every source citation (a.slink) must carry an in-page href, which assemble.py gives it (its row
+in the source key): one with no href, or an href that isn't #id, fails.
 
 Exit 1 on any failure, 2 when the backbone, the notes or the page is missing, 0 otherwise.
 Stdlib only."""
@@ -119,14 +121,27 @@ def md_mode(root):
 class Ids(html.parser.HTMLParser):
     def __init__(self):
         super().__init__(convert_charrefs=True)
-        self.ids, self.hrefs = Counter(), []
+        self.ids, self.hrefs, self.unlinked, self.slink = Counter(), [], [], None
 
     def handle_starttag(self, tag, attrs):
+        if tag == "a" and "slink" in (dict(attrs).get("class") or "").split():
+            href = dict(attrs).get("href") or ""
+            if not (href.startswith("#") and len(href) > 1):
+                self.slink = []
+                self.unlinked.append(self.slink)
         for k, v in attrs:
             if k == "id" and v:
                 self.ids[v] += 1
             elif k == "href" and v and v.startswith("#") and len(v) > 1:
                 self.hrefs.append(urllib.parse.unquote(v[1:]))
+
+    def handle_data(self, data):
+        if self.slink is not None:
+            self.slink.append(data)
+
+    def handle_endtag(self, tag):
+        if tag == "a":
+            self.slink = None
 
 
 def html_mode(path):
@@ -140,12 +155,15 @@ def html_mode(path):
     bad = sorted({h for h in p.hrefs if p.ids[h] != 1})
     dup = sorted(i for i, n in p.ids.items() if n > 1)
     print(f"{len(p.hrefs)} in-page links, {len(p.ids)} ids; {len(bad)} unresolved; "
-          f"{len(dup)} duplicate ids")
+          f"{len(dup)} duplicate ids; {len(p.unlinked)} citations with no in-page link")
     for h in bad:
         print(f"  UNRESOLVED #{h} (defined {p.ids[h]}x)")
     for i in dup:
         print(f"  DUPLICATE id {i}")
-    return 1 if (bad or dup) else 0
+    for words in p.unlinked:
+        print(f"  CITATION WITH NO IN-PAGE LINK: {' '.join(''.join(words).split())} "
+              "(assemble.py links each a.slink to the source key)")
+    return 1 if (bad or dup or p.unlinked) else 0
 
 
 def main(argv=None):

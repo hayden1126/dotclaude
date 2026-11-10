@@ -5,7 +5,7 @@ description: Use when a student is preparing for a course exam (midterm, final, 
 
 # Exam prep
 
-Baseline as of 2026-10-20; changes only via `12-retro`.
+Baseline as of 2026-11-10; changes only via `12-retro`.
 
 ## Overview
 
@@ -100,7 +100,7 @@ names (00 runs 01's Ed pull; 02 starts 05's checker).
 | 04 | `workflows/04-write.md` | `notes/NN-<slug>.md`, wired | `linkcheck.py` is clean (plain-text notes: references checked by hand) |
 | 05 | `workflows/05-verify.md` | checker, reviews applied | self-test covers every official part (or nothing is computable), no `TODO-VERIFY` left |
 | 06 | `workflows/06-site.md` | the notes page, published | `verify_page.mjs` passes, URL in STATUS |
-| 07 | `workflows/07-cheatsheet.md` | sheet HTML and PDF (only if allowed) | `check_pdf.py` passes |
+| 07 | `workflows/07-cheatsheet.md` | sheet HTML and PDF (only if allowed); with no sheet allowed, the notes page's Review view (`.rv` tags in the notes) when PLAN.md gives it minutes | `check_pdf.py` passes; the Review view: `assemble.py` within its minutes, `verify_page.mjs` passes in both views, the notes page republished |
 | 08 | `workflows/08-practice.md` | mocks, quarantined keys, mock pages, the cram order | the key script asserts every computable value; the leak check passes |
 | 09 | `workflows/09-tutor.md` | walk-throughs, quizzes, notes patches, `_build/logs/tutor.md` | on demand |
 | 10 | `workflows/10-polish.md` | scan, report, apply on approval | on demand |
@@ -112,7 +112,7 @@ names (00 runs 01's Ed pull; 02 starts 05's checker).
 1. **Plan, then run unattended.** Intake asks everything up front; after the student approves
    PLAN.md, ask nothing and log judgment calls in STATUS (FB-001, FB-020). The build session
    (`00-intake` step 8) adds the STATUS line `Build running: <date>` before its first stage, and its
-   last stage removes it (`08-practice` step 7.4 puts `Stage 08 built` in its place); a build stage
+   last stage removes it (`08-practice` step 7.5 puts `Stage 08 built` in its place); a build stage
    run alone on request (07, 08, `11`'s source additions) and a `10-polish` pass add and remove
    their own. Any end of a build removes it: a last stage that is skipped or cut short, a stop at a
    stage's step 1, a stage that stops to wait for a notes patch. While the line stands, a `09-tutor`
@@ -125,7 +125,8 @@ names (00 runs 01's Ed pull; 02 starts 05's checker).
    exam gets one pushback before any notes are written, and a `Skip asked` line in STATUS; asked
    again, the material goes in under an `Unverified` banner. Where the ask comes decides when, and
    whether, either happens: `11-next-exam`'s "A source added unverified" (FB-013). Material under
-   that banner stays off every sheet, out of the mocks' plan and the cram order's reading rows, and
+   that banner stays off every sheet and the Review view, out of the mocks' plan and the cram
+   order's reading rows, and
    out of `09`'s walk-throughs and quizzes while its `Unverified:` STATUS line stands.
 3. **No hand-computed values.** Every trace, number and key answer comes from a checker that first
    reproduces the official solutions (FB-090, FB-100). When PLAN.md's Checker line says nothing
@@ -154,6 +155,12 @@ names (00 runs 01's Ed pull; 02 starts 05's checker).
     applied, never from an old hub's copies (FB-010). Copy one with `cat <src> > <dest>`, never
     `cp`: the skill's folder is a symlink outside the hub, and `cp`'s source read through it counts
     as a write target (L71).
+13. **Hub fixes flow back.** The skill's files change only through `12-retro`, so a bug found in a
+    hub that lives in a skill file (a template, the chassis, a script, a brief) is fixed in the hub's
+    copy, or, for a script or brief, worked around in the hub (a wrapper or flag under `_build/`),
+    then logged in `_build/logs/skill-fixes.md` for the retro, each entry starting with its date
+    (YYYY-MM-DD), then what, where and the hub's diff, and the session offers to relay the fix to
+    the other open hubs that use that file (FB-014).
 
 Browser checks run Playwright from a script, not chrome-devtools MCP (L20).
 

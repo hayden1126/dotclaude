@@ -6,12 +6,14 @@
 The cram order is templates/cram-order.md.tmpl filled: a `# Cram order: <exam>` title, an
 `**Out of time?**` line linking at least one Must-know list (`#sec-N-must-know`), tiers
 `## Tier N: <name> (M min)` numbered from 1, an intro line before them naming the total
-(`<total> minutes in <N> tiers`), rows `K. [§x.y Title](URL#id) (m min): the one thing`
-numbered from 1 across the tiers, a `**Skip:**` line and a last `## Tonight` section with at
+(`<total> minutes in <N> tiers`), rows `K. [§x.y Title](URL#id) (m min): <depth label>: the one
+thing` numbered from 1 across the tiers, the depth label (S33) the label's words alone (Know cold,
+Use, Recognize or Not on <exam>), without the statement it rests on, a `**Skip:**` line and a last `## Tonight` section with at
 least one `- ` item. It fails, naming the line, when a tier's minutes aren't its rows' sum or the
 intro's total and tier count aren't the tiers' (run B's two copies drifted apart on exactly
 this), a tier has no rows, Tonight has no item, a row or tier is out of order or off the format
-or outside a tier, a row repeats a section, another heading appears, a notes link's id isn't an
+or outside a tier, a row has no depth label or more than its words (assemble.py's map would refuse
+it at step 7.4), a row repeats a section, another heading appears, a notes link's id isn't an
 id in the assembled notes page, the notes links don't share one https:// base (the published
 page), or a `{{` placeholder is left.
 A notes link is any `](URL#id)` on any line, a title in double quotes after the URL allowed;
@@ -41,6 +43,8 @@ TARGET = re.compile(r"\]\(([^)]*)\)")
 NOTES_LINK = re.compile(r"""^\s*([^\s#<>"'()]*)#([^\s#<>"'()]+)(?:\s+"[^"]*")?\s*$""")
 OTHER_LINK = re.compile(r"\]\[[^\]]*\]|^\s*\[[^\]]+\]:\s*\S|(?<!\]\()<https?://[^>\s]+>")
 INTRO = re.compile(r"\b(\d+) minutes in (\d+) tiers?\b")
+# A row's text after its minutes: the depth label's words alone, a colon, the one thing (S33).
+DEPTH = re.compile(r"(Know cold|Use|Recognize|Not on [^:]+): (\S.*)")
 
 
 class Ids(html.parser.HTMLParser):
@@ -133,6 +137,9 @@ def check(lines, ids, plain=False):
             rows += 1
             if int(m.group(1)) != rows:
                 bad.append(f"{n}: row {m.group(1)} where row {rows} belongs")
+            if not DEPTH.fullmatch(t.split(" min): ", 1)[1].strip()):
+                bad.append(f"{n}: no depth label (Know cold, Use, Recognize or Not on <exam>, its words "
+                           "alone, then a colon) before the one thing (S33)")
             name = m.group(2) if plain else f"#{m.group(2)}"
             if name in seen:
                 bad.append(f"{n}: {name} again (line {seen[name]}): read each section once")
@@ -175,6 +182,32 @@ def check(lines, ids, plain=False):
     bad += [f"{n}: #{i} isn't an id in the notes page" for n, _, i in links if i not in ids]
     tail = "sections named as text" if plain else f"{len(links)} links into the notes"
     return bad, f"{len(tiers)} tiers, {rows} rows, {total} min; {tail}"
+
+
+def blocks(lines):
+    """The parts the notes page's exam-day map shows, from a cram order check() passed (assemble.py
+    renders them): {"tiers": [(name, minutes, [(line, row text)])], "skip": (line, text) or None,
+    "out_of_time": (line, text) or None}. A row's text is the whole `K. [...](...) (m min): ...`
+    line; mock lines, the intro and ## Tonight are left out."""
+    tiers, skip, out_of_time, section = [], None, None, None
+    for n, t in lines:
+        if t.startswith("**Out of time?**"):
+            out_of_time = (n, t)
+            continue
+        if t.startswith("**Skip:**"):
+            skip = (n, t)
+            continue
+        m = TIER.match(t)
+        if m:
+            tiers.append((m.group(2), int(m.group(3)), []))
+            section = "tier"
+            continue
+        if t.strip() == "## Tonight":
+            section = "tonight"
+            continue
+        if section == "tier" and ROW.match(t):
+            tiers[-1][2].append((n, t))
+    return {"tiers": tiers, "skip": skip, "out_of_time": out_of_time}
 
 
 def main(argv=None):

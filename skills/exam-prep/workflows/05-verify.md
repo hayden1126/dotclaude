@@ -1,6 +1,6 @@
 # 05 Verify
 
-Baseline as of 2026-10-20; changes only via `12-retro`.
+Baseline as of 2026-11-10; changes only via `12-retro`.
 
 Nothing reaches the student unverified. Verification has three parts: a checker that computes
 every value the notes print, reviewers who read every section against its sources, and fixes
@@ -41,13 +41,15 @@ Take the list `04-write` put in STATUS (`grep -n TODO-VERIFY notes/*.md` again).
 add a `value-<slug>` section to `examples.py` that computes it (a value a worked example prints is
 already there), rerun it, and copy the value from `examples.out.md` over the marker: a rerun then
 reproduces every number the notes print. Then compare every worked example in the notes, and
-every value filled from a `value-` section, with `examples.out.md`, by a small script
-(`_build/verify/compare_notes.py`: each example's numbers against its `ex-` section, and every
-order or path it prints, in order), never by eye: a number typed by hand has been wrong before
-(FB-101, L50). Before trusting the script, run it on a scratch copy of the notes with one
-example's number changed, again with two of its steps swapped, and again with two entries of a
-printed order or path swapped: it must fail all three (a first version passed a wrong number and
-a wrong visit order).
+every value filled from a `value-` section, with `examples.out.md`, by script, never by eye: a
+number typed by hand has been wrong before (FB-101, L50). Copy
+`<skill>/templates/compare-notes.py` to `_build/verify/compare_notes.py` and set its `FILLED` to
+each `value-` section and the notes file it filled. First `python3 -I
+_build/verify/compare_notes.py --self-test` must print `SELF-TEST OK`: it plants a changed number
+and a swapped visit order into a copy of the notes (a hand-written first version passed both).
+Then `python3 -I _build/verify/compare_notes.py` must print `NOTES MATCH`; each line it prints
+otherwise names the file and line, the subsection, the example and the values. It reads a trace's
+names only in backticks, as CONVERT.md keeps them.
 
 ## Step 3: Section reviewers
 
@@ -60,13 +62,31 @@ Spawn one `reviewer` per section file, all at once (FB-102), each from
 2. **Coverage:** every row the backbone gives the section, and every extract block the coverage
    matrix maps into it.
 3. **Direction and causation:** which condition guarantees which result (S5).
-4. **STYLE:** the rest of `_build/STYLE.md`.
+4. **STYLE:** the rest of `_build/STYLE.md`, each subsection's depth label (S33) among it.
 
 Each brief names the answer sets the student hasn't attempted: the notes quote none of them, and
 a quote is a blocker. Findings come back ranked blocker, major, minor, in at most 700 words.
 Reviewers never open `practice/` (FB-105). Give each reviewer the diagram slides of its section
 that no checker trace covers (`02-extract` listed them in STATUS), to compare with the extract and
 the page image (FB-104).
+
+## Step 3b: Cold read
+
+A section reviewer reads with the sources open, so a term the section never defines still reads
+as clear to it. One fresh `reviewer` per two or three sections, spawned with step 3's, from
+`<skill>/templates/agent-briefs.md`, section "Cold read" (FB-109). It sees only its sections'
+notes files: no extract, no source, no checker output, and never `practice/`. It reads as a
+student who skipped the lectures, and lists by line:
+
+- each term or symbol used before it is defined (S14, S15);
+- each sentence that can't be understood alone (S18);
+- each pitfall or table cell without its exact condition and a mini-instance (S23);
+- each pair of look-alike notions (symbols, operators, variants of one procedure) with no single
+  comparison table (S31);
+- each optional notation without when it is required, when it is allowed, and whether leaving it
+  out costs marks (S28).
+
+Its findings are majors, settled and applied in step 5 like the section reviewers'.
 
 ## Step 4: Audit the condensations
 
@@ -91,6 +111,31 @@ same audit when they exist.
   `mock_key.py` reruns too (its step 4's rerun clause).
 - With no checker, a `TODO-VERIFY` a writer left anyway is replaced with the value its cited
   source gives, or the working that derives it.
+- Before anything is published, the questions check: check the notes against every set the
+  student hasn't attempted (FB-191), since a worked example has rebuilt a practice question's
+  setup, and a gloss has named a practice step. Those sets, all read from MANIFEST.md: each set
+  answered by a row whose Answers cell is exactly `yes` (not `yes, attempted`); and each question
+  set that no row's `solutions to <doc>` names, unless its own row's Answers cell reads `no,
+  attempted YYYY-MM-DD` (the one place a set with no solutions row records its attempt:
+  `00-intake` and `11-next-exam` write it from the student's word, `09-tutor` Step 7 when its last
+  part is done).
+  With no such set, skip the run and log `no unattempted set` in STATUS. Otherwise give each set's
+  extract
+  (`_build/extract/<name>.md`) as a question file, and the lecture extracts the notes cite as
+  allowed sources:
+  `python3 -I <skill>/scripts/mock_leak.py --questions <the sets' extracts> --allow <the lecture
+  extracts> --pages notes/*.md`. The main session runs it, since reviewers never open `practice/`.
+  Each hit names a notes line and a set's part, never the text. The Review view (`07-cheatsheet`)
+  only tags blocks of the notes, so this check covers it, and every later change runs it as
+  `08-practice`'s "Changing the notes or a sheet" item 4 says.
+  A hit is a blocker: rewrite the passage with fresh numbers and a fresh setup (S7), and rerun
+  until it prints QUESTIONS OK. A passage cut or held back instead, which the student may want
+  back once they attempt the set, goes to `_build/held.md`, one entry per passage: its section,
+  the set it overlapped and the original text. It is quarantined (hub CLAUDE.md), and `09-tutor`
+  offers it back once that set is attempted (its Step 7). A hub whose CLAUDE.md lacks the
+  quarantine line (a hub made before it existed) gets it now, before the first entry is written:
+  the `_build/held.md` bullet of `<skill>/templates/hub-CLAUDE.md.tmpl`'s Repo rules, copied as it
+  stands.
 - Then rerun `selftest.py` (with a checker) and `linkcheck.py` (plain-text notes: the references
   by hand, `04-write` step 6). Log in STATUS any finding left unapplied, with why, and any claim
   refuted, with the evidence.
@@ -114,5 +159,7 @@ script (`08-practice`).
 
 `selftest.py` prints `ALL PASS` with every official part covered (or PLAN.md's Checker line says
 nothing is computable); no `TODO-VERIFY` is left; every blocker and major finding is applied or
-refuted with evidence in STATUS, and every minor one applied or logged there; `linkcheck.py` exits
+refuted with evidence in STATUS, and every minor one applied or logged there; `mock_leak.py
+--questions` prints `QUESTIONS OK` on the notes, or no unattempted set, logged in STATUS (step 5);
+`linkcheck.py` exits
 0 (plain-text notes: references checked by hand); the fixes are committed.

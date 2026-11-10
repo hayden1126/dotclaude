@@ -1,6 +1,6 @@
 # Backlog
 
-Baseline as of 2026-10-20; changes only via `12-retro`.
+Baseline as of 2026-11-10; changes only via `12-retro`.
 
 Improvements found but not applied. The templates and workflows encode the two past runs as they
 were. This list holds what a critique of those products, or the harvest, says could be better.
@@ -28,7 +28,7 @@ no hub had it, carried on (`trying (round N+2)`). An item nobody picks stays `op
 | Id | Item | Axis | Evidence | Status |
 |---|---|---|---|---|
 | K01 | Keep exam scope as one fact per section and per question, and generate every in/out marker from it: the sidebar, the exam-day map, the mock's totals and time budget, the cheat sheet. A scope cut then reaches every product at once. | org | K-org.F1, K-word (other axes) | open |
-| K02 | Build the tiered cram order (points per minute, minute budgets) into the top of the notes, open by default and linked to anchors, from the same weight data as the exam-day map. | org | K-org.F2 | open |
+| K02 | Build the tiered cram order (points per minute, minute budgets) into the top of the notes, open by default and linked to anchors, from the same weight data as the exam-day map. As tried: `assemble.py` generates the page's cram block from `practice/cram-order.md` on every build (`06-site` step 4), so no copy is kept by hand. | org | K-org.F2, E1.C5, E1.C6, D1.C22 | trying (round 2) |
 | K03 | Route every mock part to its notes subsection (a link) and to its key entry (behind a reveal). The key ends each answer with a review link and a per-step points split. The points table links to its questions. | org, struct, ui | K-org.F3, K-struct.F6, K-ui.F10 | open |
 | K04 | When the exam's answer is a table (a trace), write the worked example and the key answer as that table, one numbered step per row. Prose steps stay for derivations and proofs. | struct | K-struct.F1 | open |
 | K05 | Worked-example steps reuse the recipe's step numbers (or tag the recipe step each applies), and the cheat sheet keeps the recipe's step count and numbering. | struct | K-struct.F2, K-struct.F14 | open |
@@ -76,9 +76,10 @@ no hub had it, carried on (`trying (round N+2)`). An item nobody picks stays `op
 | K42 | Ship a content-free chassis with explicit insertion markers, instead of slicing a full page by line patterns. | harvest | B4 (section 5d) | shipped in v1 (a content-free chassis needs insertion points: `templates/notes-chassis.html`) |
 | K43 | The page checker reads section and figure ids from the backbone registry instead of hard-coding them. | harvest | B4 (section 5d) | open |
 | K44 | Generate the key-leak markers from the key itself. | harvest | B4 (section 5a) | open |
-| K67 | Ship a template for `05-verify` step 2's notes-to-checker comparison, with its planted-error test. The dry run's first hand-written one passed a wrong distance and a wrong visit order; only its own mutation test caught them. | dry run | dry run 2, point 10 | open |
-| K68 | Ship a fragment fidelity checker for `06-site` step 3 (CONVERT.md's rule that a fragment says what its section says), with its planted-error test. The dry run wrote its own. | dry run | dry run 2, point 10 | open |
+| K67 | Ship a template for `05-verify` step 2's notes-to-checker comparison, with its planted-error test. The dry run's first hand-written one passed a wrong distance and a wrong visit order; only its own mutation test caught them. Its trial includes the Write brief's line that puts trace and state names in backticks, which the comparison reads: dropping K67 reverts that line too. | dry run | dry run 2, point 10, D1 (section 2), E1 (section 2), F1.G4, F1.G6 | trying (round 2) |
+| K68 | Ship a fragment fidelity checker for `06-site` step 3 (CONVERT.md's rule that a fragment says what its section says), with its planted-error test. The dry run wrote its own. | dry run | dry run 2, point 10, D1 (section 2), E1 (section 2), F1.G4, F1.G6 | trying (round 2) |
 | K69 | Give `11-next-exam`'s "A source added to this exam" a short path for a small source on a cram night, naming the steps it keeps, and a way to verify a section FB-013 added unverified (its banner and `Unverified:` STATUS line) and clear both. In the skill's tests, a 4-page recitation at 1am with the student asking to skip the pipeline: every run skipped the fence, the report and the wait; three review rounds of a skip path each found a major in its newest piece (the gates a notes change keeps, which of 05's steps a skip drops, a course with nothing to compute), and sessions deferred to a restated skip whatever the path said. | skill test | skill test P1 | open |
+| K70 | The tutor log keeps up: each gap a question exposes goes to `tutor.md`'s pending list at once, and the pending lines are offered as one patch every five questions. **Conflicts:** FB-166 ("at once"). | harvest | D1.C33, E1.C29, F1 (section 2), D1 (section 4), E1 (section 4) | open |
 
 ## Low
 
@@ -101,6 +102,11 @@ no hub had it, carried on (`trying (round N+2)`). An item nobody picks stays `op
 | K64 | Apply the saved theme from an inline script in the head, before any blocking script. | ui | K-ui.F21 | open |
 | K65 | One label per callout, and one callout vocabulary across products. | word, struct | K-word.F21, K-struct (other axes) | open |
 | K66 | State quantities and causes plainly; no unanchored metaphors. | word | K-word.F18 | open |
+| K71 | Intake: the approval dialog's summary sits in the visible message before the dialog; ask whether late or classmates' notes may still arrive, and record a `pending` MANIFEST row for them. | harvest | D1.C4, E1.C4 | open |
+| K72 | `09-tutor` step 5.4's "the hub is free" made concrete: `git status --short notes _build/frag` prints nothing and STATUS has no `Polish:` line. | harvest | E1.C8 | open |
+| K73 | A font with wide Unicode coverage ahead of the body font, for courses whose symbols need it, chosen at `06-site` by rendering the course's symbol list. | harvest | E1 (section 4) | open |
+| K74 | Scratch files go in the session's scratchpad, never `$TMPDIR`, which sessions share. | harvest | E1.G8 | open |
+| K75 | `12-retro`: handle a hub in a subdirectory whose sessions run from the parent folder (its transcripts sit under the parent's project folder). | harvest | round 1 retro (12-retro step 2) | open |
 
 ## Keep (strengths the critique says must not regress)
 
