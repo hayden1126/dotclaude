@@ -157,8 +157,9 @@ names (00 runs 01's Ed pull; 02 starts 05's checker).
 13. **Hub fixes flow back.** The skill's files change only through `12-retro`, so a bug found in a
     hub that lives in a skill file (a template, the chassis, a script, a brief) is fixed in the hub's
     copy, or, for a script or brief, worked around in the hub (a wrapper or flag under `_build/`),
-    then logged in `_build/logs/skill-fixes.md` (what, where, the hub's diff) for the retro, and the
-    session offers to relay the fix to the other open hubs that use that file (FB-014).
+    then logged in `_build/logs/skill-fixes.md` for the retro, each entry starting with its date
+    (YYYY-MM-DD), then what, where and the hub's diff, and the session offers to relay the fix to
+    the other open hubs that use that file (FB-014).
 
 Browser checks run Playwright from a script, not chrome-devtools MCP (L20).
 

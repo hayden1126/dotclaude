@@ -313,7 +313,7 @@ checks each finding and applies the fixes.
   2. each sentence that can't be understood alone, without the lecture (S18);
   3. each pitfall or table cell that doesn't state its exact condition and give a mini-instance
      (S23);
-  4. each pair of look-alike notions (marks, operators, variants of one procedure) with no single
+  4. each pair of look-alike notions (symbols, operators, variants of one procedure) with no single
      table comparing them (S31);
   5. each optional notation that doesn't say when it is required, when it is allowed, and whether
      leaving it out costs marks (S28).
@@ -715,11 +715,11 @@ Cite timestamps and the workflow step.
 {{RECORDS: One line per record you read, saying what it holds for the retro and which C or G items
 cite it: the tutor log's tables and every `## Patterns` line, quoted; each polish log's pass and
 approved list; each `_build/logs/skill-fixes.md` entry (a skill-file bug fixed in the hub, FB-014:
-what, where, the hub's diff); the reopen log; each hunk of the hub-local edits (the hub's copy against the skill's)
-that looks like an edit made in the hub, not a change the skill made since the hub copied it
-({{SKILL}}/references/CHANGELOG.md lists those); each source-added log; STATUS's judgment calls;
-PLAN.md's Decisions. A record that is missing or empty says so. | NONE: "Another reader has the
-hub's records."}}
+its date, what, where, the hub's diff); the reopen log; each hunk of the hub-local edits (the hub's
+copy against the skill's) that looks like an edit made in the hub, not a change the skill made since
+the hub copied it ({{SKILL}}/references/CHANGELOG.md lists those); each source-added log; STATUS's
+judgment calls; PLAN.md's Decisions. A record that is missing or empty says so. | NONE: "Another
+reader has the hub's records."}}
 
 Stage tags: `00-intake`, `01-ingest`, `02-extract`, `03-backbone`, `04-write`, `05-verify`,
 `06-site`, `07-cheatsheet`, `08-practice`, `09-tutor`, `10-polish`, `11-next-exam`, `12-retro`,

@@ -31,7 +31,8 @@ evidence ids.
   `references/feedback-log.md`, `references/lessons.md`, `templates/CHASSIS.md`,
   `templates/CONVERT.md`, `templates/MANIFEST.md.tmpl`, `templates/STYLE.md`,
   `templates/agent-briefs.md`, `templates/backbone.md.tmpl`, `templates/cram-order.md.tmpl`,
-  `templates/hub-CLAUDE.md.tmpl`, `templates/notes-chassis.html`, `workflows/00-intake.md`,
+  `templates/hub-CLAUDE.md.tmpl`, `templates/notes-chassis.html`, `templates/PLAN.md.tmpl`,
+  `workflows/00-intake.md`,
   `workflows/01-ingest.md`, `workflows/03-backbone.md`, `workflows/04-write.md`,
   `workflows/05-verify.md`, `workflows/06-site.md`, `workflows/07-cheatsheet.md`,
   `workflows/08-practice.md`, `workflows/09-tutor.md`, `workflows/10-polish.md`,
@@ -42,13 +43,15 @@ evidence ids.
   `scripts/mock_leak.py`, `scripts/pw.mjs` and `scripts/verify_page.mjs`, which carry no date.
 - **Changes:**
   - C1: the rail scrolls itself, never the page, so a long jump lands in WebKit (E1.C12, E1.G13,
-    D1.C19).
+    D1.C19). At the page's bottom the scroll-spy marks the last section (the source key) active,
+    and `verify_page.mjs`'s `-key` step checks it.
   - L25: `scrollIntoView` cancels a smooth jump in WebKit only; `verify_page.mjs` runs the long
     jump there, and `--no-long-jump` skips it in the skill's own tests (E1.C12, E1.G13, D1.C19).
   - FB-014: a skill-file bug found in a hub is fixed in the hub's copy, or, for a script or brief,
     worked around in the hub (a wrapper or flag under `_build/`), logged in
-    `_build/logs/skill-fixes.md` for the retro, and offered to the other open hubs; hard rule 13,
-    and the harvest reads the log (E1.C11, E1.C13, D1 (section 2), F1 (section 2)).
+    `_build/logs/skill-fixes.md` for the retro (each entry dated), and offered to the other open
+    hubs; hard rule 13, and the harvest reads the log (E1.C11, E1.C13, D1 (section 2), F1
+    (section 2)).
   - FB-109: `05-verify` step 3b, a cold reader per two or three sections, and its brief (D1.C6,
     D1.C7, D1.C8, D1.C9, D1.C10, D1.C11, D1.C12, D1.C13, D1.C15, D1.C31, E1.C22, E1.C23, E1.C24,
     E1.C25, E1.C26, E1.C30, F1.C9, F1.C11, F1.C13).
@@ -56,20 +59,32 @@ evidence ids.
     MANIFEST.md: what the source is (its Notes, blank without them), who made it (MANIFEST's
     new optional By column, a Made by column when a cited row has one) and its file; `linkcheck.py`
     fails a citation with no in-page link, the chassis highlights a targeted key row, and
-    `11-next-exam` removes a hub-local key (E1.C10, E1.C11, D1.C20).
+    `11-next-exam` removes a hub-local key; the key has three columns at most, so it fits a
+    phone: the code, what it is with the file's base name under it (muted, small), and Made by
+    (E1.C10, E1.C11, D1.C20).
   - FB-143: with no sheet allowed, a condensed review page on the notes chassis, offered at intake,
     named in the stage table's 07 row, checked by `verify_page.mjs` with no `--steps`, and archived
-    by `11-next-exam` with the sheets; the sheet questions are asked only when a sheet is allowed
+    by `11-next-exam` with the sheets; the sheet questions are asked only when a sheet is allowed.
+    PLAN.md's Review page line records it and its length, and its Deliverables and 07 rows name
+    it. `08-practice` counts it as no sheet, but checks it with the notes: step 3.4's comparison,
+    step 4.5's leak runs and "Changing the notes or a sheet", which rebuilds and republishes it.
+    CONVERT maps its rows' links to the notes page, `[text](<url>#id)`, to a plain `<a href>`
     (E1.C17, E1.C18, E1.C21, F1.C3, F1.C5, F1.C8).
   - FB-158: the cram night opens with the notes page and mock links, a tier defined, and what is
     already read skipped (E1.C5, E1.C6, D1.C22).
   - FB-159: the cram night offers an Ed re-pull, and new staff answers take the source-added path;
     no key is opened for them: the mock key checker reruns, and a part it can't compute is logged
-    in STATUS for `09-tutor` to recheck when it grades that mock (D1.C23, E1.C15, E1.C19).
-  - FB-191: before publish, `mock_leak.py --questions` checks the notes against every unattempted
-    question set, skipped and logged when there is none; held passages go to `_build/held.md`,
-    whose quarantine line an older hub's CLAUDE.md gains, and return once the set is attempted
-    (D1.C26, D1.C28, D1 (stage 05), E1 (stage 05), F1 (stage 05)).
+    in STATUS for `09-tutor` to recheck when it grades that mock, whose cram-order line then says
+    to bring it to the session before marking it. The approved "check each mock key part the
+    answer touches" is done this way, without opening a key (D1.C23, E1.C15, E1.C19).
+  - FB-191: before publish, and before each republish after a notes change (a `09-tutor` patch, a
+    `10-polish` pass, either `11-next-exam` source path), `mock_leak.py --questions` checks the
+    notes against every unattempted question set, skipped and logged when there is none; a set
+    with no solutions row records its attempt as `no, attempted YYYY-MM-DD` in its own MANIFEST.md
+    Answers cell, which `00-intake`, `11-next-exam` and `09-tutor` write and `05-verify` reads;
+    held passages go to `_build/held.md`, whose quarantine line an older hub's CLAUDE.md gains,
+    and return once the set is attempted
+    (D1.C26, D1.C28, D1 (section 2), E1 (section 4), F1 (section 2)).
   - FB-192: tutor chat writes symbols as Unicode or plain text and coins no label; `09-tutor` step
     5.1 answers a definition from what it knows first, then checks the notes (D1.C14, D1.C16,
     D1.C17).
