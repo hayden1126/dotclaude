@@ -130,6 +130,7 @@ naming the id that replaces it, if one does.
 | FB-106 | When a correction lands, fix every copy: notes, checklist, pitfall box, sheet. | w05, w10 | B3.C22 |
 | FB-107 | When official solutions arrive, diff every answer against the notes and the solved key, and record the verdict. | w05 | A3.C17 |
 | FB-108 | Check a reviewer's claim with the checker before applying it. Fixes are applied single-threaded. | w05 | B1 (stage 05) |
+| FB-191 | Before publish, the main session checks the notes against every unattempted question set's text (`mock_leak.py --questions`): a shared run of 8 words or 3 numbers is a blocker, rewritten with fresh numbers and setup (S7). A passage the student may want back goes to `_build/held.md` and returns as a patch once the set is attempted. | w05, w09 | D1.C26, D1.C28, D1 (stage 05), E1 (stage 05), F1 (stage 05) |
 
 ## 06-site
 
