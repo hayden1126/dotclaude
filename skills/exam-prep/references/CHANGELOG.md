@@ -150,4 +150,4 @@ evidence ids.
     the merge. The sample hub's map renders open with a cram order and depth labels, and the
     reference shots show it (E1.C5, E1.C6, D1.C22).
 - **Retired:** none.
-- **Backlog:** K02, K67, K68 `trying (round 2)`; K70 to K76 `open` (K76: a notes-only correction a mock key cites doesn't make the key gate due).
+- **Backlog:** K02, K67, K68 `trying (round 2)`; K70 to K75 `open`.

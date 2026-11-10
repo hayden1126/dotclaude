@@ -107,7 +107,6 @@ no hub had it, carried on (`trying (round N+2)`). An item nobody picks stays `op
 | K73 | A font with wide Unicode coverage ahead of the body font, for courses whose symbols need it, chosen at `06-site` by rendering the course's symbol list. | harvest | E1 (section 4) | open |
 | K74 | Scratch files go in the session's scratchpad, never `$TMPDIR`, which sessions share. | harvest | E1.G8 | open |
 | K75 | `12-retro`: handle a hub in a subdirectory whose sessions run from the parent folder (its transcripts sit under the parent's project folder). | harvest | round 1 retro (12-retro step 2) | open |
-| K76 | A notes-only correction (a `09-tutor` patch, a `10-polish` fix) to a fact an untaken mock's `reasoned()` answer cites makes `08-practice` step 8.1's key gate due, say by a `Notes corrected: §N.M` STATUS line its `git log -G` pattern counts. Home: `08-practice` step 8.1. | harvest | round 1 retro, review 8 | open |
 
 ## Keep (strengths the critique says must not regress)
 
