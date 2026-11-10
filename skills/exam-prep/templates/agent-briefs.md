@@ -568,15 +568,15 @@ meanwhile and merges your branch when you report.
 
 ## Key recheck (stage 08, the cram night)
 
-Role: `writer`, spawned with `isolation: "worktree"` and `run_in_background: true` on the Agent
-call: it opens the untaken mocks' keys, which the cram night's session never opens, since the
-student reads that session's chat (`08-practice` step 8's opening, FB-159). The student is told not
-to open its transcript. One per `Key recheck: owed` line, covering every cause it names (each run
-of `11-next-exam`'s "A source added to this exam" adds its source, dispatched once that path has
-taken it into the notes); never two at once (both rewrite `practice/mock-values-key.md`). STATUS holds `Key recheck: owed <date>
-(<its causes>)` from the cause until the dispatch rewrites it to `dispatched <date>`, and that until
-the merge; the next mock attempt waits for both (`08-practice` step 8's opening). The
-reference-change variant below serves `08-practice` step 4's rerun clause.
+Role: `writer`, spawned with `isolation: "worktree"`, `run_in_background: true` and the description
+`Key recheck` on the Agent call, only from `08-practice` step 8.1's key gate: it opens the untaken
+mocks' keys, which the cram night's session never opens, since the student reads that session's
+chat (FB-159). The student is told not to open its transcript. The gate spawns one before a mock's
+attempt when the key checker fails that mock, or when STATUS gained a `Source added: <doc> <date>:
+done` or a `Reference changed:` line after the mock's `Key checked:` line; one writer covers every
+such cause and every untaken mock, and never two run at once (both rewrite
+`practice/mock-values-key.md`). The attempt waits for its merge. The reference-change variant below
+serves a gate whose causes hold no new source.
 
 ```text
 # Brief: recheck the untaken {{EXAM}} mock keys against new sources on {{TOPICS}}
@@ -590,8 +590,9 @@ so nothing you report may show a key: part ids only.
 
 ## End state
 - Done means: every part of {{THE UNTAKEN MOCKS}} the new sources touch checked against them,
-  each wrong one's key fixed, in one commit on your branch, and each mock's line from the key
-  checker says KEY OK, a `question` part left out of the run as Scope says.
+  each wrong one's key fixed, in one commit on your branch (none when no part needed a change),
+  and each mock's line from the key checker says KEY OK, a `question` part left out of the run as
+  Scope says.
 - Artifact path: your branch, in your worktree of {{ROOT}}.
 - Report: your whole reply is the JSON block (status, summary, artifacts, blocked_actions), with
   no text before or after it: you run in the background, and your reply reaches the student's
@@ -608,7 +609,7 @@ so nothing you report may show a key: part ids only.
 - The new sources: {{EACH NEW SOURCE'S TEXT, QUOTED, WITH ITS SOURCE}}. The notes sections they
   changed: {{§N.M LIST}}.
 - Read: `_build/MOCK.md` (the key format), each of those mocks and its key,
-  `_build/verify/mock_key.py`, `practice/mock-values-key.md`, the notes and
+  `_build/verify/mock_key.py`, `practice/mock-values-key.md`, the notes (`notes/`, read only) and
   `_build/verify/examples.out.md`.
 - The parts: each part whose `Topic:` is a section a new source changed, and each part the key
   checker now fails. Check each one's answer against the new sources and the notes as they now
@@ -630,14 +631,16 @@ so nothing you report may show a key: part ids only.
   mock's line says KEY OK. Survey with `git status` and `git diff --stat` only, never a command
   that prints a diff, and commit with the subject `Keys: recheck {{SLUGS}} after a new source`.
   A run that stops short commits nothing.
-- Out of scope: a taken mock's key, every subfolder of `practice/` (a finished exam's archive),
-  `_build/verify/` but the files above (a change to the reference is the main session's: report
-  it, blocked), `notes/`, `cheatsheet/`, `sources/`, and any search outside the files above.
+- Never written: `notes/` and `cheatsheet/` (a notes fix is the main session's: report it,
+  blocked). Out of scope: a taken mock's key, every subfolder of `practice/` (a finished exam's
+  archive), `_build/verify/` but the files above (a change to the reference is the main session's:
+  report it, blocked), `sources/`, and any search outside the files above.
 ```
 
-**Reference-change variant** (`08-practice` step 4's rerun clause on the cram night: a `05-verify`
-step 5 rerun changed the reference, and the parts of an untaken mock the key checker now fails need
-their answers rewritten from the new values; there is no source text and no section list). Replace
+**Reference-change variant** (the key gate's causes are `Reference changed:` lines, left by
+`08-practice` step 4's rerun clause, or a part the key checker fails, with no new source: the parts
+of an untaken mock the key checker now fails need their answers rewritten from the new values;
+there is no source text and no section list). Replace
 the title, Purpose, the End state's "Done means" line, and the Scope's new-sources and parts
 lines with the text below, and end the commit subject `after a reference change`. The Report line
 stands as it is: the whole reply is the JSON block, part ids and file names only.
@@ -652,7 +655,7 @@ marks each against its key, so every failing part must be right before then. The
 main session's chat, so nothing you report may show a key: part ids only.
 
 - Done means: every part of {{THE UNTAKEN MOCKS}} the key checker fails rewritten from the new
-  values, in one commit on your branch, and each mock's line from the key checker says KEY OK, a
+  values, in one commit on your branch (none when no part fails), and each mock's line from the key checker says KEY OK, a
   `question` part left out of the run as Scope says.
 - The parts: run `python3 -I _build/verify/mock_key.py` first, before any change; each part it
   reports FAIL on. A part whose instance the new reference makes degenerate (an assert names it)
