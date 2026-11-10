@@ -687,7 +687,8 @@ not yours to make, so tonight each of those parts is skipped.
   commit, and reported `question`.
 
 - The leak parts: {{EACH LEAK PART: `<slug> <part id>`, ...}}. Report each `question`, unchecked,
-  and skip it as the next item says.
+  and skip it as the next item says. A leak part is skipped, never rewritten, even when the key
+  checker also fails it.
 ```
 
 ## Polish reader (stage 10)
