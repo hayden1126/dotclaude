@@ -219,20 +219,59 @@ class Fidelity(Hub):
         self.assertEqual(r.returncode, 1)
         self.assertIn("notes/02-paths.md: no _build/frag/sec2.html", r.stdout)
 
+    def test_the_self_test_plants_a_dropped_rv(self):
+        r = self.fidelity("--self-test")
+        self.assertRegex(r.stdout, r"PASS  sample: a dropped \.rv \(.*\): caught \(sample sec-1-order: "
+                                   r"callouts: ")
+        self.assertIn("SKIP  sec1.html: a dropped .rv: no rv class", r.stdout)
+
+    def test_a_dropped_rv_fails(self):
+        self.edit("notes/01-counting.md", "{#ex-1-range}", "{#ex-1-range .rv}")
+        self.edit("notes/01-counting.md", "> **Pitfall:** Adding", "> **Pitfall:** {.rv} Adding")
+        self.edit("_build/frag/sec1.html", 'class="callout example wex" id="ex-1-range"',
+                  'class="callout example wex rv" id="ex-1-range"')
+        self.edit("_build/frag/sec1.html", '<div class="callout warn">', '<div class="callout warn rv">')
+        self.assertEqual(self.fidelity().stdout.strip(), "FIDELITY OK: 2 fragments")
+        self.edit("_build/frag/sec1.html", '<div class="callout warn rv">', '<div class="callout warn">')
+        r = self.fidelity()
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("sec1.html sec-1-rules: callouts: the fragment has warn Pitfall where the notes "
+                      "have warn Pitfall rv", r.stdout)
+        # Its self-test plants the drop in the hub's own fragment too.
+        self.edit("_build/frag/sec1.html", '<div class="callout warn">', '<div class="callout warn rv">')
+        self.assertRegex(self.fidelity("--self-test").stdout, r"PASS  sec1\.html: a dropped \.rv \(.*\): caught")
+
+    def test_rv_on_a_not_on_banner_fails(self):
+        self.edit("notes/02-paths.md", "> **Not on Exam 1:** bidirectional", "> **Not on Exam 1:** {.rv} bidirectional")
+        self.edit("_build/frag/sec2.html", '<div class="callout warn">', '<div class="callout warn rv">')
+        r = self.fidelity()
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("sec2.html sec-2-bfs: the notes put .rv on a line that is no worked example or Pitfall",
+                      r.stdout)
+
+    def test_a_noop_rv_plant_trips_the_guard(self):
+        self.install("fidelity.py", "fidelity.py",
+                     ('        return splice(html, m.start(1), m.end(1), ""), m.group(0)[:40]\n',
+                      "        return html, m.group(0)[:40]\n"))
+        r = self.run_script("fidelity.py", "--self-test")
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("FAIL  sample: PLANT DID NOTHING: a dropped .rv", r.stdout)
+        self.assertIn("SELF-TEST FAILED: 1 of the checks", r.stdout)
+
     def test_a_noop_comparison_fails_the_self_test(self):
         self.install("fidelity.py", "fidelity.py", NOOP_PAIR)
         r = self.run_script("fidelity.py", "--self-test")
         self.assertEqual(r.returncode, 1)
         self.assertIn("sample: a dropped sentence ('Search order matters.'): NOT CAUGHT",
                       r.stdout)
-        self.assertIn("SELF-TEST FAILED: 12 of the checks", r.stdout)
+        self.assertIn("SELF-TEST FAILED: 13 of the checks", r.stdout)
 
     def test_a_noop_plant_trips_the_guard(self):
         self.install("fidelity.py", "fidelity.py", NOOP_FRAG_SPLICE)
         r = self.run_script("fidelity.py", "--self-test")
         self.assertEqual(r.returncode, 1)
         self.assertIn("FAIL  sample: PLANT DID NOTHING: a dropped citation", r.stdout)
-        self.assertIn("SELF-TEST FAILED: 12 of the checks", r.stdout)
+        self.assertIn("SELF-TEST FAILED: 13 of the checks", r.stdout)
 
 
 if __name__ == "__main__":

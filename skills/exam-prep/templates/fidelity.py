@@ -20,15 +20,17 @@ both the way CONVERT.md maps one onto the other, and compares, in order:
 - the citations, `[D5 p.23]` against `<a class="slink">D5 p.23</a>`;
 - the in-page links' targets, `[text](#id)` against `<a class="xref" href="#id">`;
 - the callouts: each worked example (its id and number), Pitfall, Not on <exam>, Unverified,
-  Background, How it's tested, Connects to and Depth;
+  Background, How it's tested, Connects to and Depth, and whether each joins the Review view (the
+  Markdown's `.rv` in its attribute block, `{#ex-N-slug .rv}` or `**Pitfall:** {.rv}`, against
+  class `rv`); a `.rv` on any other Markdown line is a difference too;
 - the list items and steps, with their ids: a `Step N:` line against an `<li>` of
   `<ol class="steps">`, a `-`, `*` or `1.` item against any other `<li>`.
 Each difference prints one line: the fragment, the section (the nearest heading's id) and what
 differs. A notes file with no fragment, or a fragment with no notes file, is a difference too.
 
 --self-test first checks a built-in clean pair, which uses every mapping above, and requires it to
-pass. Then it plants a dropped sentence, a changed number, two swapped steps and a dropped
-citation into an in-memory copy of that pair's fragment and of each hub fragment that has the
+pass. Then it plants a dropped sentence, a changed number, two swapped steps, a dropped
+citation and a dropped `rv` class into an in-memory copy of that pair's fragment and of each hub fragment that has the
 part to change, and requires each plant to be caught. A plant that leaves its copy unchanged
 fails as PLANT DID NOTHING: a no-op replace once passed vacuously."""
 import difflib
@@ -50,7 +52,7 @@ COMMENT = re.compile(r"<!--.*?-->")
 RULE = re.compile(r"^\s*([-*_])(?:\s*\1){2,}\s*$")
 TABLE_SEP = re.compile(r"^\s*\|?\s*:?-{3,}:?\s*(?:\|\s*:?-{3,}:?\s*)*\|?\s*$")
 HEADING = re.compile(r"^(#{1,6})\s+(.*)$")
-ANCHOR = re.compile(r"\{#([\w-]+)\}")
+ANCHOR = re.compile(r"\{((?:\s*[#.][\w-]+)+)\s*\}")
 CITE = re.compile(r"(?<!\\)\[([A-Za-z][\w.-]*\s[^\]]*)\](?!\()")
 LINK = re.compile(r"\[([^\]]*)\]\(([^)\s]*)\)")
 STEP = re.compile(r"^\s*(?:\*\*)?Step\s+\d+\s*[:.](?:\*\*)?\s*")
@@ -95,10 +97,16 @@ class Doc:
 
     def __init__(self):
         self.text, self.headings, self.cites, self.links = [], [], [], []
-        self.callouts, self.items = [], []
+        self.callouts, self.items, self.misplaced = [], [], []
 
 
 # ---- the Markdown side ----------------------------------------------------------------------
+
+def attrs(text):
+    """(the ids, "rv" or "") in a line's attribute blocks: `{#id}`, `{#id .rv}`, `{.rv}`."""
+    toks = [t for block in ANCHOR.findall(text) for t in block.split()]
+    return [t[1:] for t in toks if t.startswith("#")], "rv" if ".rv" in toks else ""
+
 
 def read_md(md):
     doc, label, item, fence = Doc(), "top", False, False
@@ -119,7 +127,9 @@ def read_md(md):
             continue
         h = HEADING.match(body)
         if h and not q:
-            ids = ANCHOR.findall(h.group(2))
+            ids, rv = attrs(h.group(2))
+            if rv:
+                doc.misplaced.append(label)
             title = words(LINK.sub(r"\1", ANCHOR.sub(" ", h.group(2))))
             level = len(h.group(1)) + 1
             m = H1.match(body)
@@ -127,20 +137,26 @@ def read_md(md):
             doc.headings.append(((level, ids[0] if ids else "", title), label))
             item = False
             continue
-        ids = ANCHOR.findall(body)
+        ids, rv = attrs(body)
         body = ANCHOR.sub(" ", body)
         m = WEX.match(body)
         if m:
             doc.callouts.append((("example", ids[0] if ids else "",
-                                  f"Worked example {m.group(1)}"), label))
+                                  f"Worked example {m.group(1)}", rv), label))
             body = body[m.end():]
         elif LABEL.match(body):
             m = LABEL.match(body)
             kind = "warn" if m.group(1).startswith(WARN) else "background"
-            doc.callouts.append(((kind, "", words(m.group(1))), label))
+            if rv and m.group(1) != "Pitfall":
+                doc.misplaced.append(label)
+            doc.callouts.append(((kind, "", words(m.group(1)), rv), label))
             body = body[m.end():]
         elif CONNECTS.match(body):
-            doc.callouts.append((("connects", "", words(CONNECTS.match(body).group(1))), label))
+            doc.callouts.append((("connects", "", words(CONNECTS.match(body).group(1)), ""), label))
+            if rv:
+                doc.misplaced.append(label)
+        elif rv:
+            doc.misplaced.append(label)
         step, lst = STEP.match(body), LIST.match(body)
         if step or lst:
             kind = "step" if step else "li"
@@ -197,15 +213,15 @@ class FragReader(HTMLParser):
         if tag == "a" and "xref" in cls:
             self.doc.links.append((a.get("href", ""), self.label))
         if tag == "details" and "callout" in cls:
-            e["callout"] = ["example", a.get("id", ""), None]
+            e["callout"] = ["example", a.get("id", ""), None, "rv" if "rv" in cls else ""]
             self.doc.callouts.append((e["callout"], self.label))
         elif tag == "div" and "callout" in cls and not {"def", "key"} & set(cls):
-            e["callout"] = ["warn" if "warn" in cls else "background", "", None]
+            e["callout"] = ["warn" if "warn" in cls else "background", "", None, "rv" if "rv" in cls else ""]
             self.doc.callouts.append((e["callout"], self.label))
         elif tag == "div" and "callout" in cls:
-            e["callout"] = ["ignored", "", None]
+            e["callout"] = ["ignored", "", None, ""]
         if tag == "p" and "connects" in cls:
-            e["callout"] = ["connects", "", None]
+            e["callout"] = ["connects", "", None, "rv" if "rv" in cls else ""]
             e["strong"] = True
             self.doc.callouts.append((e["callout"], self.label))
         owner = self.inside("strong")
@@ -261,7 +277,7 @@ def read_html(html):
     r.feed(html)
     r.close()
     for i, (c, label) in enumerate(r.doc.callouts):
-        r.doc.callouts[i] = (tuple(c[:2]) + (c[2] or "",), label)
+        r.doc.callouts[i] = ((c[0], c[1], c[2] or "", c[3]), label)
     r.doc.callouts = [c for c in r.doc.callouts if c[0][0] != "ignored"]
     return r.doc
 
@@ -306,6 +322,8 @@ def compare_pair(md, html, name):
     for what in ("headings", "text", "cites", "links", "callouts", "items"):
         out += diff(name, "citations" if what == "cites" else what,
                     getattr(a, what), getattr(b, what))
+    out += [f"{name} {label}: the notes put .rv on a line that is no worked example or Pitfall: "
+            "only those join the Review view" for label in a.misplaced]
     return out
 
 
@@ -324,7 +342,7 @@ A frontier is the set of generated, unexpanded nodes [D1 p.2]. A cost of n^2 gro
 Step 1: Pop the cheapest node.
 Step 2: Expand it [D1 p.3].
 
-> **Worked example 1.1: Two pops** {#ex-1-pops}
+> **Worked example 1.1: Two pops** {#ex-1-pops .rv}
 > Setup: costs 4 and 9.
 > Step 1: pop 4.
 > Step 2: pop 9.
@@ -340,7 +358,7 @@ Step 2: Expand it [D1 p.3].
 
 **How it's tested:** give the pop order. Practice: [HW1 Q2c].
 
-> **Pitfall:** a stale entry still pops; skip it.
+> **Pitfall:** {.rv} a stale entry still pops; skip it.
 
 > **Background:** only [D1 p.9] has the proof; no practice question asks for it. The heap keeps the minimum at its root.
 
@@ -359,7 +377,7 @@ SAMPLE_HTML = r"""<section class="note" id="sec-1">
   <div class="callout def"><div class="lab">Definition</div><p>A frontier is the set of generated, unexpanded nodes <a class="slink">D1 p.2</a>.</p></div>
   <p>A cost of \(n^2\) grows fast, and \(g(n) \le h(n)\) is the test <code>if a &lt; b</code>.</p>
   <ol class="steps"><li>Pop the cheapest node.</li><li>Expand it <a class="slink">D1 p.3</a>.</li></ol>
-  <details class="callout example wex" id="ex-1-pops">
+  <details class="callout example wex rv" id="ex-1-pops">
   <summary><span class="lab">Worked example 1.1</span><span class="wex-t">Two pops</span></summary>
   <p>Setup: costs 4 and 9.</p>
   <ol class="steps"><li>pop 4.</li><li>pop 9.</li></ol>
@@ -369,7 +387,7 @@ SAMPLE_HTML = r"""<section class="note" id="sec-1">
   <ol><li><strong>Pop:</strong> the cheapest first (<a class="xref" href="#ex-1-pops">Worked example 1.1</a>).</li><li><strong>Ties:</strong> alphabetical.</li></ol>
   <div class="tbl-wrap"><table><thead><tr><th>Pop</th><th>Cost</th></tr></thead><tbody><tr><td>1</td><td>4</td></tr></tbody></table></div>
   <p class="connects"><strong>How it’s tested:</strong> give the pop order. Practice: <a class="slink">HW1 Q2c</a>.</p>
-  <div class="callout warn"><div class="lab">Pitfall</div><p>a stale entry still pops; skip it.</p></div>
+  <div class="callout warn rv"><div class="lab">Pitfall</div><p>a stale entry still pops; skip it.</p></div>
   <div class="callout"><div class="lab">Background</div><p>only <a class="slink">D1 p.9</a> has the proof; no practice question asks for it. The heap keeps the minimum at its root.</p></div>
   <figure id="fig-1-heap"><svg viewBox="0 0 200 80" role="img" aria-label="A heap of 4 and 9"><rect class="bx fill-surf" x="80" y="10" width="40" height="24"/><text x="100" y="27" class="mono">4</text></svg>
   <figcaption>Fig 1.1. A heap of 4 and 9.</figcaption></figure>
@@ -456,8 +474,19 @@ def plant_cite(html):
     return None, "no citation"
 
 
+RV_CLASS = re.compile(r"<[a-z]+\b[^>]*\bclass=\"[^\"]*?(\s+rv\b|\brv\s+)[^\"]*\"")
+
+
+def plant_rv(html):
+    m = RV_CLASS.search(html)
+    if m:
+        return splice(html, m.start(1), m.end(1), ""), m.group(0)[:40]
+    return None, "no rv class"
+
+
 PLANTS = (("a dropped sentence", plant_sentence), ("a changed number", plant_number),
-          ("two swapped steps", plant_swap), ("a dropped citation", plant_cite))
+          ("two swapped steps", plant_swap), ("a dropped citation", plant_cite),
+          ("a dropped .rv", plant_rv))
 
 
 def self_test(pairs):
