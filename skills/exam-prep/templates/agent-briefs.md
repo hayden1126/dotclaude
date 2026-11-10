@@ -510,15 +510,18 @@ meanwhile and merges your branch when you report.
 
 ## End state
 - Done means: the change below made in every copy of the fact{{PAGE: , the section's fragment
-  matching and the page rebuilt}}, in one commit on your branch.
+  matching and the page rebuilt}}, and when a copy was on the review page, its fragment matching
+  and that page rebuilt, in one commit on your branch.
 - Artifact path: your branch, in your worktree of {{ROOT}}.
 - Report: end your reply with the JSON block (status, summary, artifacts, blocked_actions), with
   artifacts[0] `<branch>@<sha>`. The summary lists each file and line number you changed, never the
   text, and anything that looked wrong elsewhere, unfixed.
 
 ## Scope
-- Work in: your worktree of {{ROOT}}. Write only inside `notes/`, `_build/frag/` and
-  `cheatsheet/`{{PAGE:, plus the rebuilt `_build/notes.html`}}, never in a subfolder of
+- Work in: your worktree of {{ROOT}}. Write only inside `notes/`, `_build/frag/`, `cheatsheet/`,
+  `_build/review/notes/` and `_build/review/_build/frag/` (the condensed review page, when the hub
+  has one){{PAGE:, plus the rebuilt `_build/notes.html`}}, and the rebuilt
+  `_build/review/_build/notes.html` when you changed the review page; never in a subfolder of
   `cheatsheet/`: each holds a finished exam's sheets, frozen.
 - The change, exactly as the student approved it, in the notes, a sheet or both:
   - {{NOTES: `notes/{{FILE}}`, {{WHERE: after the line that starts "<its first words>" |
@@ -532,12 +535,15 @@ meanwhile and merges your branch when you report.
     report.}}
   - {{RESTORE: The student dropped an earlier change: put each file below back as it stood at
     commit `{{BEFORE}}`, `git show {{BEFORE}}:<path> > <path>`, then rebuild as below
-    (`_build/notes.html` is rebuilt, never restored): {{THE FILES `git diff --name-only {{BEFORE}}
-    HEAD -- notes/ _build/frag/ cheatsheet/` LISTS}}.}}
-- Every copy (FB-106): search `notes/`, `_build/frag/` and `cheatsheet/` for {{THE OLD PHRASE OR
-  FACT}}, and make the same change wherever the fact is stated (a Must-know line, a pitfall box, a
-  sheet line), except in a subfolder of `cheatsheet/`. A wrong fact is fixed on both sheets; a line
-  a mock prompted goes on the final sheet only.
+    (each `notes.html` is rebuilt, never restored): {{THE FILES `git diff --name-only {{BEFORE}}
+    HEAD -- notes/ _build/frag/ cheatsheet/ _build/review/notes/ _build/review/_build/frag/`
+    LISTS}}.}}
+- Every copy (FB-106): search `notes/`, `_build/frag/`, `cheatsheet/`, `_build/review/notes/` and
+  `_build/review/_build/frag/` for {{THE OLD PHRASE OR FACT}}, and make the same change wherever the
+  fact is stated (a Must-know line, a pitfall box, a sheet line, a review page row), except in a
+  subfolder of `cheatsheet/`. A wrong fact is fixed on both sheets; a line a mock prompted goes on
+  the final sheet only. A copy in the review page's Markdown changes in its fragment too, in the
+  fragment's markup (`_build/CONVERT.md`).
 - {{PAGE: From the worktree root, `python3 -I {{SKILL}}/scripts/assemble.py` and `python3 -I
   {{SKILL}}/scripts/linkcheck.py --html _build/notes.html` both exit 0. | PLAIN TEXT: There is no
   page and no link check (the notes have no anchors): check by eye that each `§N.M` reference you
@@ -545,6 +551,9 @@ meanwhile and merges your branch when you report.
   from the section files in order. | SHEET ONLY: Every copy of a corrected fact means both sheets,
   and an addition goes only where the change above names: nothing under `notes/` or
   `_build/frag/` changes, so nothing is rebuilt.}}
+- When you changed a file under `_build/review/`, from the worktree root `python3 -I
+  {{SKILL}}/scripts/assemble.py --root _build/review` and `python3 -I
+  {{SKILL}}/scripts/linkcheck.py --html _build/review/_build/notes.html` both exit 0.
 - Commit what you changed in one commit, subject `Notes {{N.M}}: {{WHAT}}` (`Sheets: {{WHAT}}`
   for a sheet alone), and only once every copy is changed and the checks above pass: a run that
   stops short (blocked, partial) commits nothing and reports what is left. Change existing files
@@ -553,7 +562,7 @@ meanwhile and merges your branch when you report.
   by you, and an example is the notes' own or a fresh one from that file: never a homework's, a
   recitation's or a mock's numbers.
 - Out of scope: everything under `practice/` (quarantined keys), `_build/verify/` but
-  `examples.out.md`, `sources/`, and any search outside the three directories above: one over the
+  `examples.out.md`, `sources/`, and any search outside the directories above: one over the
   hub root returns key lines. Note anything else that looks wrong in your report; don't fix it.
 ```
 

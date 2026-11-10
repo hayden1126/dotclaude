@@ -149,10 +149,11 @@ when it was built: it fills like any sheet. So the final sheet makes room for it
 
 ## After shipping
 
-- Any change to a shipped sheet, a fix or an addition: show the student the draft first (FB-137;
-  while a mock is untaken, as `08-practice` says in "Changing the notes or a sheet"); during
-  study Q&A a dispatched writer makes it (hard rule 9; `09-tutor` step 5). Then step 5's audit
-  limited to the change, step 4, and a republish of the published sheet as `06-site` step 6 says.
+- Any change to a shipped sheet or the review page, a fix or an addition, runs `08-practice`'s
+  "Changing the notes or a sheet", the one list of the published products and what a change does
+  to each: the draft shown first (FB-137), every copy of the fact changed, the rebuild and its
+  checks, the republish. During study Q&A a dispatched writer makes it (hard rule 9; `09-tutor`
+  step 5). For a sheet, that list's rebuild is step 5's audit limited to the change, then step 4.
   A fix to a fact goes into both sheets; an addition the mock prompted goes into the final sheet
   only (FB-133).
 - Space a later scope cut frees stays blank for the final sheet's items. Check which sections it
@@ -182,7 +183,9 @@ nothing on it is new teaching.
    converted by the "Convert" brief (`06-site` step 3) into `_build/review/_build/frag/`, an
    exam-day map fragment there too (`06-site` step 4), and a copy of `MANIFEST.md` in
    `_build/review/` when it cites a source. Then `python3 -I <skill>/scripts/assemble.py --root
-   _build/review`, and `06-site` step 5's checks on `_build/review/_build/notes.html`. It has no
+   _build/review`, and `06-site` step 5's checks on `_build/review/_build/notes.html`. It is built
+   after `05-verify`, so `05-verify` step 5's questions check runs again here with its Markdown,
+   `_build/review/notes/*.md`, added to `--pages`, and prints QUESTIONS OK (FB-191). It has no
    step-throughs (a row that needs one links to its figure on the notes page, and its fragments
    keep no FIG marker), so `verify_page.mjs` runs on it without `--steps`, its shots in
    `_build/shots/review/` (gitignored). Count its printed pages (a print to PDF of the page)
@@ -191,7 +194,8 @@ nothing on it is new teaching.
    it links.
 5. **Publish** it privately, as `06-site` step 6 publishes the notes, its URL in STATUS, then
    commit and hand off as step 6 does for a sheet (the `Build running` line removed in that commit
-   when this stage ends the build). A later change follows "After shipping" like a sheet's.
+   when this stage ends the build). A later change runs `08-practice`'s "Changing the notes or a
+   sheet", as "After shipping" says.
 
 ## Done when
 

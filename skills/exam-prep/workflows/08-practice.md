@@ -251,8 +251,8 @@ Then:
    open), then run "Changing the notes or a sheet" items 1 and 3 to 5 for the page (its compare
    against the keys, the rebuild and checks, the republish to the same URL). Plain-text notes have
    no page: the cram order stays a file. Every later change to the cram order's tiers, rows or skip
-   list reruns this item after items 1 and 2: step 8.4, `10-polish` step 5.4 and `11-next-exam`'s
-   "A source added to this exam" step 4 name it in their order. A change to a mock line alone
+   list reruns this item after items 1 and 2, as "Changing the notes or a sheet" item 3 says (step
+   8.4 names it too, and so do the flows that run that list). A change to a mock line alone
    doesn't: the map holds none.
 5. Hand off and commit (Done when's list, up to here) as this
    stage's opening says, the next-step line kept as step 4 set it. The student acts on the new
@@ -308,9 +308,10 @@ STATUS as a final-sheet item with no mock, for step 8.3. Of the mocks' keys, thi
 a taken mock's, never an untaken one's, `practice/mock-values-key.md` or `_build/verify/mock_key.py`
 (they hold every mock's answers; the one exception is step 4's rerun clause, which prints a taken
 mock's section of the values file alone), and keeps every search inside `notes/`, `cheatsheet/`,
-`_build/frag/` and `_build/extract/` (which holds no mock): one over the hub root prints key lines.
-The writer `09-tutor` step 5 dispatches (the "Notes patch" brief) makes the change of "Changing the
-notes or a sheet" item 2 and, for the notes, item 3's rebuild, fenced from `practice/`, from
+`_build/frag/`, `_build/review/` and `_build/extract/` (which hold no mock): one over the hub root
+prints key lines. The writer `09-tutor` step 5 dispatches (the "Notes patch" brief) makes the change
+of "Changing the notes or a sheet" item 2 and, for the notes and the review page, item 3's
+rebuilds, fenced from `practice/`, from
 `_build/verify/` but `examples.out.md` (its numbers come from there, and it holds no mock instance:
 step 3.4) and from any search over the hub root; the main session runs the other items and the
 merge, as that step says.
@@ -349,40 +350,81 @@ merge, as that step says.
 
 ## Changing the notes or a sheet
 
-Until the last mock is taken, the notes, the review page and the sheets are pages the student reads
-before an attempt. Every change to them (step 5, the cram order audit in step 7, the final sheet and
-a fix or a question on the cram night) runs this, with the keys of the mocks not yet taken (before
-any attempt, `practice/*-key.md`):
+This is the one list of the hub's published products and what a change to the notes, the review
+page or a sheet does to each. Every such change once `05-verify` is done runs it: this stage's own
+(step 5, the cram order audit in step 7, the final sheet, a fix or a question on the cram night), a
+`09-tutor` patch, a `10-polish` pass, `07-cheatsheet`'s "After shipping", and `11-next-exam`'s "A
+source added to this exam" and "A source added unverified". Those flows run it by reference and add
+only what is their own: who makes the change, where the baseline is kept, when the commit comes.
 
-1. The baseline: step 4.5's command, run now, on the notes (plain-text notes:
-   `notes/combined.md`), on the review page (`_build/review/_build/notes.html`) when 07 built one,
-   and on each sheet the student reads before that attempt. Keep the hit lines.
-2. Make the change as `05-verify` step 5 says (every copy of the fact, a copy in the review page's
-   `_build/review/notes/` included), teaching a method in general or with an example of its own,
-   never a mock's instance. A new number or trace comes from the checker (`examples.py`, `05-verify`
-   step 2), never by hand. A wrong fact on a sheet is corrected on both sheets; a line the mock
-   prompted goes into the final sheet only (FB-133), logged in STATUS as a final-sheet item, with
-   the mock that prompted it (or none), for step 8.3. FB-137 wants the student to see a draft before
-   a printed sheet changes: before step 8, while they look away, log the change, and step 8.1 shows
-   it before the reprint; in step 8, show the draft once item 4 passes, before item 5.
-3. Rebuild what changed: the section's fragment (`06-site` step 3) and `06-site` step 5
-   (plain-text notes: `notes/combined.md` from the section files); an HTML sheet, `07-cheatsheet`
-   step 4. A LaTeX sheet is checked as its `.tex` in item 4; the student compiles it before the
-   next attempt (step 8.1). The review page, whenever the notes change: its fragments for the
-   files item 2 changed, then `assemble.py --root _build/review` and its checks, as
-   `07-cheatsheet`'s "The condensed review page" item 3 says.
-4. Run item 1 again and compare the hit lines with the baseline's (count them, since every hit
-   on the notes reads "(the page)" and a second copy of an answer adds one). A new hit on a
-   number, order or table answer is a leak: reword the change and repeat from item 2. Judge and
-   log any other new hit as step 4.5 does. During the build (steps 2 to 7.5), commit a change
-   only once this item passes, and a session that must end first finishes it: a `09-tutor` tab
-   running meanwhile reads the notes and the sheets as committed (its step 1).
-5. Republish what is published (`06-site` step 6; the review page and the mock sheet as
-   `07-cheatsheet` publishes them).
-   The student may have printed the mock sheet at `07-cheatsheet`: a changed one is logged in
-   STATUS, and the cram order's next mock line says to print it again, or with the LaTeX engine
-   to compile it and bring the PDF to the session first (step 7 writes it so when the cram order
-   comes later). Then rerun step 7's items 1 and 2 once the cram order exists.
+Until the last mock is taken, the notes, the review page and the sheets are pages the student reads
+before an attempt. So while a mock is untaken, items 1 and 4's leak compare run too, with the keys
+of the mocks not yet taken (before any attempt, `practice/*-key.md`). The rest runs on every change.
+
+The products, each one the hub has:
+
+| Product | Its files | Runs when |
+|---|---|---|
+| The notes page | `notes/NN-*.md`, `_build/frag/sec<N>.html`, `_build/notes.html` (plain-text notes: `notes/combined.md`) | the notes change |
+| The condensed review page, when PLAN.md's Review page line holds one | `_build/review/notes/`, `_build/review/_build/frag/`, `_build/review/_build/notes.html` | a fact it copies changes, or its rows change |
+| Each sheet | `cheatsheet/<exam-slug>-mock.html` and `-final.html` (or `.tex`), never a subfolder of `cheatsheet/` | a fact it copies changes, or a line is added |
+| The cram order and the page's cram copy | `practice/cram-order.md`, the map's cram block (`06-site` step 4) | a row quotes the changed fact, or its tiers, rows or skip list change |
+| The checks | the questions check (FB-191), and the leak compare | the questions check, on a change to the notes or the review page; the leak compare, on every change while a mock is untaken |
+
+1. **The baseline**, while a mock is untaken: step 4.5's command, run now, on the notes
+   (`_build/notes.html`; plain-text notes: `notes/combined.md`), on the review page
+   (`_build/review/_build/notes.html`) when the hub has one, and on each sheet the student reads
+   before that attempt. Keep the hit lines.
+2. **Make the change** as `05-verify` step 5 says, in every copy of the fact: search `notes/`,
+   `_build/frag/`, `cheatsheet/`, `_build/review/notes/`, `_build/review/_build/frag/` and
+   `practice/cram-order.md` for the old phrase, and leave a subfolder of `cheatsheet/` as it is (a
+   finished exam's frozen archive). A new number or trace comes from the checker (`examples.py`,
+   `05-verify` step 2), never by hand. A wrong fact on a sheet is corrected on both sheets. While a
+   mock is untaken, the change teaches a method in general or with an example of its own, never a
+   mock's instance, and a line the mock prompted goes into the final sheet only (FB-133), logged in
+   STATUS as a final-sheet item, with the mock that prompted it (or none), for step 8.3. FB-137
+   wants the student to see a draft before a printed sheet changes: with no mock untaken, show it
+   before the change is made; before step 8, while they look away, log the change, and step 8.1
+   shows it before the reprint; in step 8, show the draft once item 4 passes, before item 5.
+3. **Rebuild and recheck** each product item 2 touched:
+   - The notes page: the section's fragment, in its own markup (`_build/CONVERT.md`), and `06-site`
+     step 3's `fidelity.py` compare of it with its notes file, then `06-site` step 5, all of it,
+     the changed sections' screenshots seen. Plain-text notes: the touched references checked by
+     eye (`04-write` step 6), and `notes/combined.md` rebuilt from the section files when it exists.
+   - The review page: its fragments for the files item 2 changed under `_build/review/notes/`, then
+     `assemble.py --root _build/review` and its checks, as `07-cheatsheet`'s "The condensed review
+     page" item 3 says, its printed pages still within the Review page line's length.
+   - A sheet: an HTML sheet through `07-cheatsheet`'s "After shipping", its audit limited to the
+     change, then its step 4; near a full side, new wording is no longer than what it replaces
+     (FB-137). A LaTeX sheet changes in its `.tex` only and is read as its source in item 4; the
+     student compiles it (item 5).
+   - The cram order, once it exists: step 7's item 1, and while a mock is untaken its item 2. When
+     the change touched its tiers, rows or skip list, step 7.4 too, after the notes page's own
+     rebuild: the map's cram copy rewritten and the page rebuilt again. A mock line alone skips
+     7.4: the map holds none.
+4. **The checks.** When the notes or the review page changed, `05-verify` step 5's questions check
+   prints QUESTIONS OK (FB-191): `mock_leak.py --questions` on the unattempted sets that step lists
+   from MANIFEST.md, skipped when there is none, its `--pages` the notes Markdown (`notes/*.md`)
+   and, when the hub has the review page, its Markdown (`_build/review/notes/*.md`). A hit is
+   reworded with fresh numbers and setup (S7) and repeats from item 2. While a mock is untaken, also
+   the leak compare: run item 1 again and compare the hit lines with the baseline's (count them,
+   since every hit on the notes reads "(the page)" and a second copy of an answer adds one). A new
+   hit on a number, order or table answer is a leak: reword the change and repeat from item 2.
+   Judge and log any other new hit as step 4.5 does. During the build (steps 2 to 7.5), commit a
+   change only once this item passes, and a session that must end first finishes it: a `09-tutor`
+   tab running meanwhile reads the notes and the sheets as committed (its step 1).
+5. **Republish** what changed and is published, once this item 4 passes: the notes page as
+   `06-site` step 6 says (its live read first when this session didn't build the page), the review
+   page and the mock sheet as `07-cheatsheet` publishes them. Bump each one's version on its STATUS
+   line (`v2` after its URL at the first republish, then `v3` and on) and tell the student. The
+   final sheet isn't published. Then what the student must redo, each logged in STATUS until they
+   say it is done: a printed sheet that changed (the final sheet included) is printed again; a
+   changed LaTeX sheet is compiled by the student, and its PDF passes `check_pdf.py --no-layout`
+   as step 8.1 checks one; with plain-text notes, the changed sections are pasted again. While a
+   mock is untaken, a changed mock sheet is logged in STATUS, and the cram order's next mock line
+   says to print it again, or with the LaTeX engine to compile it and bring the PDF to the session
+   first (step 7 writes it so when the cram order comes later); then step 7's items 1 and 2 once
+   the cram order exists.
 
 Log each change in STATUS by its part and what changed, never a value.
 

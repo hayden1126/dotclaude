@@ -50,9 +50,9 @@ show a sheet line it changes, exactly, before making it (FB-137; while a mock is
   a cited source, its working shown (hard rule 3).
 
 While a mock is untaken, the pass keeps `08-practice` step 8's fence, with the cram order added: the
-session and every reader search only `notes/`, `cheatsheet/`, `_build/frag/`, `_build/extract/` and
-`practice/cram-order.md`, open nothing under `practice/` but the cram order (the student reads it
-before the mocks), and never open `_build/verify/mock_key.py` or `_build/mock-plan.md`: a search
+session and every reader search only `notes/`, `cheatsheet/`, `_build/frag/`, `_build/review/`,
+`_build/extract/` and `practice/cram-order.md`, open nothing under `practice/` but the cram order
+(the student reads it before the mocks), and never open `_build/verify/mock_key.py` or `_build/mock-plan.md`: a search
 over the hub root prints key lines, and the plan holds the mocks' questions. Each write to the
 pass's log or to STATUS is followed by `python3 -I <skill>/scripts/mock_leak.py <file> <the untaken
 mocks' keys>` until it prints LEAK OK, a hit reworded (`08-practice` step 7.5's check), and the
@@ -92,8 +92,9 @@ included). Start it: the ask in the student's words, the pass, the sections, the
 hub's head (`git rev-parse HEAD`) as `before <sha>`. The log marks each step's end as it finishes
 (`step 2 done`, `step 5 done`) and each of step 7's items, so a resume knows where the pass stopped.
 The pass's paths, below, are `notes/ _build/frag/ ':(glob)cheatsheet/*.html'
-':(glob)cheatsheet/*.tex' MANIFEST.md _build/backbone.md _build/chassis.html
-practice/cram-order.md` as git pathspecs, the globs quoted (zsh stops on a glob that matches
+':(glob)cheatsheet/*.tex' _build/review/notes/ _build/review/_build/frag/ MANIFEST.md
+_build/backbone.md _build/chassis.html practice/cram-order.md` as git pathspecs (the review page's
+paths match nothing on a hub without one), the globs quoted (zsh stops on a glob that matches
 nothing) and marked `:(glob)`, without which a pathspec's `*` also matches a `/` and takes in a
 finished exam's archive, `cheatsheet/<exam-slug>/`.
 
@@ -138,6 +139,9 @@ step 1 says.
     (`07-cheatsheet`'s "After shipping", FB-140); so does a queued addition on it, a STATUS
     final-sheet item struck with why, or a tutor log `sheet line` dropped on the student's word
     (`09-tutor` step 5, "One open patch");
+  - the condensed review page, when the hub has one: a row on cut material goes, since the page
+    leaves out what a `Not on <exam>` banner holds (`07-cheatsheet`'s "The condensed review page"
+    item 2), and a row that names cut and kept material is reworded to the kept part;
   - a cram order row on cut material moves to its skip list (`08-practice` step 7), and one whose
     one thing names cut and kept material is reworded to the kept part;
   - an untaken mock isn't opened or edited: the cram order's line for it says the mock predates
@@ -185,40 +189,28 @@ step 1 says.
    notes or a sheet" item 1, the baseline, before the first change: its hit lines (part ids only) go
    to the pass's baseline file (its log's name with `.baseline.txt` for `.md`), committed with the
    log, which records `baseline taken`.
-3. One fix at a time, as `05-verify` step 5 says: every copy of the fact (the section's notes file
-   and, with a page, its fragment, a Must-know line, a pitfall box, both sheets, a cram order row
-   that quotes it; grep `notes/`, `_build/frag/`, `cheatsheet/` and `practice/cram-order.md` for
-   the old phrase, leaving a finished exam's frozen archive under `cheatsheet/<exam-slug>/` as it
-   is), a new number or trace as step 1 says, never an answer from a set MANIFEST.md
-   doesn't mark `yes, attempted`. While a mock is untaken, each fix is that section's item 2: a
-   method taught in general or with an example of its own, never a mock's instance. Change the
-   fragment in its own markup (`_build/CONVERT.md`), and a figure label in the fragment's SVG and
-   wherever the notes describe it. Use the Edit tool: the notes hold math and Unicode that a `sed`
-   rewrite breaks. A corrected fact changes on both sheets; an added sheet line, while a mock is
-   untaken, goes where `08-practice` step 8 sends a one-line addition (the final sheet once its
-   step 8.3 has built it, until then STATUS as a final-sheet item). Mark each item's outcome in the
-   log as it lands. A change an item makes outside the pass's paths (a STATUS final-sheet item added
-   or struck, a tutor log line dropped) is logged with it and made at item 6, just before the
-   commit, so a stop before that commit leaves none.
-4. Rebuild and check what changed: `06-site` step 3's `fidelity.py` on each section touched, then
-   `06-site` step 5, its screenshots of those sections seen (plain-text notes: the references
-   checked by eye, `04-write` step 6, and `notes/combined.md` rebuilt when it exists). An HTML
-   sheet that changed goes through `07-cheatsheet`'s "After shipping": the audit limited to the
-   change, then its step 4. Near a full side, new wording is no longer than what it replaces
-   (FB-137). A LaTeX sheet changes in its `.tex` only; the student compiles it (step 7.2). With a
-   cram order, `08-practice` step 7's item 1, and while a mock is untaken its item 2 with the
-   untaken mocks' keys. When the pass changed the cram order's tiers, rows or skip list (a cut
-   moved a row to the skip list, a row reworded), then its item 4: the map's cram copy rewritten
-   and `06-site` step 5 run again, its compare as item 5 says and its republish left to step 7.1.
-5. When the pass changed the notes, `05-verify` step 5's questions check (`mock_leak.py
-   --questions` on the unattempted sets that step lists from MANIFEST.md, skipped when there is
-   none) prints QUESTIONS OK (FB-191): a hit is reworded with fresh numbers and setup (S7), logged
-   as the item's `changed (how)`, and repeats from item 3. While a mock is untaken, also "Changing
-   the notes or a sheet" item 4: rerun the baseline's command and
-   compare with the pass's baseline file (a `.tex` is read as its source). A new hit on a
-   number, order or table answer is a leak: reword it, log the reword as the item's `changed
-   (how)` (step 6 takes it as the approved text, and the look-back shows it), and repeat from item
-   3.
+3. One fix at a time, as `05-verify` step 5 says, in every copy of the fact that `08-practice`'s
+   "Changing the notes or a sheet" item 2 searches for (the one list of the published products and
+   what a change does to each), a new number or trace as step 1 says, never an answer from a set
+   MANIFEST.md doesn't mark `yes, attempted`. While a mock is untaken, each fix is that section's
+   item 2: a method taught in general or with an example of its own, never a mock's instance.
+   Change the fragment in its own markup (`_build/CONVERT.md`), and a figure label in the
+   fragment's SVG and wherever the notes describe it. Use the Edit tool: the notes hold math and
+   Unicode that a `sed` rewrite breaks. An added sheet line, while a mock is untaken, goes where
+   `08-practice` step 8 sends a one-line addition (the final sheet once its step 8.3 has built it,
+   until then STATUS as a final-sheet item). Mark each item's outcome in the log as it lands. A
+   change an item makes outside the pass's paths (a STATUS final-sheet item added or struck, a tutor
+   log line dropped) is logged with it and made at item 6, just before the commit, so a stop before
+   that commit leaves none.
+4. Rebuild and check each product the pass touched, as that section's item 3 lists them (the notes
+   page, the review page, each sheet, the cram order and the page's cram copy), the touched
+   sections' screenshots seen; its republish waits for step 7.1.
+5. That section's item 4: the questions check when the pass changed the notes or the review page,
+   and while a mock is untaken the leak compare with the pass's baseline file, never a new
+   baseline (a `.tex` is read as its source). A questions hit is reworded with fresh numbers and
+   setup (S7); a new hit on a number, order or table answer is a leak, reworded. Either reword is
+   logged as the item's `changed (how)` (step 6 takes it as the approved text, and the look-back
+   shows it), and repeats from item 3.
 6. Make the logged changes outside the pass's paths, mark `step 5 done` in the log, and commit it
    all together, only once item 5 passes: a tutor tab reads the notes as committed.
 
@@ -250,20 +242,12 @@ dropped. Log `look-back done` once every rejection is settled, before step 7's r
 
 ## Step 7: Ship and close
 
-1. Republish what changed and is published, once for the pass (`06-site` step 6, its live read
-   first when this session didn't build the page; the mock sheet as `07-cheatsheet` publishes it),
-   and bump the version on its STATUS line as `09-tutor` step 5.5.8 does.
-2. What the student must redo:
-   - A sheet the student has printed and that changed, the final sheet included, is printed
-     again: tell them, and log it in STATUS until they say it is done.
-   - While a mock is untaken, "Changing the notes or a sheet" item 5 too: a changed mock sheet is
-     logged in STATUS, and the cram order's next mock line says to print it again (with LaTeX, to
-     compile it and bring the PDF first); then `08-practice` step 7's item 1, and its item 2 with
-     the untaken mocks' keys.
-   - A changed LaTeX sheet is compiled by the student; when they bring its PDF, it is checked with
-     `check_pdf.py --no-layout`, as `08-practice` step 8.1 checks one, and STATUS logs it until
-     then.
-   - Plain-text notes: the sections to paste again, logged in STATUS until they say it is done.
+1. Republish once for the pass, as `08-practice`'s "Changing the notes or a sheet" item 5 says:
+   each changed product that is published, its version bumped on its STATUS line.
+2. What the student must redo, as that item 5 lists it (a changed sheet printed again, the final
+   sheet included; a changed LaTeX sheet compiled and its PDF checked; plain-text notes' sections
+   pasted again; while a mock is untaken, the changed mock sheet and the cram order's next mock
+   line), each logged in STATUS until they say it is done.
 3. The log: each item applied, changed (how), dropped (why) or beyond the list, and the fidelity
    review's outcome, or that it didn't run.
 4. The report to the student: what was applied, anything beyond the list (FB-170), anything a stop
@@ -311,9 +295,10 @@ checks follow.
 ## Done when
 
 Each approved item is applied or logged with why not, and nothing else changed; the fidelity
-review's findings are settled; `06-site` step 5 passes with its screenshots seen (plain-text notes:
-`notes/combined.md` rebuilt when it exists, the sections to paste again logged); each changed HTML
-sheet passes `07-cheatsheet` step 4, and a changed LaTeX sheet is logged until its PDF passes;
+review's findings are settled; each product the pass touched is rebuilt and checked as
+`08-practice`'s "Changing the notes or a sheet" item 3 says, with its screenshots seen (plain-text
+notes: `notes/combined.md` rebuilt when it exists, the sections to paste again logged), and a
+changed LaTeX sheet is logged until its PDF passes; the questions check prints QUESTIONS OK;
 while a mock was untaken, the leak compare passed and the log and STATUS print LEAK OK; what is
 published is republished once with its version bumped; the log and STATUS's `Polish:` line say what
 happened; it is handed off and committed with the `Build running` line gone.
