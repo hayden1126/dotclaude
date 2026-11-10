@@ -29,8 +29,38 @@ holds it (a view and a part id, or none), never the answer (the student may read
 attempt), then the LEAK or LEAK OK line. Usage errors go to stderr. Exit 0 clean, 1 on a leak, 2
 on bad usage (a missing file, a key with no answers, an Answer: line outside a bare ## Question N
 block, or a file that isn't UTF-8).
+
+The questions mode (05-verify step 5, FB-191): the notes reproduce no question of a set the
+student hasn't attempted, its answer or not.
+
+  mock_leak.py --questions <file or dir>... [--allow <file or dir>...] --pages <page>...
+
+Each page (a notes section, a fragment, the assembled page) is compared with the text of each
+question file (a set's extract, `_build/extract/<name>.md`); a directory stands for every .md,
+.txt, .tex and .html file under it. A page is read as written (.md, .txt), with its tags, scripts,
+styles and comments dropped (.html), or with its % comments and command names dropped (.tex);
+every reading keeps its line breaks, so a hit names a line. A hit is either of these:
+- 8 words in a row that the question file also holds in a row, after case, whitespace and
+  punctuation are dropped (Markdown marks among them). Eight, because a shorter run is common
+  phrasing ("the shortest path from s to t"), while a rebuilt question shares a whole clause;
+  overlapping runs count as one hit.
+- 3 numbers in the same order, one after another, within a sentence of each (a sentence ends at
+  ., ! or ? before a space, a blank line, a heading or an HTML block tag). Three, because one
+  or two numbers recur by chance, while a copied setup brings its data along. A number is
+  digits with an optional decimal part, standing alone: x1, Q3, 10pts and p.17 hold none, and
+  3 and 3.0 are the same number. Consecutive matching triples count as one hit.
+Citation brackets (`[D4 p.17]`, `[HW1 Q3a]`) are dropped from both sides first, and so are a
+question file's `Pages:`, `**Shape:**`, `**Conventions:**` and `Coverage:` lines: the extract's
+own notes, not the set's text. A run or a triple that an --allow file (a source the student may
+read, such as a lecture's extract) also holds is boilerplate the set shares with the course, and
+doesn't count. Each hit prints the page and its line, how many words or numbers match, and the
+question file's line with its part label (the nearest heading's `[HW3 Q2c]` bracket or Q2c-style
+label), never the matched text: the main session reads it there, and a log must not spoil the
+set. The last line is QUESTIONS OK or QUESTIONS: N found. Exit 0 clean, 1 on a hit, 2 on bad
+usage (a missing file, no question file or page, a file that isn't UTF-8).
 Stdlib only."""
 import bisect
+import html
 import html.parser
 import os
 import re
@@ -324,8 +354,171 @@ def html_page(s):
     return page.finish()
 
 
+SHINGLE = 8
+TUPLE = 3
+WORD = re.compile(r"[^\W_]+")
+NUMBER = re.compile(r"(?<![\w.])\d+(?:\.\d+)?(?!\w)")
+CITE = re.compile(r"\[[A-Z][A-Za-z]*\d+[A-Za-z]* [^\]\n]{1,40}\]")
+# A sentence's end: ., ! or ? before a space, a blank line, the line before a heading, a block tag.
+SENTENCE_END = re.compile(r"[.!?](?=\s)|\n[ \t]*\n|\n(?=[ \t]*#)|\x1e")
+NOTE_LINE = re.compile(r"^[ \t]*(?:Pages:|\*\*Shape:\*\*|\*\*Conventions:\*\*|Coverage:).*$", re.M)
+HEADING = re.compile(r"^[ \t]*(?:#{1,6}[ \t]|(?:Question|Problem)[ \t]+\d)")
+BRACKET = re.compile(r"\[([A-Z][A-Za-z]*\d+[A-Za-z]* [^\]\n]{1,40})\]")
+QLABEL = re.compile(r"\bQ\d+[a-z0-9.]*\b")
+SUFFIXES = (".md", ".txt", ".tex", ".html", ".htm")
+
+
+class Usage(Exception):
+    pass
+
+
+def lines_kept(m):
+    return "\n" * m.group(0).count("\n")
+
+
+def reading(path, raw):
+    """The file's text as its reader sees it, with the same line breaks: tags, scripts, styles
+    and comments dropped from HTML (a block tag ends a sentence, a phrasing tag joins its
+    neighbours), % comments and command names from LaTeX, and citation brackets from both."""
+    if path.endswith((".html", ".htm")):
+        s = re.sub(r"(?is)<(script|style)\b.*?</\1\s*>|<!--.*?-->", lambda m: " \x1e" + lines_kept(m), raw)
+        s = re.sub(r"<\s*/?\s*([A-Za-z][\w-]*)?[^>]*>",
+                   lambda m: ("" if (m.group(1) or "").lower() in INLINE else " \x1e ") + lines_kept(m), s)
+        s = html.unescape(s)
+    elif path.endswith(".tex"):
+        s = re.sub(r"(?<!\\)%[^\n]*", "", raw)
+        s = re.sub(r"\\[A-Za-z]+\*?|[{}]", " ", s)
+    else:
+        s = raw
+    return CITE.sub(" ", INVISIBLE.sub("", s))
+
+
+class Text:
+    """A file's words and its numbers by sentence, each with its line."""
+
+    def __init__(self, path, raw, question=False):
+        self.path, self.lines = path, raw.split("\n")
+        s = reading(path, raw)
+        if question:
+            s = NOTE_LINE.sub("", s)
+        breaks = [m.start() for m in re.finditer("\n", s)]
+        ends = [m.start() for m in SENTENCE_END.finditer(s)]
+
+        def line(offset):
+            return bisect.bisect_left(breaks, offset) + 1
+
+        self.words = [(m.group(0).lower(), line(m.start())) for m in WORD.finditer(s)]
+        self.sentences = {}
+        for m in NUMBER.finditer(s):
+            self.sentences.setdefault(bisect.bisect_left(ends, m.start()), []).append(
+                (float(m.group(0)), line(m.start())))
+
+    def shingles(self):
+        """(shingle, index, line) for every run of SHINGLE words."""
+        for i in range(len(self.words) - SHINGLE + 1):
+            yield tuple(w for w, _ in self.words[i:i + SHINGLE]), i, self.words[i][1]
+
+    def triples(self):
+        """(triple, sentence, index, line) for every TUPLE numbers in a row within a sentence."""
+        for k, nums in sorted(self.sentences.items()):
+            for i in range(len(nums) - TUPLE + 1):
+                yield tuple(n for n, _ in nums[i:i + TUPLE]), k, i, nums[i][1]
+
+    def label(self, n):
+        """The part that line n sits in: its heading's [DOC Q2c] bracket or Q2c-style label, else
+        the heading's line; never the heading's words."""
+        for k in range(n - 1, -1, -1):
+            if HEADING.match(self.lines[k]):
+                m = BRACKET.search(self.lines[k]) or QLABEL.search(self.lines[k])
+                return f" ({m.group(1) if m.re is BRACKET else m.group(0)})" if m else f" (under the heading at line {k + 1})"
+        return ""
+
+
+def expand(paths):
+    out = []
+    for p in paths:
+        if os.path.isdir(p):
+            out += sorted(os.path.join(d, f) for d, _, fs in os.walk(p) for f in fs if f.endswith(SUFFIXES))
+        elif os.path.isfile(p):
+            out.append(p)
+        else:
+            raise Usage(f"{p}: no such file or directory")
+    return out
+
+
+def load(paths, question=False):
+    texts = []
+    for p in expand(paths):
+        try:
+            with open(p, encoding="utf-8") as f:
+                texts.append(Text(p, f.read(), question))
+        except UnicodeDecodeError:
+            raise Usage(f"{p} isn't UTF-8 text")
+        except OSError as e:
+            raise Usage(str(e))
+    return texts
+
+
+def runs(marks):
+    """Marked indexes grouped into runs: a mark within reach of the last joins its run."""
+    out = []
+    for i, reach, hit in marks:
+        if out and i <= out[-1][1]:
+            out[-1][1] = i + reach
+        else:
+            out.append([i, i + reach, hit])
+    return out
+
+
+def questions_main(argv):
+    lists, flag = {"--questions": [], "--allow": [], "--pages": []}, None
+    for a in argv:
+        if a in lists:
+            flag = a
+        elif flag is None or a.startswith("--"):
+            raise Usage(f"unexpected argument {a}")
+        else:
+            lists[flag].append(a)
+    if not lists["--questions"] or not lists["--pages"]:
+        raise Usage("usage: mock_leak.py --questions <file or dir>... [--allow <file or dir>...] --pages <page>...")
+    questions, allowed, pages = (load(lists["--questions"], True), load(lists["--allow"]), load(lists["--pages"]))
+    if not questions or not pages:
+        raise Usage("no question file or no page found")
+    allow_sh = {sh for t in allowed for sh, _, _ in t.shingles()}
+    allow_tr = {tr for t in allowed for tr, _, _, _ in t.triples()}
+    q_sh, q_tr = {}, {}
+    for q in questions:
+        for sh, _, n in q.shingles():
+            q_sh.setdefault(sh, (q, n))
+        for tr, _, _, n in q.triples():
+            q_tr.setdefault(tr, (q, n))
+    hits = []
+    for page in pages:
+        marks = [(i, SHINGLE, (n, q_sh[sh])) for sh, i, n in page.shingles() if sh in q_sh and sh not in allow_sh]
+        for start, end, (n, (q, qn)) in runs(marks):
+            hits.append(f"{page.path}:{n}: {end - start} words in a row match {q.path}:{qn}{q.label(qn)}")
+        marks = [(k * 10**6 + i, TUPLE - 1, (n, q_tr[tr])) for tr, k, i, n in page.triples()
+                 if tr in q_tr and tr not in allow_tr]
+        for start, end, (n, (q, qn)) in runs(marks):
+            hits.append(f"{page.path}:{n}: {end - start + 1} numbers in the same order match {q.path}:{qn}{q.label(qn)}")
+    for h in hits:
+        print(f"mock_leak: {h}")
+    tail = f"{len(pages)} pages checked against {len(questions)} question files"
+    if hits:
+        print(f"QUESTIONS: {len(hits)} found; {tail}")
+        return 1
+    print(f"QUESTIONS OK: {tail}")
+    return 0
+
+
 def main(argv=None):
     argv = sys.argv[1:] if argv is None else argv
+    if "--questions" in argv:
+        try:
+            return questions_main(argv)
+        except Usage as e:
+            print(f"mock_leak: {e}", file=sys.stderr)
+            return 2
     markers = not (argv and argv[0] == "--no-markers")
     argv = argv if markers else argv[1:]
     if len(argv) < 2:

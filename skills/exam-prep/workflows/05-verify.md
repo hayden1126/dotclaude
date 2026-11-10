@@ -91,6 +91,20 @@ same audit when they exist.
   `mock_key.py` reruns too (its step 4's rerun clause).
 - With no checker, a `TODO-VERIFY` a writer left anyway is replaced with the value its cited
   source gives, or the working that derives it.
+- Before anything is published, check the notes against every set the student hasn't attempted
+  (FB-191): a worked example has rebuilt a practice paper's circuit, and a gloss has named a
+  practice step. Those sets are every MANIFEST row marked `Answers: yes` and every question set
+  whose solutions aren't yet `yes, attempted`; give each set's extract
+  (`_build/extract/<name>.md`) as a question file, and the lecture extracts the notes cite as
+  allowed sources:
+  `python3 -I <skill>/scripts/mock_leak.py --questions <the sets' extracts> --allow <the lecture
+  extracts> --pages notes/*.md`. The main session runs it, since reviewers never open `practice/`.
+  Each hit names a notes line and a set's part, never the text.
+  A hit is a blocker: rewrite the passage with fresh numbers and a fresh setup (S7), and rerun
+  until it prints QUESTIONS OK. A passage cut or held back instead, which the student may want
+  back once they attempt the set, goes to `_build/held.md`, one entry per passage: its section,
+  the set it overlapped and the original text. It is quarantined (hub CLAUDE.md), and `09-tutor`
+  offers it back once that set is attempted (its Step 7).
 - Then rerun `selftest.py` (with a checker) and `linkcheck.py` (plain-text notes: the references
   by hand, `04-write` step 6). Log in STATUS any finding left unapplied, with why, and any claim
   refuted, with the evidence.
@@ -114,5 +128,6 @@ script (`08-practice`).
 
 `selftest.py` prints `ALL PASS` with every official part covered (or PLAN.md's Checker line says
 nothing is computable); no `TODO-VERIFY` is left; every blocker and major finding is applied or
-refuted with evidence in STATUS, and every minor one applied or logged there; `linkcheck.py` exits
+refuted with evidence in STATUS, and every minor one applied or logged there; `mock_leak.py
+--questions` prints QUESTIONS OK on the notes (step 5); `linkcheck.py` exits
 0 (plain-text notes: references checked by hand); the fixes are committed.

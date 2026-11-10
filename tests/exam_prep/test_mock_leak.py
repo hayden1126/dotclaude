@@ -368,5 +368,111 @@ class Leak(unittest.TestCase):
                 self.assertEqual(out, "")
 
 
+# A synthetic set's extract, as 02-extract writes one: a part block with its notes lines.
+SET = """# HW9 extract
+
+### [HW9 Q2 stem] Setup
+Pages: [HW9 p.1]
+Consider the weighted graph on the vertices P, Q, R and S described below.
+
+### [HW9 Q2c] Path weights
+Pages: [HW9 p.2]
+Starting at vertex P, the courier relaxes every outgoing edge before choosing the cheapest unvisited
+vertex. The edges P to Q, Q to R and R to S weigh 14, 23 and 31 in that order.
+**Shape:** trace
+**Conventions:** ties broken alphabetically
+"""
+PHRASE = "the courier relaxes every outgoing edge before choosing the cheapest"
+
+
+class Questions(unittest.TestCase):
+    """The questions mode (FB-191): a notes page that rebuilds an unattempted set's question, by 8
+    words in a row or 3 numbers in order within a sentence, fails, naming the page's line and the
+    question file's line and part, never the matched text; a page with neither passes, and a run
+    that an --allow file also holds doesn't count."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tmp = tempfile.TemporaryDirectory()
+        cls.questions = cls.write("hw9.md", SET)
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.tmp.cleanup()
+
+    @classmethod
+    def write(cls, name, text):
+        path = os.path.join(cls.tmp.name, name)
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(text)
+        return path
+
+    def run_on(self, page, *extra):
+        r = subprocess.run([sys.executable, os.path.join(SCRIPTS, "mock_leak.py"), "--questions", self.questions,
+                            *extra, "--pages", page], capture_output=True, text=True, timeout=60)
+        shown = (r.stdout + r.stderr).lower()
+        self.assertNotIn("courier", shown, "the output shows the question's text")
+        self.assertNotIn("relaxes every", shown, "the output shows the question's text")
+        return r.returncode, r.stdout, r.stderr
+
+    def test_eight_words_in_a_row_are_caught_without_the_text(self):
+        page = self.write("sec2.md", "# 2 Shortest paths\n\nIn this trace *The* courier relaxes every\n"
+                                     "outgoing edge, before choosing the **cheapest** one we keep.\n")
+        rc, out, err = self.run_on(page)
+        self.assertEqual((rc, err), (1, ""), out)
+        self.assertIn(f"{page}:3: 10 words in a row match {self.questions}:9 (HW9 Q2c)", out)
+        self.assertTrue(out.splitlines()[-1].startswith("QUESTIONS: 1 found"), out)
+        # Seven words aren't enough: shorter runs are common phrasing.
+        short = self.write("sec3.md", "Here the courier relaxes every outgoing edge before stopping.\n")
+        self.assertEqual(self.run_on(short)[0], 0)
+
+    def test_an_html_fragment_split_by_tags_is_caught(self):
+        page = self.write("sec2.html", "<section>\n<p>Here <em>the courier</em> relaxes every outgoing\n"
+                                       "edge before choosing the che&shy;apest.</p>\n</section>\n")
+        rc, out, err = self.run_on(page)
+        self.assertEqual(rc, 1, out + err)
+        self.assertIn(f"{page}:2: 10 words in a row match", out)
+
+    def test_three_numbers_in_order_are_caught(self):
+        page = self.write("sec4.md", "## Example\n\nTake a path whose legs cost 14, then 23, and last 31 units.\n")
+        rc, out, err = self.run_on(page)
+        self.assertEqual(rc, 1, out + err)
+        self.assertIn(f"{page}:3: 3 numbers in the same order match {self.questions}:10 (HW9 Q2c)", out)
+        self.assertNotIn("words in a row", out)
+        # Split across two sentences, or out of order, they don't count.
+        for text in ("Legs cost 14 and 23. The last costs 31.\n", "Legs cost 23, 14 and 31.\n"):
+            with self.subTest(text):
+                self.assertEqual(self.run_on(self.write("sec5.md", text))[0], 0)
+
+    def test_a_normal_fragment_passes(self):
+        page = self.write("sec6.md", "# 2 Shortest paths [D4 p.17]\n\nDijkstra's algorithm settles one vertex per "
+                                     "round: the unvisited vertex of least tentative distance. With edges of "
+                                     "weight 5, 2 and 9 from the source, it settles the weight 2 neighbour first.\n")
+        rc, out, err = self.run_on(page)
+        self.assertEqual((rc, err), (0, ""))
+        self.assertEqual(out.strip(), "QUESTIONS OK: 1 pages checked against 1 question files")
+
+    def test_allow_drops_a_run_a_source_shares(self):
+        page = self.write("sec7.md", f"Recall that {PHRASE} vertex, as in lecture.\n")
+        self.assertEqual(self.run_on(page)[0], 1)
+        lecture = self.write("d4.md", f"### [D4 p.9] Relaxation\nIn the lecture's story {PHRASE} vertex.\n")
+        rc, out, err = self.run_on(page, "--allow", lecture)
+        self.assertEqual((rc, err), (0, ""), out)
+
+    def test_bad_usage(self):
+        page = self.write("sec8.md", "Nothing here.\n")
+        for name, args, message in (
+                ("a missing question file", ["--questions", os.path.join(self.tmp.name, "none.md"), "--pages", page],
+                 "none.md"),
+                ("no pages", ["--questions", self.questions], "usage:"),
+                ("an empty directory", ["--questions", tempfile.mkdtemp(dir=self.tmp.name), "--pages", page],
+                 "no question file")):
+            with self.subTest(name):
+                r = subprocess.run([sys.executable, os.path.join(SCRIPTS, "mock_leak.py"), *args],
+                                   capture_output=True, text=True, timeout=60)
+                self.assertEqual((r.returncode, r.stdout), (2, ""))
+                self.assertIn(message, r.stderr)
+
+
 if __name__ == "__main__":
     unittest.main()
