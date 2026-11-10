@@ -83,9 +83,7 @@ evidence ids.
     and a load or hash change to a hidden target switches to Full notes; CONVERT and `fidelity.py` carry
     the marker; `verify_page.mjs` checks and shoots both views; `11-next-exam` asks the minutes on a
     reopen whose exam allows no sheet and takes the finished exam's tags off; a `10-polish` scope cut
-    untags cut material. The view replaces the separate condensed review page this round first
-    built in `_build/review/`, whose copy of each fact drifted from the notes in review.
-    `08-practice`'s "Changing the notes or a sheet" is the one list of the hub's published products
+    untags cut material. `08-practice`'s "Changing the notes or a sheet" is the one list of the hub's published products
     (the notes page with its Review view, each sheet, the cram order, the questions and leak checks)
     and what each change does to them; `07-cheatsheet`'s "After shipping", a `09-tutor` patch, a
     `10-polish` pass and both `11-next-exam` source paths run it by reference. CONVERT maps a link
@@ -99,26 +97,23 @@ evidence ids.
     only, so no answer reaches the student's chat, which the hub CLAUDE.md's key rule now allows.
     A key gate before each attempt (`08-practice` step 8.1, never inside a build) spawns the writer
     when the key checker fails, when its leak checks (step 4's item 5, step 6's item 2 and step 7's
-    item 2, with the untaken keys, part ids only) hit a part whose remedy edits an untaken mock or
-    its key, or when STATUS gained a `Source added: ... done` or `Reference changed:` line after the mock's `Key checked: <slug> <date> at <sha>` line (git's order, not the dates),
-    and a merge rewrites that line (or adds it, on an older hub; only step 4 adds one otherwise)
+    item 2, with the untaken keys, part ids only) hit a leak part (one whose remedy edits an
+    untaken mock or its key), or when STATUS gained a `Source added: ... done` or `Reference changed:` line after
+    the mock's `Key checked: <slug> <date> at <sha>` line (git's order, not the dates), and a merge rewrites that line (or adds it, on an older hub; only step 4 adds one otherwise)
     to the writer's base (the head the session noted at the spawn, or the report's sha, never the
     current HEAD), so a `/clear`, a lost report or a failed merge leaves the check due with no
-    state of its own; this replaced stored STATUS lines for a pending and a running recheck, which
-    review found could start a writer mid-build. One writer
+    state of its own, and no writer starts or settles inside a build. One writer
     runs at a time, in the background with its transcript unopened, its whole reply the JSON block
     (part ids and file names only), spawned once everything uncommitted is committed, and a merge
-    with no report takes its `question` parts from the key checker's skipped list. Such a leak
-    part goes to the writer as a `question` part, found again by each gate's leak checks until it
-    is skipped, never stored; after a merge the gate runs again, so its leak checks cover the
-    merged answers. Its merge takes only the untaken keys, the values file and `mock_key.py`, and a conflict is
-    aborted, never resolved in the chat; a part whose question would need rewording goes into the
+    with no report takes its `question` parts from the key checker's skipped list. A leak part
+    goes to the writer as a `question` part, found again by each gate's leak checks until it is
+    skipped, never stored; after a merge the gate runs again, so its leak checks cover the merged
+    answers. Its merge takes only the untaken keys, the values file and `mock_key.py`, and a
+    conflict is aborted, never resolved in the chat; a part whose question would need rewording goes into the
     key checker's new `SKIP`, its key answer replaced by a `Skipped tonight:` line, and onto the
     mock's cram order line, and a `blocked` report gets the main session's fix before any
-    redispatch.
-    The student chose opening the keys over the spoiler risk a review logged. It replaces a first
-    form that opened no key, logging a recheck in STATUS for grading and a "bring it before
-    marking" note on the mock's cram order line (D1.C23, E1.C15, E1.C19, E1 (section 2)).
+    redispatch. The student chose opening the keys over the spoiler risk a review logged (D1.C23,
+    E1.C15, E1.C19, E1 (section 2)).
   - FB-191: before publish, and before each republish after a notes change (an `08-practice`
     change, a `09-tutor` patch, a `10-polish` pass, either `11-next-exam` source path),
     `mock_leak.py --questions` checks the notes against every unattempted question set, skipped and logged when there is none; a set
@@ -149,8 +144,7 @@ evidence ids.
     (section 2), E1 (section 2), F1.G4, F1.G6).
   - K02: the cram order at the top of the notes page, in the exam-day map, which then renders open.
     `assemble.py` renders the map's cram block from `practice/cram-order.md` on every build and
-    refuses a hand-written one, in place of the hand-kept copy `08-practice` step 7.4 first
-    rewrote. Step 7.4 now rebuilds and republishes the page (the handoff is step 7.5), run on its
+    refuses a hand-written one. Step 7.4 now rebuilds and republishes the page (the handoff is step 7.5), run on its
     own after step 7.3 and step 8.4; inside "Changing the notes or a sheet", item 3's one rebuild
     carries a cram order change, and a `09-tutor` patch's cram row is fixed by the main session at
     the merge. The sample hub's map renders open with a cram order and depth labels, and the
