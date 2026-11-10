@@ -39,8 +39,9 @@ evidence ids.
   `workflows/11-next-exam.md` and `workflows/12-retro.md`, each baseline 2026-11-10;
   `templates/compare-notes.py` and `templates/fidelity.py`, new, baseline 2026-11-10;
   `templates/chassis-shots/`, regenerated, with a new `-key` shot at each width;
-  `scripts/assemble.py`, `scripts/extract_check.py`, `scripts/linkcheck.py`,
-  `scripts/mock_leak.py`, `scripts/pw.mjs` and `scripts/verify_page.mjs`, which carry no date.
+  `scripts/assemble.py`, `scripts/cram_check.py`, `scripts/extract_check.py`,
+  `scripts/linkcheck.py`, `scripts/mock_leak.py`, `scripts/pw.mjs` and `scripts/verify_page.mjs`,
+  which carry no date.
 - **Changes:**
   - C1: the rail scrolls itself, never the page, so a long jump lands in WebKit (E1.C12, E1.G13,
     D1.C19). At the page's bottom the scroll-spy marks the last section (the source key) active,
@@ -62,33 +63,34 @@ evidence ids.
     `11-next-exam` removes a hub-local key, where `06-site` step 5 sends a build that refuses one;
     the key has three columns at most, so it fits a phone: the code, what it is with the file's base name under it (muted, small), and Made by
     (E1.C10, E1.C11, D1.C20).
-  - FB-143: with no sheet allowed, a condensed review page on the notes chassis, offered at intake,
-    named in the stage table's 07 row, checked by `verify_page.mjs` with no `--steps`, and archived
-    by `11-next-exam` with the sheets; the sheet questions are asked only when a sheet is allowed.
-    PLAN.md's Review page line records it and its length, and its Deliverables and 07 rows name
-    it. `08-practice` counts it as no sheet, but checks it with the notes: step 3.4's comparison,
-    step 4.5's leak runs and "Changing the notes or a sheet", which rebuilds and republishes it.
-    That section is now the one list of the hub's published products (the notes page, the review
-    page, each sheet, the cram order and the page's cram copy, the questions and leak checks) and
-    what each change does to them; `07-cheatsheet`'s "After shipping", a `09-tutor` patch, a
-    `10-polish` pass and both `11-next-exam` source paths run it by reference. `11-next-exam` asks
-    the review page part of question 5 on a reopen whose exam allows no sheet and names the page
-    in its build table's 07 row, and the Notes patch brief writes, searches and rebuilds the review
-    page.
-    CONVERT maps its rows' links to the notes page, `[text](<url>#id)`, to a plain `<a href>`
-    (E1.C17, E1.C18, E1.C21, F1.C3, F1.C5, F1.C8).
+  - FB-143: with no sheet allowed, the notes page's Review view, offered at intake with its length
+    in minutes of reading, which PLAN.md's `Review view:` line records and `assemble.py` reads; the
+    sheet questions are asked only when a sheet is allowed. A Review / Full notes toggle shows the
+    Must-know lists, the exam-day map and the worked examples and pitfalls the notes tag `.rv`, and
+    copies nothing. `07-cheatsheet`'s "Tag the review" tags by rank; `assemble.py` holds the view to
+    its minutes at 150 words a minute and refuses a misplaced tag; CONVERT and `fidelity.py` carry
+    the marker; `verify_page.mjs` checks and shoots both views; `11-next-exam` asks the minutes on a
+    reopen whose exam allows no sheet and takes the finished exam's tags off; a `10-polish` scope cut
+    untags cut material. The view replaces the separate condensed review page this round first
+    built in `_build/review/`, whose copy of each fact drifted from the notes in review.
+    `08-practice`'s "Changing the notes or a sheet" is the one list of the hub's published products
+    (the notes page with its Review view, each sheet, the cram order, the questions and leak checks)
+    and what each change does to them; `07-cheatsheet`'s "After shipping", a `09-tutor` patch, a
+    `10-polish` pass and both `11-next-exam` source paths run it by reference. CONVERT maps a link
+    to another published page, `[text](<url>#id)`, to a plain `<a href>` (E1.C17, E1.C18, E1.C21,
+    F1.C3, F1.C5, F1.C8).
   - FB-158: the cram night opens with the notes page and mock links, a tier defined, and what is
     already read skipped (E1.C5, E1.C6, D1.C22).
   - FB-159: the cram night offers an Ed re-pull, and new staff answers take the source-added path;
-    no key is opened for them: the mock key checker reruns, and a part it can't compute is logged
-    in STATUS for `09-tutor` to recheck when it grades that mock, whose cram-order line then says
-    to bring it to the session before marking it. The approved "check each mock key part the
-    answer touches" is done this way, without opening a key (D1.C23, E1.C15, E1.C19, E1 (section
-    2)).
+    then one `writer` in its own worktree, from the new "Key recheck" brief, opens each untaken
+    mock's key, fixes the parts the answer touches, reruns the key checker and reports part ids
+    only, so no answer reaches the student's chat, which the hub CLAUDE.md's key rule now allows.
+    The student chose opening the keys over the spoiler risk a review logged. It replaces a first
+    form that opened no key, logging a recheck in STATUS for grading and a "bring it before
+    marking" note on the mock's cram order line (D1.C23, E1.C15, E1.C19, E1 (section 2)).
   - FB-191: before publish, and before each republish after a notes change (an `08-practice`
     change, a `09-tutor` patch, a `10-polish` pass, either `11-next-exam` source path),
-    `mock_leak.py --questions` checks the notes, and the review page's Markdown when there is one,
-    against every unattempted question set, skipped and logged when there is none; a set
+    `mock_leak.py --questions` checks the notes against every unattempted question set, skipped and logged when there is none; a set
     with no solutions row records its attempt as `no, attempted YYYY-MM-DD` in its own MANIFEST.md
     Answers cell, which `00-intake`, `11-next-exam` and `09-tutor` write and `05-verify` reads;
     held passages go to `_build/held.md`, whose quarantine line an older hub's CLAUDE.md gains,
@@ -97,8 +99,8 @@ evidence ids.
   - FB-192: tutor chat writes symbols as Unicode or plain text and coins no label; `09-tutor` step
     5.1 answers a definition from what it knows first, then checks the notes (D1.C14, D1.C16,
     D1.C17).
-  - S33: each subsection states its depth label, carried by the notes, the cram order, the exam-day
-    map and the review page; the `**Depth:**` line converts to a `p.connects` line (CONVERT,
+  - S33: each subsection states its depth label, carried by the notes, the cram order and the
+    exam-day map; the `**Depth:**` line converts to a `p.connects` line (CONVERT,
     `fidelity.py`), and the map shows the label's words after each section's link; a Must-know
     list ends with what is memorized and what is provided; FB-064's Home gains it (F1.C12, D1.C5,
     D1.C21, E1.C14, E1.C20, E1.C29).
@@ -114,10 +116,13 @@ evidence ids.
     copied by `05-verify` step 2 and `06-site` step 3; with K67, the Write brief puts trace and
     state names in backticks, as the comparison reads them, so dropping K67 reverts that line (D1
     (section 2), E1 (section 2), F1.G4, F1.G6).
-  - K02: the cram order at the top of the notes page, in the exam-day map, which then renders open;
-    the map's copy is rewritten from `practice/cram-order.md` by `08-practice` step 7.4 (the
-    handoff is now step 7.5), rerun by step 8.4 and by "Changing the notes or a sheet" item 3 for
-    every flow that runs it. The sample hub's map renders open with a cram order and depth labels,
-    and the reference shots show it (E1.C5, E1.C6, D1.C22).
+  - K02: the cram order at the top of the notes page, in the exam-day map, which then renders open.
+    `assemble.py` renders the map's cram block from `practice/cram-order.md` on every build and
+    refuses a hand-written one, in place of the hand-kept copy `08-practice` step 7.4 first
+    rewrote. Step 7.4 now rebuilds and republishes the page (the handoff is step 7.5), run on its
+    own after step 7.3 and step 8.4; inside "Changing the notes or a sheet", item 3's one rebuild
+    carries a cram order change, and a `09-tutor` patch's cram row is fixed by the main session at
+    the merge. The sample hub's map renders open with a cram order and depth labels, and the
+    reference shots show it (E1.C5, E1.C6, D1.C22).
 - **Retired:** none.
 - **Backlog:** K02, K67, K68 `trying (round 2)`; K70 to K75 `open`.
