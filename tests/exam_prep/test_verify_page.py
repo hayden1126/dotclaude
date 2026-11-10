@@ -434,7 +434,16 @@ class BrowserCatchesTest(unittest.TestCase):
 
     def test_a_hidden_target_link_that_doesnt_switch_views(self):
         self.fails("rvlink", "hidden in the Review view, didn't switch to Full notes",
-                   page=self.edit("if(!t||shown(t)) return;", "return;"))
+                   page=self.no_click_switch())
+
+    def no_click_switch(self):
+        # The click handler's guard, and the hashchange listener: a click on a link changes the
+        # hash, so hashToHidden() alone also switches, and either path passes the check.
+        page = self.edit("if(!t||shown(t)) return;\n      e.preventDefault();",
+                         "return;\n      e.preventDefault();")
+        listener = "window.addEventListener('hashchange',hashToHidden);"
+        self.assertEqual(page.count(listener), 1)
+        return page.replace(listener, "")
 
     def test_a_hash_to_a_hidden_target_that_doesnt_switch_views(self):
         # Loaded at a hidden target's hash, or a hash change to one, with the Review view remembered.
