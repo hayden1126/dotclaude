@@ -1,6 +1,6 @@
 # CONVERT: Markdown notes to an HTML fragment
 
-Baseline as of 2026-10-20; changes only via `12-retro`.
+Baseline as of 2026-11-10; changes only via `12-retro`.
 
 A hub keeps a copy in `_build/CONVERT.md`. Every converter follows it exactly, and reads
 `_build/STYLE.md` too: S11 (figures), S12 (links) and S13 (keep the chassis look) bind every
