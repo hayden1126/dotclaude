@@ -73,14 +73,14 @@ lines) stays out of the map. Each section the map names carries its depth label 
 `xref`: the label's words alone (Know cold, Use, Recognize), in parentheses after the link, plain
 text, without the statement it rests on: `<a class="xref" href="#sec-2-walks">§2.2 Walks</a> (Use)`.
 
-Once `08-practice` step 7 has written the cram order, the map opens with it (K02) and renders
-open, `<details class="examnav" open>`, so the cram order shows at the top of the page: one `.eq`
-group per tier before the question shapes, its `.eqh` the tier's name and minutes, one `<li>` per
-row (its one thing in `<b>`, its section as an `xref` to the section's anchor, its depth label),
-then the skip list and the Out of time line in an `.edrill` line. Its mock lines and `## Tonight`
-stay in `practice/cram-order.md` only. That file is the one source: the map's copy is rewritten
-from it each time it changes (`08-practice` step 7.4), never edited apart. Before the cram order
-exists the map stays closed, with no `open` attribute.
+The fragment holds no cram block and no `open` attribute: `assemble.py` refuses both. Once
+`08-practice` step 7 has written `practice/cram-order.md`, `assemble.py` renders the map's cram
+block from it on every build (K02) and opens the map, so the cram order shows at the top of the
+page: a `div.ecram` at the start of the `.ebody`, one `.eq` group per tier, its `.eqh` the tier's
+name and minutes, one `<li>` per row (its one thing in `<b>`, its section as an `xref` to the
+section's anchor, its depth label), then the skip list and the Out of time line in an `.edrill`
+line. Its mock lines and `## Tonight` stay in the file only. The file is the one source, and
+nothing edits the rendered block. Before the file exists the map stays closed.
 
 ## Step 5: Assemble and check
 
@@ -92,7 +92,10 @@ From the hub root:
    page cites, each citation linked to its row), and refuses a citation whose code has no
    `MANIFEST.md` row. A refusal of a citation that "has an href of its own" means the hub has a
    hand-built source key: remove it as `11-next-exam` step 5.2 ("Reconcile the templates") says,
-   then rebuild.
+   then rebuild. It renders the map's cram block (step 4), and reads PLAN.md's `Review view:` line
+   (`_build/CHASSIS.md`): with minutes, it keeps the Review / Full notes toggle and fails when the
+   Review view takes longer to read (both numbers printed); with `none: <why>` or no line, it strips
+   the toggle and refuses any `.rv` block (`07-cheatsheet`, "Tag the review").
 2. `python3 -I <skill>/scripts/linkcheck.py --html _build/notes.html`: every in-page link
    resolves, and no id repeats.
 3. `node <skill>/scripts/verify_page.mjs _build/notes.html _build/shots --steps
@@ -104,7 +107,9 @@ From the hub root:
    jump clicks the rail's last entry from the top and its first from the bottom, and checks each
    heading lands at the top, in Chromium and in WebKit, Safari's engine, where a jump the rail cuts
    short shows (C1); without Playwright's WebKit it prints a WARN line naming `npx playwright
-   install webkit`, for the user to run in their terminal. A build never passes its
+   install webkit`, for the user to run in their terminal. On a page with the toggle it runs it all
+   again in the Review view, its screenshots named `-review`, and checks what the view shows and
+   hides. A build never passes its
    `--no-long-jump`, which is for the skill's own tests. It finds
    Playwright in `_build/node_modules/`, the hub's `node_modules/` or npm's global root, or at the
    package directory `EXAM_PREP_PLAYWRIGHT` names. With none, it says so and exits 2: install it
