@@ -24,9 +24,11 @@ key's answers are its `**(x)** Answer: <value>` lines, each under a `## Question
 (MOCK.md); the values file mock_key.py writes (practice/mock-values-key.md) has `- Q2(a): <value>`
 lines.
 
-Its output names the key and the part and where the page holds it (a view and a part id, or
-none), never the answer: the student may read it before the attempt. Exit 0 clean, 1 on a leak, 2 on bad usage (a missing file, a key
-with no answers, an Answer: line outside a bare ## Question N block, or a file that isn't UTF-8).
+Its result goes to stdout: one line per leak, naming the key and the part and where the page
+holds it (a view and a part id, or none), never the answer (the student may read it before the
+attempt), then the LEAK or LEAK OK line. Usage errors go to stderr. Exit 0 clean, 1 on a leak, 2
+on bad usage (a missing file, a key with no answers, an Answer: line outside a bare ## Question N
+block, or a file that isn't UTF-8).
 Stdlib only."""
 import bisect
 import html.parser
@@ -375,7 +377,7 @@ def main(argv=None):
         if not found and witnesses:
             hits += [f"{name} {part}: its answer's witness is in the page ({w})" for w in search(readings, witnesses)]
     for h in hits:
-        print(f"mock_leak: {h}", file=sys.stderr)
+        print(f"mock_leak: {h}")
     checked = len(keyed) - sum(len(v) for v in short.values())
     tail = (f"; under {MIN_LEN} characters, not checked: " + "; ".join(f"{k} {', '.join(v)}" for k, v in short.items())
             if short else "")

@@ -11,9 +11,12 @@ holding a page range fails: it would go unchecked); any other wording fails as S
 UNDERSTOOD. Each in-scope row is checked by its source's kind:
 - a PDF (its File ends in .pdf): every in-scope page must be rendered under _build/pages/<doc>/
   and have a block. The in-scope pages are the Scope cell's ranges, else 1 to its Pages.
-- a reveal deck (.html): every slide reveal_slice.py finds in the deck (File, under the root), or
-  in the Scope cell's `#/A-#/B` range of horizontal slides, must have a block; a range past the
-  deck's last slide, or one holding no slide, fails.
+- a reveal deck (.html holding an element of class `slides`, or any .html the Scope gives a
+  `slides #/A-#/B` range): every slide reveal_slice.py finds in the deck (File, under the root),
+  or in that range of horizontal slides, must have a block; a range past the deck's last slide,
+  one holding no slide, or a file it can't read, fails.
+- a course page saved as HTML (.html with no `slides` element): checked as any other text
+  source, below.
 - the Ed digest (a file under sources/ed/): skipped, since it is read as it is.
 - anything else (a Word file, code, an ebook): at least one block, and when it has page blocks
   and a Pages count, every in-scope page.
@@ -216,18 +219,36 @@ def page_scope(row, scope):
     return None
 
 
-def deck_slides(root, row, scope):
-    """The fragments of the deck's in-scope slides, or a string saying why there are none."""
+def reveal_slice():
     here = os.path.dirname(os.path.abspath(__file__))
     spec = importlib.util.spec_from_file_location("reveal_slice",
                                                   os.path.join(here, "reveal_slice.py"))
-    reveal_slice = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(reveal_slice)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def is_deck(root, row, scope):
+    """Whether an .html source is a reveal deck: its Scope gives a slide range, or it holds an
+    element of class `slides`. One it can't read counts as a deck, whose check says so."""
+    if scope[0] == "slides":
+        return True
+    try:
+        with open(os.path.join(root, row["file"]), encoding="utf-8") as f:
+            source = f.read()
+    except (OSError, ValueError):
+        return True
+    return reveal_slice().Deck(source).container is not None
+
+
+def deck_slides(root, row, scope):
+    """The fragments of the deck's in-scope slides, or a string saying why there are none."""
+    reveal = reveal_slice()
     try:
         with open(os.path.join(root, row["file"]), encoding="utf-8") as f:
             source = f.read()
         with contextlib.redirect_stderr(io.StringIO()):
-            slides = reveal_slice.slides(source)
+            slides = reveal.slides(source)
     except (OSError, SystemExit) as e:
         return f"can't read the deck {row['file']}: {e}"
     last = max((int(frag.split("/")[1]) for frag, _ in slides), default=-1)
@@ -251,7 +272,7 @@ def check(root, doc, row, b):
         return (f"{doc}: SCOPE NOT UNDERSTOOD: {row['scope']!r}; write `in`, "
                 "`in, PDF pp.A-B` or `in, slides #/A-#/B`"), True
     open_flags = b["unreadable"] > 0
-    if name.endswith((".html", ".htm")):
+    if name.endswith((".html", ".htm")) and is_deck(root, row, scope):
         if scope[0] == "pages":
             return f"{doc}: a deck's scope is a slide range (`in, slides #/A-#/B`)", True
         want = deck_slides(root, row, scope)

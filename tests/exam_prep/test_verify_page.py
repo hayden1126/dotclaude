@@ -7,7 +7,8 @@ case needs it, a fake `npm` whose `root -g` names a temp directory, so the machi
 never count. $EXAM_PREP_PLAYWRIGHT wins; else the first of node_modules/ beside the page, the
 working directory's _build/node_modules/ and node_modules/, and npm's global root; with none, it
 names each place it looked, says how to install, and exits 2. A --steps file that isn't
-{"<fig-id>": [{"act"?, "frames", "final"}]} exits 2 before any browser starts.
+{"<fig-id>": [{"act"?, "frames", "final"}]} exits 2 before any browser starts, and so does a
+page with a step-through (a .fig-controls row) run with no --steps.
 
 With EXAM_PREP_PLAYWRIGHT set (and MathJax's and the fonts' hosts allowed), the sample hub's page
 broken one way at a time fails with the matching message: a step-through's frame count, last
@@ -173,6 +174,30 @@ class StepsFileTest(unittest.TestCase):
             with self.subTest(bad=bad):
                 self.check(bad, ok=False)
 
+    def run_without_steps(self, page):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "p.html")
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(page)
+            return subprocess.run([NODE, VERIFY_PAGE, path, os.path.join(tmp, "out"), "--no-long-jump"],
+                                  env={"PATH": os.path.dirname(NODE), "HOME": tmp,
+                                       "EXAM_PREP_PLAYWRIGHT": tmp},
+                                  capture_output=True, text=True, timeout=60)
+
+    def test_step_throughs_with_no_steps_file_are_bad_usage(self):
+        # It would check less without saying so: exit 2 before any browser starts.
+        r = self.run_without_steps('<figure id="fig-1-a"><svg></svg><div class="fig-controls">'
+                                   '<button data-act="next">Next</button></div></figure>')
+        self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
+        self.assertIn("the page has step-throughs (a .fig-controls row) and no --steps", r.stderr)
+        # No step-through (a mock page, a class named only as text in code): on to Playwright.
+        for page in ('<main><nav class="views"><button data-view="paper">Paper</button></nav></main>',
+                     '<pre><code>&lt;div class="fig-controls"&gt;</code></pre>'):
+            with self.subTest(page=page):
+                r = self.run_without_steps(page)
+                self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
+                self.assertIn("has no index.mjs", r.stderr)
+
 
 @unittest.skipUnless(os.environ.get("EXAM_PREP_PLAYWRIGHT"),
                      "set EXAM_PREP_PLAYWRIGHT (and allow MathJax's and the fonts' hosts) to run "
@@ -238,7 +263,7 @@ class BrowserCatchesTest(unittest.TestCase):
                    page=self.edit("window.NotesFig['fig-2-walk'] = function", "window.NotesFigX = function"))
 
     def test_no_steps_entry(self):
-        self.fails("nosteps", "no expected run in --steps", steps=None)
+        self.fails("nosteps", "no expected run in --steps", steps={})
 
     def test_a_stray_steps_entry(self):
         self.fails("stray", "--steps lists #fig-9-x",
@@ -333,16 +358,16 @@ class BrowserCatchesTest(unittest.TestCase):
         # The rail kept its active link in view with scrollIntoView, which in WebKit moves the page
         # too and cancels the smooth jump the click started (C1): Safari stopped short of the target.
         # The jump must still be moving when the spy reaches a link the rail has to scroll to, so
-        # the page gets a third section with forty subsections.
+        # the page gets a fourth section, after the source key, with forty subsections.
         if not webkit_installed():
             self.skipTest("Playwright's WebKit isn't installed (npx playwright install webkit)")
         para = "<p>Filler, so the jump from the top to the last rail entry runs a long way.</p>" * 4
-        subs = "".join(f'\n  <h3 id="sec-3-part-{i}">3.{i} Part {i}</h3>\n  {para}' for i in range(1, 41))
-        long = self.edit("    </main>", '<section class="note" id="sec-3">\n  <h2><span class="n">§3</span>'
+        subs = "".join(f'\n  <h3 id="sec-4-part-{i}">4.{i} Part {i}</h3>\n  {para}' for i in range(1, 41))
+        long = self.edit("    </main>", '<section class="note" id="sec-4">\n  <h2><span class="n">§4</span>'
                          f'Filler</h2>{subs}\n</section>\n    </main>')
         r = self.verify("jumpok", long, long_jump=True)
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
-        self.assertIn("long jump webkit 1280px top->last ok: #sec-3-part-40", r.stdout)
+        self.assertIn("long jump webkit 1280px top->last ok: #sec-4-part-40", r.stdout)
         self.assertIn("long jump webkit 1280px bottom->first ok: #sec-1", r.stdout)
         fixed = ("    var a=byId[id]; if(a){ /* keep active visible in rail: scroll the rail alone, since\n"
                  "      scrollIntoView also moves the page and cancels a smooth jump in flight (WebKit) */\n"
@@ -355,7 +380,7 @@ class BrowserCatchesTest(unittest.TestCase):
                "a.scrollIntoView({block:'nearest'});\n"
                "    }\n")
         self.assertEqual(long.count(fixed), 1)
-        out = self.fails("jumpold", "long jump webkit 1280px top->last: #sec-3-part-40 landed at top",
+        out = self.fails("jumpold", "long jump webkit 1280px top->last: #sec-4-part-40 landed at top",
                          page=long.replace(fixed, old), long_jump=True)
         self.assertIn("long jump webkit 1280px bottom->first: #sec-1 landed at top", out)
 

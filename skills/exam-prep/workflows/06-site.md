@@ -73,7 +73,9 @@ From the hub root:
 
 1. `python3 -I <skill>/scripts/assemble.py` writes `_build/notes.html`. It refuses a missing or
    misnamed fragment, a script, style or unknown class in one, and a FIG marker with no
-   step-through.
+   step-through. It ends the page with a source key built from `MANIFEST.md` (a row per code the
+   page cites, each citation linked to its row), and refuses a citation whose code has no
+   `MANIFEST.md` row.
 2. `python3 -I <skill>/scripts/linkcheck.py --html _build/notes.html`: every in-page link
    resolves, and no id repeats.
 3. `node <skill>/scripts/verify_page.mjs _build/notes.html _build/shots --steps

@@ -87,8 +87,10 @@ this one section: a figure placed outside it shifts every later section's accent
 ## Links
 
 - A source citation, `[D5 p.23]`, `[D2 #/14]`, `[HW1 Q2c]` or a section of another document
-  `[W1 §2.1]`, becomes `<a class="slink">D5 p.23</a>`, with no href (the sources are local),
-  inline where it was. The `§` in a bracket that opens with a document id is that document's,
+  `[W1 §2.1]`, becomes `<a class="slink">D5 p.23</a>`, with no href, inline where it was.
+  `assemble.py` adds the rest: a source key, the page's last section, with a row per code the page
+  cites (from `MANIFEST.md`), and on each citation an href to its code's row (`#src-D5`, from its
+  first word) and a title naming the file. A code with no `MANIFEST.md` row fails the build. The `§` in a bracket that opens with a document id is that document's,
   never one of the notes' sections: it is no bare reference.
 - Every Markdown link `[text](#id)` becomes `<a class="xref" href="#id">text</a>`.
 - Never turn a bare §-mention into a link with a guessed id. Keep it as text and list it in your

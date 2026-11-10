@@ -28,7 +28,9 @@
 //     {"<fig-id>": [{"act"?, "frames", "final"}]}) starts without `final` in its status line,
 //     reaches its last frame in exactly `frames` presses of Next, shows `final` there, comes back
 //     to its first frame in as many presses of Prev, and throws nothing; a step-through --steps
-//     doesn't list, and a mode button no run presses, fail (FB-117);
+//     doesn't list, and a mode button no run presses, fail (FB-117). A page with a step-through
+//     (a tag with class fig-controls) and no --steps is bad usage: it says so and exits 2 before
+//     any browser starts, rather than check less;
 //   - no page errors;
 //   - scroll-spy marks each --spy target when it is scrolled to (default: the first section, a
 //     middle subsection and the last subsection the page can scroll to the spy line), after the
@@ -94,10 +96,16 @@ if (stepsArg) {
   }
 }
 
+const src = fs.readFileSync(pagePath, 'utf8');
+// Inside a tag, so a class written as text in a code block (its < escaped) doesn't count.
+if (!stepsArg && /<[a-z][^<>]*\bclass\s*=\s*["']?[^"'<>]*\bfig-controls\b/i.test(src)) {
+  usage('the page has step-throughs (a .fig-controls row) and no --steps: pass --steps ' +
+        '_build/frag/steps.json (06-site, step 2)');
+}
+
 const { chromium, webkit } = await loadPlaywright('verify_page', pagePath, usage);
 
 fs.mkdirSync(outDir, { recursive: true });
-const src = fs.readFileSync(pagePath, 'utf8');
 const doc = /^\s*<!doctype/i.test(src) ? src
   : '<!doctype html><html lang="en"><head><meta charset="utf-8">' +
     '<meta name="viewport" content="width=device-width, initial-scale=1">' + src + '</html>';

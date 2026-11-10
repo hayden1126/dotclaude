@@ -13,7 +13,17 @@ the chassis:
     `<!-- FIG <fig-id>: ... -->` marker a converter left, and every _build/frag/*.js in a
     `<script>` at `<!-- FIGURE SCRIPTS -->`;
   - one accent rule per section, light and dark, at `/* SECTION ACCENTS */`, cycling the
-    chassis's seven hues.
+    chassis's seven hues;
+  - the source key, one last section after the notes' (sec-<last N + 1>, so it sits in the rail
+    like any section): a table with one row per code the page cites, read from the hub's
+    MANIFEST.md (its Doc id, File, Scope and Notes columns, found by header name). A row gives
+    the code, the file's base name, and its Notes (its Scope when Notes is empty). Each
+    a.slink, in a section, a step-through or the map, gets href="#src-<code>", where the code is
+    its text's first word (D5 from `D5 p.23`, HW1 from `HW1 Q2c`), and a title holding its row's
+    text. The row's id is src- and the code, each character other than an ASCII letter, digit or
+    hyphen written as _<hex>_ (HW1.S is src-HW1_2e_S): one token, and distinct codes stay
+    distinct. A code with a space can't be cited, since a citation's first word is its code. A
+    page that cites nothing gets no key and needs no MANIFEST.md.
 
 Each fragment is read tag by tag. Exit 1, writing nothing, when a placeholder or marker is wrong, a
 fragment is missing or isn't one section with its id, a fragment holds a tag that runs code, loads
@@ -28,12 +38,17 @@ table part outside its parent or text or a tag directly inside a table, row grou
 of MathJax's \\href, \\style, \\class, \\cssId, \\data, \\mmlToken, \\require or \\bbox
 outside code (all of a fragment's text read as one string, and the sections again with their
 step-throughs in place, since MathJax and a browser join text across tags this parser keeps
-apart), or a TODO-VERIFY left from 05-verify; when a FIG marker holds a < or >, sits inside a
+apart), or a TODO-VERIFY left from 05-verify; when a citation names a code MANIFEST.md has no row for
+(naming the code and the fragment), a citation is empty or has an href of its own, MANIFEST.md
+is missing or its table has no Doc id or File column or repeats a code, or the key's own text
+fails the fragment checks; when a FIG marker holds a < or >, sits inside a
 tag, an attribute or code or outside a section (in the exam-day map or a step-through), is left
 with no step-through, or a step-through file isn't one <figure id="<fig-id>"> or isn't placed
 exactly once. Stdlib only."""
 import argparse
+import html
 import os
+import posixpath
 import re
 import sys
 from collections import Counter
@@ -73,6 +88,127 @@ FIG_COMMENT = re.compile(r"\s*FIG\s+fig-[\w-]+\b[^<>]*")
 # MathJax's html extension, autoloaded, turns these into links, styles, classes and ids that the
 # tag walk never sees; MathJax leaves code and pre alone.
 TEX_HTML = re.compile(r"\\(?:href|style|class|cssId|data|mmlToken|require|bbox)(?![A-Za-z])")
+KEY_TITLE = "Source key"
+
+
+def source_id(code):
+    """The source key row's id for a citation code: src-<code>, each character outside ASCII
+    letters, digits and - written as _<hex>_."""
+    return "src-" + "".join(c if c.isascii() and (c.isalnum() or c == "-") else f"_{ord(c):x}_"
+                            for c in code)
+
+
+def manifest_key(path):
+    """{code: (file base name, what it is)} from MANIFEST.md's table, its columns found by header
+    name; what it is is the row's Notes, or its Scope when Notes is empty. ValueError when the
+    table has no Doc id or File column, or repeats a code."""
+    rows, cols = {}, None
+    with open(path, encoding="utf-8") as f:
+        for line in f:
+            if not line.lstrip().startswith("|"):
+                continue
+            cells = [c.strip() for c in line.strip().strip("|").split("|")]
+            if cols is None:
+                if cells and cells[0].lower().startswith("doc"):
+                    cols = {name.lower(): i for i, name in enumerate(cells)}
+                    if "file" not in cols:
+                        raise ValueError("the table has no File column")
+                continue
+            code = cells[0].strip("`").strip()
+            if re.fullmatch(r"[\s:-]*", code):
+                continue
+
+            def cell(name):
+                i = cols.get(name)
+                return cells[i].replace("`", "").strip() if i is not None and i < len(cells) else ""
+            if code in rows:
+                raise ValueError(f"two rows for {code}")
+            rows[code] = (posixpath.basename(cell("file")), cell("notes") or cell("scope"))
+    if cols is None:
+        raise ValueError("has no table under a `| Doc id | File | ... |` header")
+    return rows
+
+
+def key_text(code, row):
+    """A key row's text, as a citation's title shows it."""
+    base, what = row
+    return f"{code}: {base}" + (f", {what}" if what else "")
+
+
+class Citations(HTMLParser):
+    """Each a.slink's start tag (its offset, its raw length, its attributes) and its text."""
+
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.found, self.open = [], None
+
+    def handle_starttag(self, tag, attrs):
+        if tag == "a" and "slink" in (dict(attrs).get("class") or "").split():
+            self.open = [self.getpos(), len(self.get_starttag_text()), attrs, []]
+            self.found.append(self.open)
+
+    def handle_data(self, data):
+        if self.open:
+            self.open[3].append(data)
+
+    def handle_endtag(self, tag):
+        if tag == "a":
+            self.open = None
+
+
+def link_citations(name, text, key, cited, problems):
+    """text with each a.slink given href="#src-<code>" and its key row's text as a title; the
+    codes it cites are added to cited (a dict kept in order). key is MANIFEST.md's rows, or None
+    when it is missing (one problem says so, not one per citation)."""
+    p = Citations()
+    try:
+        p.feed(text)
+        p.close()
+    except (AssertionError, NotImplementedError):
+        return text  # its own check has refused it
+    starts = [0] + [m.end() for m in re.finditer("\n", text)]
+    out, last = [], 0
+    for (line, col), size, attrs, words in p.found:
+        at = starts[line - 1] + col
+        label = " ".join("".join(words).split())
+        code = label.split(" ")[0] if label else ""
+        if not code:
+            problems.append(f"{name}: an empty citation (a.slink with no text)")
+            continue
+        if any(k == "href" for k, _ in attrs):
+            problems.append(f"{name}: citation `{label}` has an href of its own (assemble.py links "
+                            "each to the source key)")
+            continue
+        cited.setdefault(code, None)
+        if key is not None and code not in key:
+            problems.append(f"{name}: citation `{label}` names {code}, which has no row in MANIFEST.md")
+            continue
+        tag = "<a" + "".join(f' {k}="{html.escape(v, quote=True)}"' if v is not None else f" {k}"
+                             for k, v in attrs if k != "title")
+        title = key_text(code, key[code]) if key is not None else code
+        tag += f' href="#{source_id(code)}" title="{html.escape(title, quote=True)}">'
+        out += [text[last:at], tag]
+        last = at + size
+    return "".join(out) + text[last:]
+
+
+def source_key(n, key, cited):
+    """The source key: section n, one table row per cited code, in MANIFEST.md's order."""
+    rows = []
+    for code, row in key.items():
+        if code in cited:
+            base, what = (html.escape(x) for x in row)
+            rows.append(f'      <tr id="{source_id(code)}"><td><code>{html.escape(code)}</code></td>'
+                        f"<td>{base}</td><td>{what}</td></tr>")
+    return (f'<section class="note" id="sec-{n}">\n'
+            f'  <h2><span class="n">§{n}</span> {KEY_TITLE}</h2>\n'
+            "  <p>Every citation on this page links to its row here: the source's code, its file "
+            "and what it is.</p>\n"
+            '  <div class="tbl-wrap"><table>\n'
+            "    <thead><tr><th>Code</th><th>File</th><th>What it is</th></tr></thead>\n"
+            "    <tbody>\n" + "\n".join(rows) + "\n    </tbody>\n  </table></div>\n</section>")
+
+
 # The chassis's seven section hues: (light accent, light highlight, dark accent, dark highlight
 # or None to keep the light one, whose wash already works on dark).
 HUES = [
@@ -272,6 +408,17 @@ def build(root):
         problems.append("_build/CHASSIS.md missing (copy the skill's templates/CHASSIS.md)")
         classes = set()
 
+    manifest = os.path.join(root, "MANIFEST.md")
+    key, unread = None, False  # None: no key to check citations against (said once below)
+    try:
+        key = manifest_key(manifest)
+    except FileNotFoundError:
+        pass
+    except (OSError, ValueError, UnicodeDecodeError) as e:
+        problems.append(f"MANIFEST.md: {e}")
+        unread = True
+    cited = {}
+
     notes = os.path.join(root, "notes")
     nums = sorted(int(m.group(1)) for m in map(NOTE.fullmatch, os.listdir(notes)) if m) \
         if os.path.isdir(notes) else []
@@ -291,13 +438,14 @@ def build(root):
                 or not text.startswith(opens[0]) or not text.endswith("</section>"):
             problems.append(f'frag/sec{n}.html: not one <section class="note" id="sec-{n}">')
         check_fragment(f"frag/sec{n}.html", text, classes, problems)
-        sections.append(text)
+        sections.append(link_citations(f"frag/sec{n}.html (§{n})", text, key, cited, problems))
 
     examnav = os.path.join(frag, "examnav.html")
     if os.path.isfile(examnav):
         with open(examnav, encoding="utf-8") as f:
             nav = f.read().strip()
         check_fragment("frag/examnav.html", nav, classes, problems, markers=False)
+        nav = link_citations("frag/examnav.html (the exam-day map)", nav, key, cited, problems)
     else:
         problems.append("frag/examnav.html missing (the exam-day map, 06-site)")
         nav = ""
@@ -312,7 +460,7 @@ def build(root):
             return m.group(0)
         placed[m.group(1)] += 1
         with open(path, encoding="utf-8") as f:
-            return f.read().strip()
+            return link_citations(f"frag/step-{m.group(1)}.html", f.read().strip(), key, cited, problems)
 
     body = FIG.sub(place, body)
     scripts = []
@@ -343,6 +491,15 @@ def build(root):
     if tex:
         problems.append(f"the sections as assembled, step-throughs in place: MathJax macros that make HTML: "
                         f"{', '.join(sorted(set(tex)))}")
+    if cited and key is None and not unread:
+        problems.append(f"MANIFEST.md missing: the page cites {len(cited)} codes, and its source key "
+                        "is built from MANIFEST.md's table")
+    elif cited and key is not None:
+        # One section after the last, numbered on from it, so the rail lists it like any other.
+        keysec = source_key(max(nums, default=0) + 1, key, cited)
+        check_fragment("the source key (from MANIFEST.md)", keysec, classes, problems, markers=False)
+        body += "\n\n" + keysec
+        sections.append(keysec)
     page = page.replace("/* SECTION ACCENTS */", accents(len(sections)), 1)
     page = page.replace("<!-- EXAM-DAY MAP -->", nav, 1)
     page = page.replace("<!-- SECTIONS -->", body, 1)

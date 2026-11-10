@@ -39,7 +39,7 @@ the classes written `.class` in its first column are the only ones a fragment ma
 | `.callout.def`, `.callout.key`, `.callout.warn` | a definition, a key rule, and a pitfall or a "Not on <exam>" banner |
 | `details.callout.example.wex`, `.wex-t` | a worked example, closed, and its title |
 | `p.connects` | a "How it's tested" or "Connects to" line |
-| `a.slink`, `a.xref` | a source citation (no href) and a cross-reference |
+| `a.slink`, `a.xref` | a source citation, linked by assemble.py to its row in the source key, and a cross-reference |
 | `.tbl-wrap` | a table's scroll box |
 | `figure`, `figcaption`, `.fig-controls` | a figure, its caption and a step-through's buttons; the page's script wraps each figure's SVG in a `figbox` scroll box |
 | `.bx`, `.accbx`, `.fill-surf`, `.dash`, `.mono`, `.mut`, `.sm`, `.acc` | SVG shapes and text inside a figure |

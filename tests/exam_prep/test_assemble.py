@@ -8,7 +8,10 @@ component table, a TODO-VERIFY, a MathJax macro that makes HTML even split by an
 comment, or across a step-through and the text at its marker, a FIG marker inside a tag or code
 or with no step-through or outside a section, a name= attribute or an id with no hyphen, a
 step-through that isn't one <figure> with its id or is placed other than once, no map) writes nothing and leaves the last good page alone, while escaped markup in a
-code block is text and passes. The skill repo's synthetic sample hub, the source of the chassis's
+code block is text and passes. The source key is one last section with a row per code the page
+cites (from MANIFEST.md, an uncited row left out), each citation linked to its row; a code with no
+row, an empty citation or one with its own href, a MANIFEST it can't read, or none when the page
+cites, is refused. The skill repo's synthetic sample hub, the source of the chassis's
 reference screenshots, is the template filled, links the skill's CHASSIS.md and assembles with
 every link resolved; with EXAM_PREP_PLAYWRIGHT set, its page also passes verify_page.mjs, run as a
 build runs it, so with the long jump (the one run here or in test_verify_page that keeps it on by
@@ -50,6 +53,14 @@ SEC2 = """<section class="note" id="sec-2">
 </section>"""
 STEP = """<figure id="fig-2-walk"><svg viewBox="0 0 10 10"></svg>
 <div class="fig-controls"><button data-act="next">Next</button></div></figure>"""
+MANIFEST = """# Source manifest: WID 101 Exam 1
+
+| Doc id | File | Pages | Scope | Answers | Rendered | Notes |
+|---|---|---|---|---|---|---|
+| D1 | `sources/lectures/d1-widgets.pdf` | 4 | in | no | yes | Lecture 1: widgets |
+| HW1 | `sources/homework/hw1.pdf` | 2 | in | no | yes | |
+| D9 | `sources/lectures/d9.pdf` | 9 | reserved: Final | no | no | raw copy only, never opened |
+"""
 NAV = """<details class="examnav"><summary>Exam-day map</summary><div class="ebody">
 <p class="efound"><a class="xref" href="#sec-1-basics">§1.1</a></p></div></details>"""
 
@@ -72,6 +83,7 @@ class Hub:
         os.makedirs(os.path.join(self.root, "_build", "frag"))
         self.write("_build/chassis.html", filled_chassis() if chassis is None else chassis)
         self.write("_build/CHASSIS.md", read(CHASSIS_MD))
+        self.write("MANIFEST.md", MANIFEST)
         for n, text in sections.items():
             self.write(f"notes/{n:02d}-s{n}.md", f"# §{n} S\n")
             if text is not None:
@@ -133,11 +145,80 @@ class AssembleTest(unittest.TestCase):
         for m in assemble.MARKERS:
             self.assertNotIn(m, page)
         self.assertIn(".wrap section.note:nth-of-type(2){--sec-accent:#277a4d", page)
-        self.assertNotIn("nth-of-type(3)", page)
+        self.assertIn(".wrap section.note:nth-of-type(3){", page)  # the source key
+        self.assertNotIn("nth-of-type(4)", page)
         self.assertIn(':root[data-theme="dark"] .wrap section.note:nth-of-type(1){--sec-accent:#4cbbda}',
                       page)
         size = os.path.getsize(os.path.join(h.root, "_build", "notes.html"))
         self.assertIn(f"({size:,} bytes)", out)  # bytes, not characters: the page holds a §
+
+    def test_the_source_key_has_a_row_per_cited_code_and_every_citation_links_to_it(self):
+        h = self.hub(sections={1: SEC1, 2: SEC2.replace("<ol", '<p>Try it <a class="slink">HW1 Q2c</a>.</p>\n  <ol')})
+        h.write("_build/frag/examnav.html", NAV.replace("</p></div>", ' <a class="slink">D1 p.3</a></p></div>'))
+        rc, out = h.run()
+        self.assertEqual(rc, 0, out)
+        page = h.page()
+        key = page[page.index('<section class="note" id="sec-3">'):]
+        self.assertGreater(page.index('id="sec-3"'), page.index('id="sec-2"'))
+        self.assertIn('<h2><span class="n">§3</span> Source key</h2>', key)
+        # One row per cited code, in MANIFEST's order: Notes, or Scope when Notes is empty. D9,
+        # reserved and cited nowhere, never appears.
+        self.assertEqual(re.findall(r'<tr id="([^"]+)">', key), ["src-D1", "src-HW1"])
+        self.assertIn('<tr id="src-D1"><td><code>D1</code></td><td>d1-widgets.pdf</td><td>Lecture 1: widgets</td></tr>', key)
+        self.assertIn('<tr id="src-HW1"><td><code>HW1</code></td><td>hw1.pdf</td><td>in</td></tr>', key)
+        self.assertNotIn("D9", page)
+        self.assertIn('<a class="slink" href="#src-D1" title="D1: d1-widgets.pdf, Lecture 1: widgets">D1 p.2</a>', page)
+        self.assertIn('<a class="slink" href="#src-D1" title="D1: d1-widgets.pdf, Lecture 1: widgets">D1 p.3</a>', page)
+        self.assertIn('<a class="slink" href="#src-HW1" title="HW1: hw1.pdf, in">HW1 Q2c</a>', page)
+        self.assertNotIn('<a class="slink">', page)
+
+    def test_a_citation_whose_code_has_no_manifest_row_refused(self):
+        self.assertRefused(self.in_sec1('<p>See <a class="slink">X7 p.1</a>.</p>'),
+                           "frag/sec1.html (§1): citation `X7 p.1` names X7, which has no row in MANIFEST.md")
+        h = self.hub()
+        h.write("_build/frag/step-fig-2-walk.html", STEP.replace("</figure>", '<p><a class="slink">Q1 p.1</a></p></figure>'))
+        self.assertRefused(h, "frag/step-fig-2-walk.html: citation `Q1 p.1` names Q1")
+
+    def test_a_citation_with_no_text_or_an_href_of_its_own_refused(self):
+        self.assertRefused(self.in_sec1('<p><a class="slink"> </a></p>'), "an empty citation")
+        self.assertRefused(self.in_sec1('<p><a class="slink" href="#sec-1">D1 p.2</a></p>'),
+                           "citation `D1 p.2` has an href of its own")
+
+    def test_the_source_key_needs_a_manifest_only_when_the_page_cites(self):
+        h = self.hub()
+        h.remove("MANIFEST.md")
+        self.assertRefused(h, "MANIFEST.md missing: the page cites 1 codes")
+        h = self.hub(sections={1: SEC1.replace('<a class="slink">D1 p.2</a>', ""), 2: SEC2})
+        h.remove("MANIFEST.md")
+        rc, out = h.run()
+        self.assertEqual(rc, 0, out)
+        self.assertNotIn("Source key", h.page())
+        self.assertNotIn("nth-of-type(3)", h.page())
+
+    def test_a_manifest_it_cant_read_refused(self):
+        for text, needle in (("| Doc id | Scope |\n|---|---|\n| D1 | in |\n", "the table has no File column"),
+                             ("No table.\n", "has no table"),
+                             (MANIFEST + "| D1 | `x.pdf` | 1 | in | no | yes | |\n", "two rows for D1")):
+            with self.subTest(needle=needle):
+                h = self.hub()
+                h.write("MANIFEST.md", text)
+                self.assertRefused(h, f"MANIFEST.md: {needle}")
+
+    def test_the_source_keys_text_is_checked_like_a_fragment(self):
+        h = self.hub()
+        h.write("MANIFEST.md", MANIFEST.replace("Lecture 1: widgets", "\\(\\class{rail}{a}\\)"))
+        self.assertRefused(h, "the source key (from MANIFEST.md): MathJax macros that make HTML: \\class")
+        h = self.hub()
+        h.write("MANIFEST.md", MANIFEST.replace("Lecture 1: widgets", '<img src=x onerror="alert(1)">'))
+        rc, out = h.run()
+        self.assertEqual(rc, 0, out)
+        self.assertIn("&lt;img src=x onerror=&quot;alert(1)&quot;&gt;", h.page())
+
+    def test_a_codes_row_id_is_one_token_and_distinct(self):
+        self.assertEqual(assemble.source_id("D5"), "src-D5")
+        self.assertEqual(assemble.source_id("HW1.S"), "src-HW1_2e_S")
+        self.assertNotEqual(assemble.source_id("A_1"), assemble.source_id("A-1"))
+        self.assertEqual(assemble.source_id("A 1"), "src-A_20_1")
 
     def test_accents_cycle_past_seven_sections(self):
         css = assemble.accents(9)
@@ -463,7 +544,16 @@ class AssembleTest(unittest.TestCase):
             r = subprocess.run(["python3", "-I", LINKCHECK, "--html", page],
                                capture_output=True, text=True)
             self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
-            self.assertIn("0 unresolved; 0 duplicate ids", r.stdout)
+            self.assertIn("0 unresolved; 0 duplicate ids; 0 citations with no in-page link", r.stdout)
+            # The key lists exactly the codes the fragments cite, and each citation links to it.
+            frag = os.path.join(SAMPLE, "_build", "frag")
+            frags = "".join(read(os.path.join(frag, n)) for n in os.listdir(frag) if n.endswith(".html"))
+            cited = {c.split()[0] for c in re.findall(r'<a class="slink">([^<]+)</a>', frags)}
+            built = read(page)
+            self.assertEqual(cited, {"D1", "D2", "HW1", "W1"})
+            self.assertEqual(sorted(re.findall(r'<tr id="src-([^"]+)">', built)), sorted(cited))
+            self.assertEqual(len(re.findall(r'<a class="slink" href="#src-', built)),
+                             frags.count('<a class="slink">'))
 
     @unittest.skipUnless(os.environ.get("EXAM_PREP_PLAYWRIGHT"),
                          "set EXAM_PREP_PLAYWRIGHT (and allow MathJax's and the fonts' hosts) to "

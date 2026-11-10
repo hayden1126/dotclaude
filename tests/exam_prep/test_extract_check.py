@@ -2,7 +2,7 @@
 
 The hub has every kind of row: PDFs (one scoped by a page range), a reveal deck, a homework with
 its official solutions, a Word file, the Ed digest, and reserved, pending and out rows. Pinned: a
-dropped page or slide fails; scope wider than the renders fails and narrower passes; build-frame
+dropped page or slide fails; a course page saved as HTML is checked as a text source, not a deck; scope wider than the renders fails and narrower passes; build-frame
 runs cover every page in the run; a question block's cites cover only its own doc and answer
 docs; a doc with no blocks fails, unless a STATUS `Unverified:` line names it; a reserved doc's
 blocks fail; the brief's closing Coverage line adds no UNREADABLE flag."""
@@ -134,6 +134,23 @@ class ExtractCheck(unittest.TestCase):
         code, out = self.run_check()
         self.assertEqual(code, 1)
         self.assertIn("D2: can't read the deck sources/lectures/d2.html", out)
+
+    def test_a_course_page_saved_as_html_is_a_text_source(self):
+        # Not a reveal deck (no `slides` element): one block covers it, as for a Word file.
+        self.write("MANIFEST.md", MANIFEST + "| C1 | `sources/other/c1.html` | n/a | in | no | n/a | course page |\n")
+        self.write("sources/other/c1.html", "<html><body><h1>Course policies</h1><p>x</p></body></html>")
+        code, out = self.run_check()
+        self.assertEqual(code, 1, out)
+        self.assertIn("C1: no blocks; MISSING all", out)
+        self.extract("C1.md", "### [C1 Policies] the page's one section\n")
+        code, out = self.run_check()
+        self.assertEqual(code, 0, out)
+        self.assertIn("C1: 1 blocks", out)
+        # A slide range still reads it as a deck, which it isn't.
+        self.write("MANIFEST.md", MANIFEST + "| C1 | `sources/other/c1.html` | n/a | in, slides #/0-#/2 | no | n/a | |\n")
+        code, out = self.run_check()
+        self.assertEqual(code, 1, out)
+        self.assertIn("C1: can't read the deck sources/other/c1.html: no element with class `slides`", out)
 
     def test_a_doc_with_no_blocks_fails(self):
         os.remove(os.path.join(self.root, "_build", "extract", "W1.md"))
