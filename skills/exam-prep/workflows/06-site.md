@@ -97,7 +97,7 @@ From the hub root:
    Review view takes longer to read (both numbers printed); with `none: <why>` or no line, it strips
    the toggle and refuses any `.rv` block (`07-cheatsheet`, "Tag the review").
 2. `python3 -I <skill>/scripts/linkcheck.py --html _build/notes.html`: every in-page link
-   resolves, and no id repeats.
+   resolves, no id repeats, and every citation links to the source key.
 3. `node <skill>/scripts/verify_page.mjs _build/notes.html _build/shots --steps
    _build/frag/steps.json` (leave `--steps` out when there are no step-throughs) with
    `allowed_domains` cdnjs.cloudflare.com, fonts.googleapis.com and fonts.gstatic.com (L20 to L22).
