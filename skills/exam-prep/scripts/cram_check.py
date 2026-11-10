@@ -177,6 +177,32 @@ def check(lines, ids, plain=False):
     return bad, f"{len(tiers)} tiers, {rows} rows, {total} min; {tail}"
 
 
+def blocks(lines):
+    """The parts the notes page's exam-day map shows, from a cram order check() passed (assemble.py
+    renders them): {"tiers": [(name, minutes, [(line, row text)])], "skip": (line, text) or None,
+    "out_of_time": (line, text) or None}. A row's text is the whole `K. [...](...) (m min): ...`
+    line; mock lines, the intro and ## Tonight are left out."""
+    tiers, skip, out_of_time, section = [], None, None, None
+    for n, t in lines:
+        if t.startswith("**Out of time?**"):
+            out_of_time = (n, t)
+            continue
+        if t.startswith("**Skip:**"):
+            skip = (n, t)
+            continue
+        m = TIER.match(t)
+        if m:
+            tiers.append((m.group(2), int(m.group(3)), []))
+            section = "tier"
+            continue
+        if t.strip() == "## Tonight":
+            section = "tonight"
+            continue
+        if section == "tier" and ROW.match(t):
+            tiers[-1][2].append((n, t))
+    return {"tiers": tiers, "skip": skip, "out_of_time": out_of_time}
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description="Check the cram order (08-practice).")
     ap.add_argument("cram", nargs="?", default=os.path.join("practice", "cram-order.md"))

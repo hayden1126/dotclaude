@@ -65,6 +65,33 @@ MANIFEST = """# Source manifest: WID 101 Exam 1
 """
 NAV = """<details class="examnav"><summary>Exam-day map</summary><div class="ebody">
 <p class="efound"><a class="xref" href="#sec-1-basics">§1.1</a></p></div></details>"""
+SEC1_MK = SEC1.replace("</section>", '  <h3 id="sec-1-must-know">1.2 Must know</h3>\n  <ul><li>x</li></ul>\n'
+                                     "</section>")
+RV_PITFALL = '<div class="callout warn rv"><div class="lab">Pitfall</div><p>Overlaps count twice.</p></div>\n'
+RV_WEX = ('<details class="callout example wex rv" id="ex-1-w"><summary><span class="lab">Worked example 1.1'
+          '</span><span class="wex-t">W</span></summary><p>Setup.</p></details>\n')
+CRAM = """# Cram order: Exam 1
+
+The night before Exam 1: 15 minutes in 2 tiers of reading.
+
+**Out of time?** Read only the Must-know lists: [§1](https://notes.example.com/w#sec-1-must-know).
+
+## Tier 1: Gadgets first (10 min)
+
+1. [§2.1 More](https://notes.example.com/w#sec-2-more) (10 min): Use: A walk is **two** steps, \\(a < b\\) & `x<y`.
+
+**Then the mock:** [Mock 1](https://mock.example.com/m1), timed (50 minutes).
+
+## Tier 2: Widgets (5 min)
+
+2. [§1.1 Basics](https://notes.example.com/w#sec-1-basics) (5 min): Know cold: Widgets nest.
+
+**Skip:** nothing.
+
+## Tonight
+
+- Bring a pencil.
+"""
 
 
 def read(path):
@@ -613,6 +640,132 @@ class AssembleTest(unittest.TestCase):
             self.assertIn("[long jump]", r.stdout)
             self.assertIn("long jump chromium 1280px bottom->first ok: #sec-1", r.stdout)
             self.assertNotIn("--no-long-jump", r.stdout)
+
+    # ---- the cram block (K02) and the Review view ----
+
+    def cram_hub(self, cram=CRAM, plan=None, sec1=None):
+        h = self.hub(sections={1: SEC1_MK if sec1 is None else sec1, 2: SEC2})
+        os.makedirs(os.path.join(h.root, "practice"))
+        if cram is not None:
+            h.write("practice/cram-order.md", cram)
+        if plan is not None:
+            h.write("PLAN.md", plan)
+        return h
+
+    def test_the_cram_block_is_rendered_from_the_cram_order_and_opens_the_map(self):
+        h = self.cram_hub()
+        rc, out = h.run()
+        self.assertEqual(rc, 0, out)
+        page = h.page()
+        self.assertIn('<details class="examnav" open>', page)
+        self.assertEqual(page.count('class="ecram"'), 1)
+        self.assertLess(page.index('class="ecram"'), page.index('class="efound"'))
+        self.assertIn('<div class="eqh">Tier 1: Gadgets first (10 min)</div>', page)
+        self.assertIn('<div class="eqh">Tier 2: Widgets (5 min)</div>', page)
+        self.assertIn('<li><b>A walk is <strong>two</strong> steps, \\(a &lt; b\\) &amp; <code>x&lt;y</code></b> → '
+                      '<a class="xref" href="#sec-2-more">§2.1 More</a> (Use)</li>', page)
+        self.assertIn('<a class="xref" href="#sec-1-basics">§1.1 Basics</a> (Know cold)</li>', page)
+        self.assertIn('<p class="edrill"><strong>Skip:</strong> nothing. <strong>Out of time?</strong> Read only '
+                      'the Must-know lists: <a class="xref" href="#sec-1-must-know">§1</a>.</p>', page)
+        block = page[page.index('class="ecram"'):page.index('class="efound"')]
+        self.assertNotIn("notes.example.com", block)
+        self.assertNotIn("mock", block.lower())
+        self.assertNotIn("Bring", block)  # ## Tonight stays out
+
+    def test_no_cram_order_means_no_cram_block_and_a_closed_map(self):
+        h = self.cram_hub(cram=None)
+        rc, out = h.run()
+        self.assertEqual(rc, 0, out)
+        self.assertIn('<details class="examnav">', h.page())
+        self.assertNotIn('class="ecram"', h.page())
+
+    def test_a_cram_row_with_an_unknown_id_fails(self):
+        self.assertRefused(self.cram_hub(CRAM.replace("#sec-1-basics", "#sec-9-gone")),
+                           "practice/cram-order.md:15: #sec-9-gone isn't an id in the notes page")
+
+    def test_a_cram_order_that_fails_its_check_fails_the_build(self):
+        self.assertRefused(self.cram_hub(CRAM.replace("(10 min)", "(12 min)", 1)),
+                           "the tier says 12 min, its rows sum to 10")
+
+    def test_cram_markdown_the_map_cant_render_refused(self):
+        for thing, needle in (("an *italic* word", "`*` in"), ("a <b>raw</b> tag", "`<b` in"),
+                              ("a _stressed_ word", "`_` in"), ("a [D1 p.2] cite", "`[` in")):
+            with self.subTest(thing=thing):
+                self.assertRefused(self.cram_hub(CRAM.replace("Know cold: Widgets nest", f"Know cold: {thing}")),
+                                   needle)
+
+    def test_a_cram_row_with_no_depth_label_refused(self):
+        self.assertRefused(self.cram_hub(CRAM.replace("Know cold: Widgets nest", "Widgets nest")),
+                           "practice/cram-order.md:15: no depth label")
+
+    def test_a_hand_written_cram_block_in_the_map_refused(self):
+        for nav, needle in (
+                (NAV.replace("</div></details>", '<div class="egrid"><div class="eq"><div class="eqh">Tier 1: '
+                             'Rules (5 min)</div><ul><li>x</li></ul></div></div></div></details>'),
+                 "a hand-written cram tier (Tier 1: Rules (5 min))"),
+                (NAV.replace('<p class="efound">', '<div class="ecram"></div><p class="efound">'),
+                 "a hand-written cram block (.ecram)"),
+                (NAV.replace("</p></div>", " <strong>Out of time?</strong> Read §1.</p></div>"),
+                 "a hand-written Out of time? line")):
+            with self.subTest(needle=needle):
+                h = self.hub()
+                h.write("_build/frag/examnav.html", nav)
+                self.assertRefused(h, needle + ": assemble.py renders the cram block from practice/cram-order.md")
+
+    def test_an_open_map_refused(self):
+        h = self.hub()
+        h.write("_build/frag/examnav.html", NAV.replace('<details class="examnav">', '<details class="examnav" open>'))
+        self.assertRefused(h, "frag/examnav.html: an open attribute")
+
+    def test_minutes_keep_the_toggle_and_none_strips_it(self):
+        for plan, kept in (("- Review view: 5 minutes of reading\n", True),
+                           ("- Review view: none: a sheet is allowed\n", False), (None, False)):
+            with self.subTest(plan=plan):
+                h = self.cram_hub(plan=plan, cram=None)
+                rc, out = h.run()
+                self.assertEqual(rc, 0, out)
+                self.assertEqual('class="viewtog"' in h.page(), kept)
+                self.assertEqual("Review view: only the worked examples" in h.page(), kept)
+                self.assertNotIn("REVIEW TOGGLE", h.page())
+
+    def test_rv_with_no_review_view_refused(self):
+        sec1 = SEC1_MK.replace('<div class="callout def">', RV_PITFALL + '<div class="callout def">')
+        for plan in ("- Review view: none: the student declined it\n", "# Plan\n", None):
+            with self.subTest(plan=plan):
+                self.assertRefused(self.cram_hub(plan=plan, sec1=sec1, cram=None),
+                                   "class rv on the page, and PLAN.md has no `- Review view: <N> minutes")
+
+    def test_a_review_view_line_it_cant_read_refused(self):
+        self.assertRefused(self.cram_hub(plan="- Review view: about ten minutes\n", cram=None),
+                           "PLAN.md: `- Review view: about ten minutes` is neither")
+
+    def test_rv_only_on_a_worked_example_or_a_pitfall_in_its_section(self):
+        plan = "- Review view: 5 minutes of reading\n"
+        ok = SEC1_MK.replace('<div class="callout def">', RV_PITFALL + RV_WEX + '<div class="callout def">')
+        h = self.cram_hub(plan=plan, sec1=ok, cram=None)
+        rc, out = h.run()
+        self.assertEqual(rc, 0, out)
+        for bad, needle in (
+                (RV_PITFALL.replace(">Pitfall<", ">Not on Exam 1<"), 'class rv on a "Not on Exam 1" callout'),
+                (RV_PITFALL.replace(">Pitfall<", ">Unverified<"), 'class rv on a "Unverified" callout'),
+                ('<p class="rv">x</p>', 'class rv on <p class="rv">'),
+                ("<ul><li>" + RV_PITFALL + "</li></ul>", "an rv block inside <li>")):
+            with self.subTest(needle=needle):
+                sec1 = SEC1_MK.replace('<div class="callout def">', bad + '<div class="callout def">')
+                self.assertRefused(self.cram_hub(plan=plan, sec1=sec1, cram=None), "frag/sec1.html: " + needle)
+
+    def test_a_review_view_over_its_minutes_fails(self):
+        long = RV_PITFALL.replace("Overlaps count twice.", "word " * 400)
+        sec1 = SEC1_MK.replace('<div class="callout def">', long + '<div class="callout def">')
+        self.assertRefused(self.cram_hub(plan="- Review view: 2 minutes of reading\n", sec1=sec1, cram=None),
+                           f"words at {assemble.READING_RATE} a minute), over PLAN.md's 2")
+        h = self.cram_hub(plan="- Review view: 4 minutes of reading\n", sec1=sec1, cram=None)
+        rc, out = h.run()
+        self.assertEqual(rc, 0, out)
+
+    def test_reading_words_counts_math_by_its_symbols(self):
+        self.assertEqual(assemble.reading_words(r"Sum \(\frac{n(n+1)}{2}\) now"), 6)
+        self.assertEqual(assemble.reading_words(r"\[ x \le 10 \] - a"), 3)
 
     def test_no_chassis_is_a_usage_error(self):
         h = self.hub()

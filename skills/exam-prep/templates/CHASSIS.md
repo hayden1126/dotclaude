@@ -22,10 +22,33 @@ the skill's.
   the chassis's own calm study palette, light with a true dark counterpart (the reader's system
   setting, or the theme button).
 - **The exam-day map** (FB-113), first in the page: a `details.examnav` mapping each practice
-  question shape to its section, with a read-first line and a drill-hardest line, closed until it
-  holds the cram order and open (`open` attribute) from then on (K02). `06-site`, step 4, writes
-  it.
+  question shape to its section, with a read-first line and a drill-hardest line. `06-site`, step
+  4, writes it, with no cram block and no `open` attribute: `assemble.py` refuses either. When
+  `practice/cram-order.md` exists, `assemble.py` renders the cram block from it on every build (K02)
+  and opens the map: a `div.ecram` at the start of `.ebody`, one `.eq` per tier (its `.eqh` the
+  tier's name and minutes), one row per reading row (the one thing in `<b>`, the `§N.K Title` as an
+  `a.xref` to `#id`, the depth label in parentheses), then the Skip and Out of time lines in an
+  `.edrill`. Mock lines and `## Tonight` stay out. With no file (a writer's worktree), there is no
+  cram block and the map stays closed.
 - **Worked examples** are collapsible and closed by default (FB-116).
+- **The Review view**, when PLAN.md's `- Review view: <N> minutes of reading` line keeps it: a
+  Review / Full notes toggle in the top bar (and in the rail, where there is no top bar). Full
+  notes is the default; the choice is remembered per viewer in `localStorage`. The Review view
+  is a filter over the notes' own blocks, no copy: it shows each section's heading, each `rv`
+  block (a worked example, rendered open, or a Pitfall: CONVERT.md's `.rv`), each `h3` whose
+  subsection holds one, each Must-know `h3` (`id` ending `-must-know`) with the first list after
+  it, the exam-day map and the source key, and hides the rest; one fixed line under the lede says
+  what the view is. Once the map has a cram block, sections and their rail entries take the order
+  of each section's first row in it (CSS `order`; subsections keep theirs, and sections it names
+  no row for follow in page order). A link to anything the view hides switches to Full notes, then
+  jumps. With `- Review view: none: <why>` or no line, `assemble.py` strips the toggle (the
+  chassis's `<!-- REVIEW TOGGLE -->` blocks) and refuses any class `rv`.
+- **The Review view's budget**: `assemble.py` counts the view's words, the map's included and the
+  source key's left out, and fails the build when they take more than PLAN.md's minutes at
+  **150 words a minute** (`READING_RATE`), printing both numbers. The rate is an unmeasured
+  estimate for dense study notes, not a measured one. In math, each run of letters and each
+  number counts as a word (`\frac{n(n+1)}{2}` is four); code counts like prose, a word per
+  blank-separated token; a figure's SVG text doesn't count.
 
 ## Components (the class vocabulary)
 
@@ -45,6 +68,8 @@ the classes written `.class` in its first column are the only ones a fragment ma
 | `figure`, `figcaption`, `.fig-controls` | a figure, its caption and a step-through's buttons; the page's script wraps each figure's SVG in a `figbox` scroll box |
 | `.bx`, `.accbx`, `.fill-surf`, `.dash`, `.mono`, `.mut`, `.sm`, `.acc` | SVG shapes and text inside a figure; in a table cell, `.mut` and `.sm` make a muted small line (the source key's file name) |
 | `details.examnav`, `.ebody`, `.efound`, `.egrid`, `.eq`, `.eqh`, `.edrill` | the exam-day map |
+| `.ecram` | the map's cram block, which only `assemble.py` writes (refused in `examnav.html`) |
+| `.rv` | a worked example or a Pitfall in the Review view, directly inside its section (CONVERT.md) |
 
 **A step-through** (`06-site`, step 2) is a `<figure id="<fig-id>">` holding its SVG, its
 `figcaption`, a `.fig-controls` row of buttons and a status line with `aria-live="polite"`, which
@@ -76,7 +101,8 @@ Only a step-through may add unstyled hook classes for its handler, each named `f
   bottom it marks the last section active: a short one (the source key) never reaches its line.
 - **C1.** The rail keeps its active link visible by scrolling the rail alone, never
   `scrollIntoView`: that moves the page too and cancels a smooth jump in flight in WebKit
-  (L25). `verify_page.mjs` checks the long jump, in WebKit too when it is installed.
+  (L25). `verify_page.mjs` checks the long jump, in WebKit too when it is installed, and in
+  both views when the page has the toggle; the Review view keeps the same rail code.
 - The page is a fragment (title, font links, style, body content, scripts), as past runs
   published it: the artifact host wraps it in a standards-mode document, and `verify_page.mjs`
   wraps it the same way before checking it, since loaded alone it renders in quirks mode (L19).
@@ -88,7 +114,8 @@ S13). A CSS change is the main session's, made in `_build/chassis.html`, and che
 reference screenshots in `<skill>/templates/chassis-shots/` (1280 px light and 390 px dark: the top
 of the page, four subsections, a step-through at its last frame, an open worked example, the open
 exam-day map and the source key with a row targeted, the rail marking it active, together every
-component) before it ships. A look change worth keeping for later courses goes to `12-retro`, which
+component; and, for a page with the toggle, the same set in the Review view, each named with
+`-review` after its width and scheme, such as `390-dark-review-top.png`) before it ships. A look change worth keeping for later courses goes to `12-retro`, which
 regenerates the shots from the skill repo's synthetic sample hub, `tests/exam_prep/fixtures/site/`:
 assemble it, then run `verify_page.mjs` on it with
 `--spy sec-1-sums,sec-1-rules,sec-2-basics,sec-2-walks --steps _build/frag/steps.json`.

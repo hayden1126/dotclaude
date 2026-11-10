@@ -47,7 +47,21 @@ is missing or its table has no Doc id or File column or repeats a code, or the k
 fails the fragment checks; when a FIG marker holds a < or >, sits inside a
 tag, an attribute or code or outside a section (in the exam-day map or a step-through), is left
 with no step-through, or a step-through file isn't one <figure id="<fig-id>"> or isn't placed
-exactly once. Stdlib only."""
+exactly once.
+
+The Review view (CHASSIS.md): the hub root's PLAN.md line `- Review view: <N> minutes of reading`
+keeps the page's Review / Full notes toggle (the chassis's `<!-- REVIEW TOGGLE -->` blocks), and
+the build fails when the view's words, read at READING_RATE words a minute, take more than N
+minutes (both numbers printed). `- Review view: none: <why>`, or no such line, strips the toggle
+and refuses any class rv. Class rv goes only on a worked example (details.callout.example.wex) or
+a Pitfall (div.callout.warn whose label is Pitfall), each directly inside its section.
+
+The cram block (K02): when practice/cram-order.md exists, it must pass cram_check.py against the
+assembled page's ids, and its tiers, rows, Skip line and Out of time line are rendered into a
+div.ecram at the start of the map's .ebody on every build, the map opened (`open`); its links
+become `#id`. Inline Markdown in those lines is escaped, with **bold**, `code`, \\( math \\) and
+[text](URL#id) rendered; anything else is refused. The hand-written map may hold no cram block (an
+.ecram, a `Tier N:` group, a Skip or Out of time line) and no open attribute. Stdlib only."""
 import argparse
 import html
 import os
@@ -56,6 +70,10 @@ import re
 import sys
 from collections import Counter
 from html.parser import HTMLParser
+
+# cram_check.py sits beside this script; -I leaves the script's directory off sys.path.
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import cram_check  # noqa: E402
 
 MARKERS = ("<!-- EXAM-DAY MAP -->", "<!-- SECTIONS -->", "<!-- FIGURE SCRIPTS -->",
            "/* SECTION ACCENTS */")
@@ -92,6 +110,19 @@ FIG_COMMENT = re.compile(r"\s*FIG\s+fig-[\w-]+\b[^<>]*")
 # tag walk never sees; MathJax leaves code and pre alone.
 TEX_HTML = re.compile(r"\\(?:href|style|class|cssId|data|mmlToken|require|bbox)(?![A-Za-z])")
 KEY_TITLE = "Source key"
+# Words a minute for the Review view's budget: an unmeasured estimate for dense study notes
+# (CHASSIS.md says how math and code count).
+READING_RATE = 150
+REVIEW_LINE = re.compile(r"^- Review view:(.*)$")
+TOGGLE = re.compile(r"<!-- REVIEW TOGGLE -->(.*?)<!-- /REVIEW TOGGLE -->", re.S)
+CRAM = os.path.join("practice", "cram-order.md")
+DEPTH = re.compile(r"(Know cold|Use|Recognize|Not on [^:]+): (\S.*)")
+CRAM_ROW = re.compile(r"^\d+\. \[(§[\d.]+ [^\]]+)\]\([^)\s#]*#([^)\s]+)\) \(\d+ min\): (.*)$")
+# What one cram-order line may hold besides text: math, code, bold and notes links.
+INLINE = re.compile(r"\\\((.*?)\\\)|`([^`]+)`|\*\*(.+?)\*\*|\[([^\]]+)\]\(([^)\s]*)\)")
+UNRENDERED = re.compile(r"[*`\[\]\\]|(?<!\w)_|_(?!\w)|<[A-Za-z/!?]")
+TREE_VOID = {"br", "wbr", "img", "hr", "col", "input", "meta", "link", "source", "area", "base",
+             "embed", "track", "param"}
 
 
 def source_id(code):
@@ -396,6 +427,231 @@ def check_fragment(name, text, allowed, problems, hooks=False, markers=True):
         problems.append(f"{name}: a TODO-VERIFY is left (05-verify isn't done)")
 
 
+class Tree(HTMLParser):
+    """A fragment as nested dicts ({"tag", "attrs", "kids", "parent"}; text as str kids), for the
+    Review view's rules. Fragments passed check_fragment, so tags nest as written."""
+
+    def __init__(self, text):
+        super().__init__(convert_charrefs=True)
+        self.root = self.cur = {"tag": "#root", "attrs": {}, "kids": [], "parent": None}
+        try:
+            self.feed(text)
+            self.close()
+        except (AssertionError, NotImplementedError):
+            pass  # its own check has refused it
+
+    def handle_starttag(self, tag, attrs):
+        node = {"tag": tag, "attrs": {k: v or "" for k, v in attrs}, "kids": [], "parent": self.cur}
+        self.cur["kids"].append(node)
+        if tag not in TREE_VOID:
+            self.cur = node
+
+    def handle_endtag(self, tag):
+        n = self.cur
+        while n["parent"] is not None and n["tag"] != tag:
+            n = n["parent"]
+        if n["parent"] is not None:
+            self.cur = n["parent"]
+
+    def handle_data(self, data):
+        self.cur["kids"].append(data)
+
+
+def classes_of(node):
+    return set(node["attrs"].get("class", "").split())
+
+
+def elements(node):
+    """node and every element under it, in document order."""
+    yield node
+    for k in node["kids"]:
+        if isinstance(k, dict):
+            yield from elements(k)
+
+
+def text_of(node):
+    """node's text, an SVG's left out (a figure's labels are no reading)."""
+    if node["tag"] == "svg":
+        return ""
+    return " ".join(k if isinstance(k, str) else text_of(k) for k in node["kids"])
+
+
+def label_of(node):
+    lab = next((e for e in elements(node) if "lab" in classes_of(e)), None)
+    return " ".join(text_of(lab).split()) if lab else ""
+
+
+def rv_problems(name, tree):
+    """Where class rv sits on anything but a worked example or a Pitfall directly in its section."""
+    out = []
+    for e in elements(tree.root):
+        c = classes_of(e)
+        if "rv" not in c:
+            continue
+        if e["tag"] == "details" and {"callout", "example", "wex"} <= c:
+            what = None
+        elif e["tag"] == "div" and {"callout", "warn"} <= c:
+            lab = label_of(e)
+            what = None if lab == "Pitfall" else f'a "{lab}" callout'
+        else:
+            what = f"<{e['tag']} class=\"{e['attrs'].get('class', '')}\">"
+        parent = e["parent"]
+        if what:
+            out.append(f"{name}: class rv on {what}: only a worked example or a Pitfall joins the "
+                       "Review view (CONVERT.md)")
+        elif not (parent["tag"] == "section" and "note" in classes_of(parent)):
+            out.append(f"{name}: an rv block inside <{parent['tag']}>: it sits directly in its section, "
+                       "so the Review view can show it alone")
+    return out
+
+
+def review_parts(section):
+    """The elements of one section.note the Review view shows (CHASSIS.md; the chassis's script
+    applies the same rule): its h2, each rv block, each h3 whose subsection holds one, and each
+    Must-know h3 (id ending -must-know) with the first list after it."""
+    shown, h3, must = [], None, False
+    for k in section["kids"]:
+        if not isinstance(k, dict):
+            continue
+        if k["tag"] == "h2":
+            shown.append(k)
+        elif k["tag"] == "h3":
+            h3, must = k, k["attrs"].get("id", "").endswith("-must-know")
+            if must:
+                shown.append(k)
+        elif "rv" in classes_of(k):
+            if h3 is not None and h3 not in shown:
+                shown.append(h3)
+            shown.append(k)
+        elif must and k["tag"] in ("ul", "ol"):
+            shown.append(k)
+            must = False
+    return shown
+
+
+def reading_words(text):
+    """Words to read in text: in math, each run of letters or each number (\\frac and the like
+    aside); elsewhere, code included, each blank-separated token holding a letter or digit."""
+    n = 0
+    for i, part in enumerate(re.split(r"\\\((.*?)\\\)|\\\[(.*?)\\\]", text, flags=re.S)):
+        if part is None:
+            continue
+        if i % 3:
+            n += len(re.findall(r"[A-Za-z]+|\d+", re.sub(r"\\[A-Za-z]+", " ", part)))
+        else:
+            n += sum(1 for w in part.split() if re.search(r"\w", w))
+    return n
+
+
+def review_budget(root, problems):
+    """PLAN.md's Review view minutes, or None for none or no line."""
+    path = os.path.join(root, "PLAN.md")
+    try:
+        with open(path, encoding="utf-8") as f:
+            lines = [m.group(1).strip() for m in map(REVIEW_LINE.match, f.read().splitlines()) if m]
+    except FileNotFoundError:
+        return None
+    except (OSError, UnicodeDecodeError) as e:
+        problems.append(f"PLAN.md: {e}")
+        return None
+    if len(lines) > 1:
+        problems.append(f"PLAN.md: {len(lines)} `- Review view:` lines; one says the budget")
+        return None
+    if not lines:
+        return None
+    m = re.fullmatch(r"(\d+) minutes of reading", lines[0])
+    if m and int(m.group(1)) > 0:
+        return int(m.group(1))
+    if not re.fullmatch(r"none: \S.*", lines[0]):
+        problems.append(f"PLAN.md: `- Review view: {lines[0]}` is neither `<N> minutes of reading` "
+                        "nor `none: <why>`")
+    return None
+
+
+def inline(text, where, problems):
+    """One cram-order line's Markdown as HTML: text escaped, **bold**, `code`, \\( math \\) and
+    [text](URL#id) (as <a class="xref" href="#id">) rendered; anything else refused."""
+    out, last = [], 0
+
+    def plain(s):
+        bad = UNRENDERED.search(s)
+        if bad:
+            problems.append(f"{where}: `{bad.group(0)}` in {s.strip()[:40]!r}: the map renders only "
+                            "text, **bold**, `code`, \\( math \\) and [text](URL#id) links")
+        return html.escape(s, quote=False)
+    for m in INLINE.finditer(text):
+        out.append(plain(text[last:m.start()]))
+        math, code, bold, label, target = m.groups()
+        if math is not None:
+            out.append("\\(" + html.escape(math, quote=False) + "\\)")
+        elif code is not None:
+            out.append("<code>" + html.escape(code, quote=False) + "</code>")
+        elif bold is not None:
+            out.append("<strong>" + inline(bold, where, problems) + "</strong>")
+        elif "#" in target:
+            ref = target.split("#", 1)[1]
+            out.append(f'<a class="xref" href="#{html.escape(ref, quote=True)}">'
+                       + inline(label, where, problems) + "</a>")
+        else:
+            problems.append(f"{where}: a link with no #id ({target}): the map links only into the notes")
+        last = m.end()
+    out.append(plain(text[last:]))
+    return "".join(out)
+
+
+def cram_block(lines, problems):
+    """The map's cram block from a checked cram order: a div.ecram holding one .eq per tier and an
+    .edrill with the Skip and Out of time lines."""
+    parts = cram_check.blocks(lines)
+    following = dict(lines)
+    groups = []
+    for k, (name, minutes, rows) in enumerate(parts["tiers"], 1):
+        items = []
+        for n, t in rows:
+            where = f"{CRAM}:{n}"
+            m = CRAM_ROW.match(t)
+            d = DEPTH.fullmatch(m.group(3).strip()) if m else None
+            if not d:
+                problems.append(f"{where}: no depth label (Know cold, Use, Recognize or Not on <exam>, "
+                                "then a colon) before the one thing (S33)")
+                continue
+            thing = d.group(2)[:-1] if d.group(2).endswith(".") else d.group(2)
+            items.append(f'        <li><b>{inline(thing, where, problems)}</b> → <a class="xref" '
+                         f'href="#{html.escape(m.group(2), quote=True)}">{inline(m.group(1), where, problems)}'
+                         f"</a> ({html.escape(d.group(1), quote=False)})</li>")
+        groups.append(f'      <div class="eq"><div class="eqh">Tier {k}: '
+                      f'{inline(name, f"{CRAM} tier {k}", problems)} ({minutes} min)</div><ul>\n'
+                      + "\n".join(items) + "</ul></div>")
+    drill = []
+    for key in ("skip", "out_of_time"):
+        if parts[key]:
+            n, t = parts[key]
+            if following.get(n + 1, "").strip():
+                problems.append(f"{CRAM}:{n + 1}: the {'Skip' if key == 'skip' else 'Out of time'} line "
+                                "runs on: keep it to one line, so the map shows all of it")
+            drill.append(inline(t, f"{CRAM}:{n}", problems))
+    return ('<div class="ecram">\n    <div class="egrid">\n' + "\n".join(groups) + "\n    </div>\n"
+            f'    <p class="edrill">{" ".join(drill)}</p>\n  </div>\n  ')
+
+
+def hand_cram(nav_tree):
+    """What in the hand-written map is a cram block or an open attribute (assemble.py's own)."""
+    out = []
+    for e in elements(nav_tree.root):
+        if "open" in e["attrs"]:
+            out.append("an open attribute: the map opens when practice/cram-order.md exists, and "
+                       "assemble.py adds it then (K02)")
+        c = classes_of(e)
+        if "ecram" in c:
+            out.append("a hand-written cram block (.ecram)")
+        elif "eqh" in c and re.match(r"\s*Tier \d+:", text_of(e)):
+            out.append(f"a hand-written cram tier ({' '.join(text_of(e).split())[:40]})")
+        elif e["tag"] in ("strong", "b") and re.match(r"\s*(Skip:|Out of time\?)", text_of(e)):
+            out.append(f"a hand-written {' '.join(text_of(e).split())} line")
+    return [f"frag/examnav.html: {p}: assemble.py renders the cram block from practice/cram-order.md"
+            if "hand-written" in p else f"frag/examnav.html: {p}" for p in dict.fromkeys(out)]
+
+
 def build(root):
     """(page, problems)."""
     b = os.path.join(root, "_build")
@@ -430,6 +686,9 @@ def build(root):
         problems.append(f"MANIFEST.md: {e}")
         unread = True
     cited = {}
+    budget = review_budget(root, problems)
+    rv = []  # where class rv sits wrong
+    nav_tree = None
 
     notes = os.path.join(root, "notes")
     nums = sorted(int(m.group(1)) for m in map(NOTE.fullmatch, os.listdir(notes)) if m) \
@@ -450,6 +709,7 @@ def build(root):
                 or not text.startswith(opens[0]) or not text.endswith("</section>"):
             problems.append(f'frag/sec{n}.html: not one <section class="note" id="sec-{n}">')
         check_fragment(f"frag/sec{n}.html", text, classes, problems)
+        rv += rv_problems(f"frag/sec{n}.html", Tree(text))
         sections.append(link_citations(f"frag/sec{n}.html (§{n})", text, key, cited, problems))
 
     examnav = os.path.join(frag, "examnav.html")
@@ -457,6 +717,9 @@ def build(root):
         with open(examnav, encoding="utf-8") as f:
             nav = f.read().strip()
         check_fragment("frag/examnav.html", nav, classes, problems, markers=False)
+        nav_tree = Tree(nav)
+        problems += hand_cram(nav_tree)
+        rv += rv_problems("frag/examnav.html", nav_tree)
         nav = link_citations("frag/examnav.html (the exam-day map)", nav, key, cited, problems)
     else:
         problems.append("frag/examnav.html missing (the exam-day map, 06-site)")
@@ -491,6 +754,7 @@ def build(root):
                     r"""<figure\s+id=["']%s["'][^>]*>.*</figure>""" % re.escape(step.group(1)), text, re.S):
                 problems.append(f'frag/{name}: not one <figure id="{step.group(1)}"> (CHASSIS.md\'s step-through form)')
             check_fragment(f"frag/{name}", text, classes, problems, hooks=True, markers=False)
+            rv += rv_problems(f"frag/{name}", Tree(text))
         if name.endswith(".js"):
             with open(os.path.join(frag, name), encoding="utf-8") as f:
                 scripts.append(f"<script>\n{f.read().strip()}\n</script>")
@@ -512,6 +776,58 @@ def build(root):
         check_fragment("the source key (from MANIFEST.md)", keysec, classes, problems, markers=False)
         body += "\n\n" + keysec
         sections.append(keysec)
+
+    cram = os.path.join(root, CRAM)
+    if os.path.isfile(cram) and nav:
+        try:
+            with open(cram, encoding="utf-8") as f:
+                lines = list(enumerate(f.read().splitlines(), 1))
+        except (OSError, UnicodeDecodeError) as e:
+            problems.append(f"{CRAM}: {e}")
+            lines = None
+        while lines and not lines[0][1].strip():
+            lines.pop(0)
+        if lines is not None:
+            ids = cram_check.Ids()
+            try:
+                ids.feed(nav + body)
+            except (AssertionError, NotImplementedError):
+                pass  # a fragment's own check has refused it
+            bad, _ = cram_check.check(lines, ids.ids)
+            problems += [f"{CRAM}:{b}" if b[0].isdigit() else f"{CRAM}: {b}" for b in bad]
+            if not bad:
+                block = cram_block(lines, problems)
+                check_fragment(f"the map's cram block (from {CRAM})", block, classes, problems, markers=False)
+                ebody = re.findall(r"""<div\s+class=["']ebody["']\s*>""", nav)
+                details = re.findall(r"""<details\s+class=["']examnav["']""", nav)
+                if len(ebody) != 1 or len(details) != 1:
+                    problems.append('frag/examnav.html: not one <details class="examnav"> with one '
+                                    '<div class="ebody"> to put the cram block in')
+                else:
+                    at = nav.index(ebody[0]) + len(ebody[0])
+                    nav = nav[:at] + "\n  " + block + nav[at:].lstrip("\n ")
+                    nav = nav.replace(details[0], details[0] + " open", 1)
+
+    if budget is None:
+        page = TOGGLE.sub("", page)
+        if any("rv" in classes_of(e) for s in sections for e in elements(Tree(s).root)):
+            problems.append("class rv on the page, and PLAN.md has no `- Review view: <N> minutes of "
+                            "reading` line: with no Review view, nothing joins it")
+    else:
+        if not TOGGLE.search(page):
+            problems.append("chassis.html has no <!-- REVIEW TOGGLE --> block, and PLAN.md gives the "
+                            "Review view minutes (copy the skill's current templates/notes-chassis.html)")
+        page = TOGGLE.sub(lambda m: m.group(1), page)
+        shown = [e for s in Tree(body).root["kids"] if isinstance(s, dict)
+                 and s["tag"] == "section" and "note" in classes_of(s)
+                 and not s["attrs"].get("id", "") == f"sec-{max(nums, default=0) + 1}"
+                 for e in review_parts(s)]
+        words = sum(reading_words(text_of(e)) for e in shown) + reading_words(text_of(Tree(nav).root))
+        if words > budget * READING_RATE:
+            problems.append(f"the Review view reads in about {words / READING_RATE:.1f} minutes ({words} "
+                            f"words at {READING_RATE} a minute), over PLAN.md's {budget}: untag some "
+                            "rv blocks, or raise the budget with the student")
+    problems += rv
     page = page.replace("/* SECTION ACCENTS */", accents(len(sections)), 1)
     page = page.replace("<!-- EXAM-DAY MAP -->", nav, 1)
     page = page.replace("<!-- SECTIONS -->", body, 1)
