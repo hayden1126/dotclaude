@@ -196,8 +196,9 @@ step 1 says.
    fix that changes the reference (`05-verify` step 5) adds `08-practice` step 4's `Reference
    changed:` line once `Stage 08 built` stands, made at item 6 like the other changes outside the
    pass's paths: `08-practice` step 8.1's key gate rechecks the untaken keys against it before the
-   next attempt, and no writer runs inside the pass. Change the fragment in its own markup (`_build/CONVERT.md`), and a figure label in the
-   fragment's SVG and wherever the notes describe it. Use the Edit tool: the notes hold math and
+   next attempt, and no writer runs inside the pass. Change the fragment in its own markup
+   (`_build/CONVERT.md`), and a figure label in the fragment's SVG and wherever the notes describe
+   it. Use the Edit tool: the notes hold math and
    Unicode that a `sed` rewrite breaks. An added sheet line, while a mock is untaken, goes where
    `08-practice` step 8 sends a one-line addition (the final sheet once its step 8.3 has built it,
    until then STATUS as a final-sheet item). Mark each item's outcome in the log as it lands. A

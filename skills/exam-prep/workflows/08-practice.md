@@ -253,8 +253,8 @@ Then:
    rebuild and checks, the republish to the same URL; a rebuild over the Review view's minutes is
    untagged as item 3 says, or with no `.rv` tag left, new minutes: this build, unattended, sets
    them and logs it in STATUS for the student to confirm, as `07-cheatsheet`'s "Tag the review"
-   opening says, and a later run with the student present asks them). Plain-text notes have no page: the cram
-   order stays a file. This item runs on its own: after items 1 to 3 here, after step 8.4, and
+   opening says, and a later run with the student present asks them). Plain-text notes have no
+   page: the cram order stays a file. This item runs on its own: after items 1 to 3 here, after step 8.4, and
    after items 1 and 2 for any other later change to the cram order's tiers, rows or skip list. A
    change to the cram order inside "Changing the notes or a sheet" (a row that quotes the changed
    fact) needs no run of it: that list's item 3 rebuilds the page once, and the rebuild takes in
@@ -298,8 +298,8 @@ One tab runs
 the cram night: any later session that resumes it first asks the student whether another tab still
 runs it, and if one does, stops before any commit, since two would commit each other's half-done
 steps (a step 8.4 that has deleted a mock's line but not yet moved its rows) and dispatch patches,
-or key recheck writers, twice. The next-step line stays `08 step 8, the cram night` while a mock is untaken, and STATUS's
-check (step 4's opening) uses the untaken mocks' keys only, none once all are taken: a miss logged
+or key recheck writers, twice. The next-step line stays `08 step 8, the cram night` while a mock
+is untaken, and STATUS's check (step 4's opening) uses the untaken mocks' keys only, none once all are taken: a miss logged
 after an attempt may state that mock's answer. From here the student is present: a question they
 ask, and any patch it prompts, runs `09-tutor` step 5 under this step's rules (hard rule 9), and a
 polish pass they ask for runs `10-polish` in this session, between attempts; steps 8.3 and 8.4 are

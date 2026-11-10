@@ -321,8 +321,9 @@ build is this build's end, not a stage's.
    `08-practice` step 7's item 3 says and step 7's items 1 and 2, rebuilding again when the audit
    changes a row (08's "Changing the notes or a sheet" item 3, whose ids come from the page); an
    untaken mock isn't edited (`08-practice` step 8.1's key gate rechecks its keys against this
-   source before the next attempt, from step 5's `done` line). The log marks each stage's end once its commit is made (`02 done`), each product's
-   (`page done`, `sheets done`, `cram order done`), and `step 4 done` after the last. Before
+   source before the next attempt, from step 5's `done` line). The log marks each stage's end once
+   its commit is made (`02 done`), each product's (`page done`, `sheets done`, `cram order done`),
+   and `step 4 done` after the last. Before
    `step 4 done`, that section's item 4 questions check prints QUESTIONS OK on the notes as they
    now stand (FB-191), so
    step 5's republish carries no hit. With no mock untaken, a sheet's change is shown to the

@@ -655,8 +655,8 @@ marks each against its key, so every failing part must be right before then. The
 main session's chat, so nothing you report may show a key: part ids only.
 
 - Done means: every part of {{THE UNTAKEN MOCKS}} the key checker fails rewritten from the new
-  values, in one commit on your branch (none when no part fails), and each mock's line from the key checker says KEY OK, a
-  `question` part left out of the run as Scope says.
+  values, in one commit on your branch (none when no part fails), and each mock's line from the
+  key checker says KEY OK, a `question` part left out of the run as Scope says.
 - The parts: run `python3 -I _build/verify/mock_key.py` first, before any change; each part it
   reports FAIL on. A part whose instance the new reference makes degenerate (an assert names it)
   would need fresh numbers: report it `question` and skip it as Scope says.
