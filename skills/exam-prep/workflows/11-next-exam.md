@@ -91,9 +91,9 @@ questions, each only when the reading left it open:
    Answers cells become `no, attempted YYYY-MM-DD`).
 3. Missing sources (question 3).
 4. This exam's rules (question 4): date, time, length, sheet, calculator, book, question types.
-5. The review page, the one part of question 5 asked per exam, only when this exam allows no sheet
-   (question 4): offer the condensed review page and, on a yes, its length in printed pages
-   (`00-intake` question 5, FB-143). A reopen asks it even when the finished exam had one, and even
+5. The Review view, the one part of question 5 asked per exam, only when this exam allows no sheet
+   (question 4): offer the notes page's Review view and, on a yes, its minutes of reading
+   (`00-intake` question 5, FB-143), for PLAN.md's `Review view:` line. A reopen asks it even when the finished exam had one, and even
    when the reading settled the rest.
 
 Question 5's sheet preferences are the profile's, never asked again. The plan shows these defaults,
@@ -133,9 +133,9 @@ Draft all three in `<root>`, as `00-intake` step 4 does, before showing anything
   exam's slug (`exam2`, never the finished exam's) and, first in its Decisions, the line
   `- Reopened from <old exam> (tag exam/<old-slug>): every stage also follows 11-next-exam's "The
   build on a reopened hub" (the student)`. That line routes a draft here and tells a resumed build
-  what differs. Its `Review page:` line is this exam's: `none: a sheet is allowed`, or the review
-  page and its length from question 5, or `none: the student declined it`, and its Deliverables
-  and 07 rows follow it.
+  what differs. Its `Review view:` line is this exam's: `none: a sheet is allowed`, `<N> minutes
+  of reading` from question 5, or `none: the student declined it`, and its Deliverables and 07
+  rows follow it.
 
 Then `00-intake` steps 5 and 6: audit the plan, show it with the scope rows and the exam facts,
 and refine it. Show also what step 5 will do: the files it archives and the template copies it
@@ -152,9 +152,10 @@ In this order, each item logged as it lands:
    `practice/<old-slug>/`: every `practice/mock-*.md` (the keys and `mock-values-key.md` among
    them), `practice/cram-order.md`, `_build/verify/mock_key.py`, `_build/mock-plan.md` and each
    `_build/mock-<slug>.html`; and into `cheatsheet/<old-slug>/`: every file of its sheets (`.html`,
-   `.pdf`, `.tex`, `.layout.json`) and `_build/sheet-outline.md`, and, with no sheet allowed, the
-   condensed review page's root `_build/review/` as `cheatsheet/<old-slug>/review/` (`git mv` the
-   directory; `07-cheatsheet` builds the next exam's afresh). Move STATUS's attempt, miss and
+   `.pdf`, `.tex`, `.layout.json`) and `_build/sheet-outline.md`. The Review view's tags were the
+   finished exam's: take each `.rv` marker out of `notes/` and each class `rv` out of
+   `_build/frag/`, the blocks kept (`07-cheatsheet` tags this exam's afresh, and `assemble.py`
+   refuses a tag while PLAN.md's line says `none`). Move STATUS's attempt, miss and
    final-sheet lines into `practice/<old-slug>/attempts.md`. Then the listing shows none of them at
    the top level (`practice/tutor/` and `_build/verify/set_key.py` stay: they are the course's
    homework). Why: every rule that finds the current exam's mocks, keys and sheets reads a top-level
@@ -186,10 +187,10 @@ In this order, each item logged as it lands:
    skill's own changes from a hub-local edit; hubs never keep their own copy.
 3. **Reset STATUS.** Take out every line about the finished exam's build, mocks, sheets and cram
    night: `Stage 08 built`, `Reopened build:`, `Tutor:`, `Polish:`, `Source added:`, `Skip asked:`,
-   the final-sheet items, a mock sheet logged as changed or to print again, a part logged for a
-   recheck (item 1 moved the attempts). An `Unverified:` line stays: its material is still unchecked
+   the final-sheet items, a mock sheet logged as changed or to print again, a key recheck's part
+   ids (item 1 moved the attempts). An `Unverified:` line stays: its material is still unchecked
    ("A source added unverified"). Keep the notes page's URL line (same URL from here on), and add
-   the finished exam's sheet, review page and mock page URLs to the `Earlier exams:` line (start it
+   the finished exam's sheet and mock page URLs to the `Earlier exams:` line (start it
    when there is none), as `<old exam>: <name> <URL>, ... (tag exam/<old-slug>)`. Set the
    next-step line to `11 step 6, launch the build for <exam> (_build/logs/reopen-<old-slug>.md)`.
 4. **The approval line, last**, as `00-intake` step 7 item 3 says. Commit, staging the archive's
@@ -237,7 +238,7 @@ check the references by hand and rebuild `notes/combined.md` from the section fi
 | 04 | Writers for the new sections only, each brief carrying the `## Patterns` lines of `_build/logs/tutor.md` (where this student stalled before). The main session writes a new subsection in an old section itself, in the Write brief's Format, adds its Must-know line, and updates any text that names the moved Must know by number. It banners what each cut line names, `> **Not on <exam>:** <why, cited>`, at the top of a whole section or at the subsection, and judges each old `Not on <old exam>` banner: material this exam covers loses it, material still out gets this exam's name, and one inside a section-level banner goes. In a section cut only in part, its Must-know lines follow `10-polish` step 3's rule for a cut: a line that names only cut material goes, one that names cut and kept material is reworded to the kept part (a section cut whole keeps its list, under its banner). `linkcheck.py` over everything. |
 | 05 | The checker grows: this exam's examples added, the self-test extended to its sets' official parts, every old assertion kept. Reviewers read the new sections and subsections and any old text that changed beyond a banner. |
 | 06 | The exam-day map is rewritten from this exam's How it's tested rows (a shape on cut material stays out, as `06-site` step 4 says). The whole page is rebuilt and checked, then republished to the notes URL STATUS holds (`06-site` step 6, its live read first), its version bumped. |
-| 07 | This exam's sheets, `cheatsheet/<exam-slug>-mock.html` and on, from the template, never from the archived ones. With no sheet allowed, the condensed review page when PLAN.md's `Review page:` line holds one, built afresh in `_build/review/` as `07-cheatsheet`'s "The condensed review page" says (step 5.1 archived the finished exam's), never from the archived one. When this exam covers an earlier exam's material, `diff` each archive's mock and final sheets (`cheatsheet/<slug>/`, every earlier exam's): the lines a final sheet added are the student's earlier misses, and each in this exam's scope is a candidate at step 2's picking. |
+| 07 | This exam's sheets, `cheatsheet/<exam-slug>-mock.html` and on, from the template, never from the archived ones. With no sheet allowed, the Review view when PLAN.md's `Review view:` line gives minutes, tagged afresh as `07-cheatsheet`'s "Tag the review" says (step 5.1 took the finished exam's tags off). When this exam covers an earlier exam's material, `diff` each archive's mock and final sheets (`cheatsheet/<slug>/`, every earlier exam's): the lines a final sheet added are the student's earlier misses, and each in this exam's scope is a candidate at step 2's picking. |
 | 08 | A fresh `_build/mock-plan.md`, `_build/verify/mock_key.py` from the template, mocks under this exam's slug, and a fresh cram order whose skip list names the old material the cut lines name, and whose Out of time line leaves out the sections cut whole. When this exam covers an earlier exam's material, step 3.4 also compares each clone with every archived mock (`practice/<slug>/mock-<slug>.md`, listed and read by path, never a key), so a new mock doesn't reuse an instance the student has already seen answered. |
 | 09, 10 | As written. The tutor log goes on, its old sections kept. |
 
@@ -265,7 +266,7 @@ build is this build's end, not a stage's.
 1. **Check.** As `10-polish` step 1 says: `05-verify` done (and `06-site` with a page), no `Build
    running` line, the hub free, and whether a mock is untaken. While one is, `08-practice` step 8's
    fence binds this session and every agent it spawns: searches only in `notes/`, `cheatsheet/`,
-   `_build/frag/`, `_build/review/` and `_build/extract/`, nothing opened under `practice/` but
+   `_build/frag/` and `_build/extract/`, nothing opened under `practice/` but
    the cram order (and 08 step 8's one exception, its step 4's rerun clause), never `_build/verify/mock_key.py` or
    `_build/mock-plan.md`; each brief it spawns keeps its own scope and adds: nothing opened under
    `practice/`, no `_build/verify/mock_key.py` or `_build/mock-plan.md`, and no search over the hub
@@ -306,18 +307,19 @@ build is this build's end, not a stage's.
    this build. A placement that differs from the report's is logged, for step 5's report. Then
    `05-verify` on the new material, then the products as `10-polish` step 3's widening says, each
    the hub has, rebuilt and rechecked as `08-practice`'s "Changing the notes or a sheet" items 2 to
-   4 say (the one list of the published products and what a change does to each: the notes page,
-   the review page, each sheet, the cram order and the page's cram copy, and the checks), each
+   4 say (the one list of the published products and what a change does to each: the notes page
+   with its Review view and the map's cram block, each sheet, the cram order, and the checks), each
    product's republish left to step 5. What is this path's own: on the page, `06-site` step 1's
    chassis exam line refilled from MANIFEST.md and its `.lede` reworded when it names the scope,
    as `10-polish` step 3 does, step 2's step-throughs, made for a figure 03 shortlisted and rerun
    when 03 or 05 changed the checker, and step 4's exam-day map when 03 added How it's tested rows;
-   the cram order taking the material as a row in its last tier, then `08-practice` step 7's item 3
-   too (the audit for the new row), its item 4 after the page's own rebuild; an untaken mock isn't
-   edited. The log marks each stage's end once its commit is made (`02 done`), each product's
-   (`page done`, `sheets done`, `review page done`, `cram order done`), and `step 4 done` after
-   the last. Before `step 4 done`, that section's item 4 questions check prints QUESTIONS OK on
-   the notes and the review page as they now stand (FB-191), so
+   the cram order taking the material as a row in its last tier, audited as `08-practice` step 7's
+   item 3 says before the notes page's rebuild, which then renders the row into the map; an untaken
+   mock isn't edited (`08-practice` step 8's key recheck writer checks its key once this path
+   ends). The log marks each stage's end once its commit is made (`02 done`), each product's
+   (`page done`, `sheets done`, `cram order done`), and `step 4 done` after the last. Before
+   `step 4 done`, that section's item 4 questions check prints QUESTIONS OK on the notes as they
+   now stand (FB-191), so
    step 5's republish carries no hit. With no mock untaken, a sheet's change is shown to the
    student before it is made (FB-137). While one is, every change to the notes or a sheet runs
    `08-practice`'s "Changing the notes or a sheet" with the untaken mocks' keys, its item 4
@@ -430,8 +432,8 @@ fresh session answers from STATUS, then runs step 7.5.
    reply's only line asks for /clear, and type it before reading anything above that line.` The
    student stays away until the look-back (item 6), and `08-practice` step 8's fence binds this
    session: it opens no untaken mock's key, `practice/mock-values-key.md` or
-   `_build/verify/mock_key.py`, and searches only `notes/`, `cheatsheet/`, `_build/frag/`,
-   `_build/review/` and `_build/extract/`. Then check as "A source added" step 1 does: `05-verify`
+   `_build/verify/mock_key.py`, and searches only `notes/`, `cheatsheet/`, `_build/frag/` and
+   `_build/extract/`. Then check as "A source added" step 1 does: `05-verify`
    done (and `06-site` with a page), no `Build running` line, the hub free, the tree clean but for `_build/logs/` and
    `practice/tutor/`; note `git rev-parse HEAD`. A check that fails is told to the student, and
    the addition waits for it. Pick the doc's id now, a new one as `01-ingest` gives (none reused):
@@ -454,8 +456,8 @@ fresh session answers from STATUS, then runs step 7.5.
    know list, as the Format says, and a subsection in an old section adds no line to that
    section's Must know. In `_build/backbone.md` each new heading and its id go in, at the same
    place (and the moved Must know's number), so later material numbers from them. Nothing else
-   changes: no coverage-matrix, How it's tested or worked-example row, nothing on a sheet, the
-   review page, a mock, the cram order or the map; a request for one waits until the material is
+   changes: no coverage-matrix, How it's tested or worked-example row, nothing on a sheet, no `.rv`
+   tag, nothing in a mock, the cram order or the map; a request for one waits until the material is
    verified.
    - The material opens with `> **Unverified:** added <date> from <doc> without extract or review,
      at the student's request; quoted values unchecked.` (CONVERT.md makes it a `callout warn`
