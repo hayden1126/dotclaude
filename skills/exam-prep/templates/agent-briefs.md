@@ -591,12 +591,13 @@ student reads the main session's chat, so nothing you report may show a key: par
   each wrong one's key fixed, in one commit on your branch, and each mock's line from the key
   checker says KEY OK, a `question` part left out of the run as Scope says.
 - Artifact path: your branch, in your worktree of {{ROOT}}.
-- Report: end your reply with the JSON block (status, summary, artifacts, blocked_actions), with
-  artifacts[0] `<branch>@<sha>`. The summary lists, per mock, each part id you checked and one
-  word for it: `changed`, `unchanged`, or `question` (the question itself would need rewording).
-  A `blocked` report names what stopped you without a value: a part id, and the file or check.
-  Nothing else: no key text, value, verdict, witness or working, in the summary, the JSON or the
-  commit message.
+- Report: your whole reply is the JSON block (status, summary, artifacts, blocked_actions), with
+  no text before or after it: you run in the background, and your reply reaches the student's
+  chat as its completion notice. artifacts[0] is `<branch>@<sha>`. The summary lists, per mock,
+  each part id you checked and one word for it: `changed`, `unchanged`, or `question` (the
+  question itself would need rewording). A `blocked` report's summary and blocked_actions name
+  what stopped you by part id and file name only. Nothing else, in the reply or the commit
+  message: no key text, value, verdict, witness or working.
 
 ## Scope
 - Work in: your worktree of {{ROOT}}. Write only `practice/mock-<slug>-key.md` for the slugs
@@ -629,7 +630,8 @@ student reads the main session's chat, so nothing you report may show a key: par
 step 5 rerun changed the reference, and the parts of an untaken mock the key checker now fails need
 their answers rewritten from the new values; there is no staff text and no section list). Replace
 the title, Purpose, the End state's "Done means" line, and the Scope's staff-answers and parts
-lines with the text below, and end the commit subject `after a reference change`:
+lines with the text below, and end the commit subject `after a reference change`. The Report line
+stands as it is: the whole reply is the JSON block, part ids and file names only.
 
 ```text
 # Brief: rewrite the untaken {{EXAM}} mock keys' parts the changed reference fails

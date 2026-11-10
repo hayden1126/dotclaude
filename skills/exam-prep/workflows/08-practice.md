@@ -296,7 +296,9 @@ and offers the checks it held (`09-tutor` step 1's Patches and Waiting checks bu
     step 4's item 4 now fails), fixes each one's key as step 4 says (a computed answer copied from
     the new values), reruns step 4's items 2 and 4, and reports part ids, each `changed`,
     `unchanged` or `question`, never key text: this session's chat is the student's, so no answer
-    reaches it. A `question` part (the question itself would need rewording, which the writer may
+    reaches it. Its whole reply is the brief's JSON block, no text before or after it (a
+    background agent's reply reaches this chat as its completion notice), and its summary and
+    blocked_actions name part ids and file names only, never a value. A `question` part (the question itself would need rewording, which the writer may
     not do) goes into `mock_key.py`'s `SKIP`, so KEY OK still holds every other part; the main
     session merges the rest and puts the skip on that mock's cram order line: skip the part and
     score out of the points left, as a scope cut does (`10-polish` step 3).
