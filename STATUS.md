@@ -91,12 +91,21 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     - Design notes: [[dotclaude-tab-bar]], [[dotclaude-remote-paste]], `PLAN.md` ("Next: a
       device-wide mute").
   - **Live lanes** (briefs in each record). Merge order (Hayden's picks,
-    2026-11-07 and 2026-11-08): 0 demo-av PR 4 (demo content planning in `demo-first-scope`,
+    2026-11-07, 2026-11-08 and 2026-11-10): 0 exam-prep #183 (`fix/exam-prep-round2`, opened
+    2026-11-10: fixes from the last sessions that used the skill, list approved by Hayden). Hayden,
+    2026-11-10: it "may merge and install early", so before Nov 16 and inside the freeze too, and
+    picked "Exam-prep first" over waiting for demo-av #180; demo-av then merges main and reinstalls
+    from its branch on his OK. 0b demo-av PR 4 (demo content planning in `demo-first-scope`,
     captions on by default, `demo-video` no longer manual-only; merged and installed by Nov 11,
-    else after Nov 15; carries the lead's notes). After Nov 15: 1 practices (Keep open, its next
+    else after Nov 15). After Nov 15: 1 practices (Keep open, its next
     PR; carries the lead's notes, told when), 2 verify-app (`feat/verify-app`, the
     launch-and-check skill template, proved on shodo), 3 demo-av's music, transitions and
-    footage PR (its PR 3). All change README.md or may.
+    footage PR (its PR 3), 4 guards (`fix/lane-guards`, opened 2026-11-08, Hayden's three picks; it
+    changes `hooks/practices_check.py` as lane practices does), 5 stop-check (`fix/idle-stops`,
+    opened 2026-11-09 on Hayden's "open lane now": a Stop hook so lane sessions stop only on
+    something they wait for, and `lane ls` marking stalled lanes; it changes settings.json and
+    the lanes skill, as guards does; draft #182). Guards, practices and stop-check parked 2026-11-09
+    (pushed, waiting their turn). All change README.md or may.
     The backlog items these lanes took keep their full text in `git show 617d244:STATUS.md`.
     **Install freeze on HAYPC, Nov 12 through Nov 15** (Hayden, 2026-11-05): no lane installs in
     that window, except fixes for lane hackathon, so the event runs what the dry run tested. The lead's
@@ -181,12 +190,43 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
   - Once pushed, a lane merges `origin/main` into its branch, since force pushes are denied.
 
   Backlog:
+  - **Guards for general skills that sessions skip, and a kept-open lane idling after its merge:**
+    in lane guards (2026-11-08). Evidence for the guards, capella-studio session af16c38c's audit:
+    `long-runs` triggered in 12 sessions and loaded in 5, `coding-practices` 9 and 2, while
+    step-bound `release` loaded 8 of 9 (regex triggers, a rough count).
+  - **`lane sync-main` refuses on paths `git status` doesn't report** (capella-studio session
+    af16c38c, 2026-11-08; not reproduced here). `lane sync-main 428` listed gitignored paths and
+    empty dirs as untracked and stopped, so that lead used `git merge --ff-only origin/main`,
+    after proving the merge with `gh pr view`. Not picked yet; lower priority (`skills/lanes/scripts/lane`).
+  - **`lane lock --wait` is not first come, first served** (capella-studio session af16c38c,
+    2026-11-09; confirmed in the code): `take_lock` polls `flock(LOCK_NB)` every 50 ms, and a new
+    `lane lock` tries at once, so a fresh caller can beat a waiter that queued an hour earlier. Seen:
+    a `--wait 5400` waiter from 23:46 UTC lost the `quiet` lock three times to commands started
+    later (one in the second the previous holder released). A long wait can starve to its
+    timeout. Fix shape: a ticket queue (a waiter writes a ticket, and only the oldest live ticket
+    may take the lock; a fresh caller queues behind it). Not picked yet; a lane after Nov 16.
+  - **excluded-guard rule 1 blocks `ed-pull` in a nested exam-prep hub** (reported 2026-11-09 by a
+    session outside dotclaude, d0396fce): the exam-prep convention keeps a hub as its own git repo
+    inside the course repo, and the skill runs `ed-pull` from the hub root, so rule 1 refuses it
+    ("not the project's" repository) from a session launched in the course repo. A bare `lane addr`
+    from that cwd is refused the same way. `ed-pull` runs no git and writes only under
+    `./sources/ed` (`python3 -I`), so rule 1 guards nothing for it. Fix shape (lead's pick): a
+    carve-out like `lane addr --repo`'s for heads that run no git, with a test that `git` and bare
+    `lane` from a nested repo stay refused. Workaround: `! ed-pull ...`, or a session opened in the
+    hub. Not picked yet; a lane after Nov 16.
+  - **Model and effort routing** (Hayden's interview, 2026-11-08, paused on his word, not ended):
+    private VISION.md at `~/scratch/model-router/` with the research, his usage counts and the
+    lead's proposals (gates by script with a model only on red, high as the everyday effort,
+    effort set per subagent by the workflow). `/interview` resumes it. Possible next work he
+    named: a Shodo revamp, launching it on mysite, a mysite revamp.
   - **Tray** (Hayden, 2026-11-08): a Claude Code mod pane beside each session holding what
     waits on Hayden and the info to act on it (copy a file's contents or a note, a check Claude
     runs at its next wake), sorted by step, kept by Claude, surviving `/pass`, so replies stop
     reprinting the "Waiting on you" list. Interview ended 2026-11-08; its VISION.md (v1 and v2
     scope, open problems) is private, in Hayden's scratch (`session-panel`). Next: a lane after
-    Nov 16, opening with a spike of the mod pane; v1 runs in the lead's tab first.
+    Nov 16, opening with a spike of the mod pane. Hayden, 2026-11-09: v1 also shows lanes' items
+    in the lead's tray (one record per item, under the lane, shown in both views), so v1 runs in
+    the lead and its lanes from the start.
   - **demo-video upgrade:** in lane demo-av (2026-11-07).
   - **`run_turn` counts dying processes as strays** (medium; found by lane license's trial,
     2026-11-07; lane practices owns the fix, in its next PR): `tests/practices/run.py`'s
@@ -441,22 +481,26 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     (ask where); the tray interview has ended (`~/scratch/session-panel/VISION.md`, built after
     the hackathon, the Backlog's Tray item).
   0. Live lanes: `lane ls`; state in their records (2026-11-08: practices and demo-av kept open,
-     verify-app parked until practices merges; unpark it then to merge main and rerun its trial). #178 merged and is installed from main; lanes hackathon,
+     verify-app parked until practices merges; unpark it then to merge main and rerun its trial; at that merge, after demo-av PR 4, resolve the `skills/` row in README and add `captions.mjs: "// "` to the RECORDERS dict in `tests/setup/test_license_notices.py`, per demo-av 2026-11-08). #178 merged and is installed from main; lanes hackathon,
      merge-record, env-names, license, mocks and speed closed 2026-11-07. Hayden's leftover asks from lane deny-rules
      (an overlay paste plus a setup rerun, probe leftovers, local tool cleanups): its closed
      record. Demo-av PR 4 merges and installs by Nov 11, else after Nov 15; nothing else before Nov 16. Install freeze Nov 12 through Nov 15. A chain that
      stops before its "main moved" step still tells the lanes, and arms a wake on the blocker
      (`skills/lanes/SKILL.md`). Demo-av PR 4 (demo content planning, captions, `demo-video` no longer manual-only):
      captions drop out if not reviewed clean by midday Nov 10; Hayden let captions change
-     `record.mjs` (lead's disagreement logged: riskiest change before the event); a fresh Shodo
-     demo test runs after its install, before Nov 12. The empty read-only `.git/config.lock`
+     `record.mjs` (lead's disagreement logged: riskiest change before the event); the Shodo
+     demo now runs before #180's merge, and its fixes ride in #180 (Hayden's pick, 2026-11-08: voice
+     recording goes through an editor such as Clipchamp, no recorder code); the midday Nov 10 cutoff
+     applies to every code change in #180: the per-beat subtitle position and voice.mjs's `timed`
+     part (2026-11-09); a miss drops the change, and the Clipchamp path goes with `timed`. Layered
+     invideo editing (Hayden's pick) is in #180 if done by Nov 11, otherwise shipped without it. The empty read-only `.git/config.lock`
      seen 2026-11-08 00:35 is the known sandbox placeholder (see the note below on config
      rewrites); verify-app's `--set-upstream-to` failed on it, nothing else needs a config write
      before Nov 16. Open
-     with Hayden (repeat them in each reply's Waiting list until answered): try `/interview` in
-     the prep repo named in [[dotclaude-hackathon-mode]]; rehearse reaching this machine from another
-     network by Nov 12; the event's local-lead email (not sent as of 2026-11-06); by Nov 12 who
-     presents (his teammates want the skills, 2026-11-06). Before each post-merge chain, run DA15's
+     with Hayden (repeat them in each reply's Waiting list until answered; `/interview` in the prep
+     repo tried 2026-11-10, Hayden: "interview skill is good"): rehearse reaching this machine from another
+     network by Nov 12; the event's local-lead email (not sent as of 2026-11-06); who presents is
+     settled later, possibly Hayden (his word, 2026-11-08; no longer a dated ask). Before each post-merge chain, run DA15's
      pre-check from the private FINDINGS rows, and its added checks before any sandbox-off fetch
      in this repo. Since #161, `lane new` runs only with the sandbox off. Since #156's install, a lone
      excluded call (gh, git push or fetch, lane) runs only from a repo's top.
@@ -560,4 +604,9 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
   loop-engineering inner loop; (b) cross-platform notifiers for the toast (YAGNI on WSL-only);
   (c) a CLAUDE.md nudge to create more native tasks (revisit only if a 4-6 step job with no tasks
   shows up); (d) scrubbing `HAYPC`, `hq` and `~/vault` from STATUS.md, `skills/delegation/SKILL.md`
-  and `BRIEF.md` (the post's code links pin `7ed72e9`, which already shows them).
+  and `BRIEF.md` (the post's code links pin `7ed72e9`, which already shows them); (e) a `/pass
+  clear` mode that types `/clear` and lets the model call `EnterPlanMode` instead of respawning
+  (Hayden dropped it 2026-11-08): plan mode would rest on the model's choice instead of the
+  launch flag `--permission-mode plan`, the model can't run `/clear` itself so `pass-respawn`
+  would still type it, and only a new process picks up a Claude Code upgrade, the model and
+  effort flags, sandbox env changes and MCP servers on the npx shim.
