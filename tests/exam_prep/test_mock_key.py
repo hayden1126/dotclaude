@@ -15,7 +15,9 @@ missing key (the values still written), no slugs, and a value() or reasoned() ca
 isn't one or whose part isn't a part id (swapped arguments print no value). A stop in values()
 prints an assert's message only when the assert is the checker's own, and an exit's or a
 print's never. A run that crashes keeps
-the last good values file."""
+the last good values file. SKIP leaves a part out (its value, its answer and an assert under
+skipped() aside, listed as skipped on the KEY OK line) while every other part is still checked,
+and a SKIP naming a slug or part the mocks lack fails."""
 import importlib.util
 import os
 import re
@@ -76,12 +78,15 @@ BODY = '''    from reference import closed_walks, degree4, dijkstra, edges
 '''
 
 
-def fill(body=BODY, mocks='["exam1"]'):
+def fill(body=BODY, mocks='["exam1"]', skip=None):
     with open(TEMPLATE, encoding="utf-8") as f:
         text = f.read()
     text, n = re.subn(r"    # ---- Fill in: import the reference.*?\n    pass\n", lambda m: body, text, flags=re.S)
     assert n == 1, "the template's fill-in block moved"
     assert "MOCKS = []" in text
+    if skip is not None:
+        assert "SKIP = {}" in text
+        text = text.replace("SKIP = {}", f"SKIP = {skip}", 1)
     return text.replace("MOCKS = []", f"MOCKS = {mocks}", 1)
 
 
@@ -160,6 +165,30 @@ class MockKey(unittest.TestCase):
         self.assertTrue(values.startswith("# KEY VALUES: "), values[:80])
         self.assertIn("> **STOP. Quarantined key.**", values)
         self.assertIn("## exam1\n\n- Q1(a): 6\n- Q1(b): 3\n- Q2(a): S A B C T, dist(T) = 7\n- Q3(a): 2\n", values)
+
+    def test_a_skipped_part_is_left_out_and_the_rest_still_checked(self):
+        # The key recheck writer's `question` part (08-practice step 8): its answer no longer
+        # matches, and even an assert on its instance fails, yet every other part holds.
+        self.edit("mock-exam1-key.md", "Answer: S A B C T, dist(T) = 7", "Answer: S A C B T, dist(T) = 7")
+        guarded = BODY.replace('    value("exam1", "Q2(a)"', '    if not skipped("exam1", "Q2(a)"):\n'
+                               '        assert False, "exam1 Q2(a): a tie"\n    value("exam1", "Q2(a)"')
+        rc, out = self.run_key(fill(guarded, skip='{"exam1": ["Q2(a)"]}'))
+        self.assertEqual(rc, 0, out)
+        self.assertNotIn("Q2(a)", out.replace("skipped: Q2(a)", ""))
+        self.assertEqual(out.strip().splitlines()[-1],
+                         "KEY OK: exam1: 3 of 9 parts asserted; reasoned: Q2(b), Q4(a), Q4(b), Q4(c), Q4(d); "
+                         "skipped: Q2(a)")
+        with open(self.out, encoding="utf-8") as f:
+            self.assertNotIn("Q2(a)", f.read())
+        # Every other part is still held to its value.
+        self.edit("mock-exam1-key.md", "**(a)** Answer: 6", "**(a)** Answer: 5")
+        self.fails("FAIL  exam1 Q1(a)", fill(guarded, skip='{"exam1": ["Q2(a)"]}'))
+
+    def test_a_skip_naming_no_part_of_the_mock_fails(self):
+        self.fails("exam1 SKIP NAMES Q9(a), NOT IN THE MOCK", fill(skip='{"exam1": ["Q9(a)"]}'))
+        for skip in ('{"exam2": ["Q1(a)"]}', '{"exam1": "Q1(a)"}', '{"exam1": ["7"]}'):
+            with self.subTest(skip=skip):
+                self.fails("SKIP: a key that isn't a slug in MOCKS", fill(skip=skip))
 
     def test_a_key_answer_that_differs_fails(self):
         self.edit("mock-exam1-key.md", "Answer: S A B C T, dist(T) = 7", "Answer: S A C B T, dist(T) = 7")

@@ -187,8 +187,8 @@ In this order, each item logged as it lands:
    skill's own changes from a hub-local edit; hubs never keep their own copy.
 3. **Reset STATUS.** Take out every line about the finished exam's build, mocks, sheets and cram
    night: `Stage 08 built`, `Reopened build:`, `Tutor:`, `Polish:`, `Source added:`, `Skip asked:`,
-   the final-sheet items, a mock sheet logged as changed or to print again, a key recheck's part
-   ids (item 1 moved the attempts). An `Unverified:` line stays: its material is still unchecked
+   the final-sheet items, a mock sheet logged as changed or to print again, a key recheck's
+   `Key recheck:` line and part ids (item 1 moved the attempts). An `Unverified:` line stays: its material is still unchecked
    ("A source added unverified"). Keep the notes page's URL line (same URL from here on), and add
    the finished exam's sheet and mock page URLs to the `Earlier exams:` line (start it
    when there is none), as `<old exam>: <name> <URL>, ... (tag exam/<old-slug>)`. Set the
@@ -315,8 +315,8 @@ build is this build's end, not a stage's.
    when 03 or 05 changed the checker, and step 4's exam-day map when 03 added How it's tested rows;
    the cram order taking the material as a row in its last tier, audited as `08-practice` step 7's
    item 3 says before the notes page's rebuild, which then renders the row into the map; an untaken
-   mock isn't edited (`08-practice` step 8's key recheck writer checks its key once this path
-   ends). The log marks each stage's end once its commit is made (`02 done`), each product's
+   mock isn't edited (`08-practice` step 8's key recheck checks its keys once this path ends: one
+   writer in the background for every staff answer this path took in, never two at once). The log marks each stage's end once its commit is made (`02 done`), each product's
    (`page done`, `sheets done`, `cram order done`), and `step 4 done` after the last. Before
    `step 4 done`, that section's item 4 questions check prints QUESTIONS OK on the notes as they
    now stand (FB-191), so

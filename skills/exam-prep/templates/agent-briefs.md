@@ -567,28 +567,33 @@ meanwhile and merges your branch when you report.
 
 ## Key recheck (stage 08, the cram night)
 
-Role: `writer`, spawned with `isolation: "worktree"` on the Agent call: it opens the untaken mocks'
-keys, which the cram night's session never opens, since the student reads that session's chat
-(`08-practice` step 8's opening, FB-159). One per new staff answer, once `11-next-exam`'s "A source
-added to this exam" has taken it into the notes; the next mock attempt waits for its merge.
+Role: `writer`, spawned with `isolation: "worktree"` and `run_in_background: true` on the Agent
+call: it opens the untaken mocks' keys, which the cram night's session never opens, since the
+student reads that session's chat (`08-practice` step 8's opening, FB-159). The student is told not
+to open its transcript. One per run of `11-next-exam`'s "A source added to this exam", once that
+path has taken the staff answers into the notes, covering every new staff answer it took in; never
+two at once (both rewrite `practice/mock-values-key.md`). STATUS holds `Key recheck: dispatched
+<branch>` until the merge, and the next mock attempt waits for it. The reference-change variant
+below serves `08-practice` step 4's rerun clause.
 
 ```text
-# Brief: recheck the untaken {{EXAM}} mock keys against a staff answer on {{TOPIC}}
+# Brief: recheck the untaken {{EXAM}} mock keys against staff answers on {{TOPICS}}
 
 ## Purpose
-Staff answered a question the night before the exam, and the notes now carry the answer. A mock key
-written before it may mark a right answer wrong. The student takes {{THE UNTAKEN MOCKS}} tonight
-and marks each against its key, so every part the answer touches must be right before then. The
+Staff answered questions the night before the exam, and the notes now carry the answers. A mock key
+written before them may mark a right answer wrong. The student takes {{THE UNTAKEN MOCKS}} tonight
+and marks each against its key, so every part the answers touch must be right before then. The
 student reads the main session's chat, so nothing you report may show a key: part ids only.
 
 ## End state
-- Done means: every part of {{THE UNTAKEN MOCKS}} the staff answer touches checked against it, each
-  wrong one's key fixed, in one commit on your branch, and each mock's line from the key checker
-  says KEY OK.
+- Done means: every part of {{THE UNTAKEN MOCKS}} the staff answers touch checked against them,
+  each wrong one's key fixed, in one commit on your branch, and each mock's line from the key
+  checker says KEY OK, a `question` part left out of the run as Scope says.
 - Artifact path: your branch, in your worktree of {{ROOT}}.
 - Report: end your reply with the JSON block (status, summary, artifacts, blocked_actions), with
   artifacts[0] `<branch>@<sha>`. The summary lists, per mock, each part id you checked and one
   word for it: `changed`, `unchanged`, or `question` (the question itself would need rewording).
+  A `blocked` report names what stopped you without a value: a part id, and the file or check.
   Nothing else: no key text, value, verdict, witness or working, in the summary, the JSON or the
   commit message.
 
@@ -596,18 +601,20 @@ student reads the main session's chat, so nothing you report may show a key: par
 - Work in: your worktree of {{ROOT}}. Write only `practice/mock-<slug>-key.md` for the slugs
   {{SLUGS}}, `practice/mock-values-key.md` (the key checker writes it) and
   `_build/verify/mock_key.py`.
-- The staff answer: {{THE STAFF TEXT, QUOTED, WITH ITS SOURCE}}. The notes sections it changed:
+- The staff answers: {{EACH STAFF TEXT, QUOTED, WITH ITS SOURCE}}. The notes sections they changed:
   {{§N.M LIST}}.
 - Read: `_build/MOCK.md` (the key format), each of those mocks and its key,
   `_build/verify/mock_key.py`, `practice/mock-values-key.md`, the notes and
   `_build/verify/examples.out.md`.
-- The parts: each part whose `Topic:` is a section the answer changed, and each part the key
-  checker now fails. Check each one's answer against the staff answer and the notes as they now
+- The parts: each part whose `Topic:` is a section an answer changed, and each part the key
+  checker now fails. Check each one's answer against the staff answers and the notes as they now
   stand.
 - Fix as `08-practice` step 4 says: a computed answer is copied from `practice/mock-values-key.md`
   after `python3 -I _build/verify/mock_key.py` writes it, never worked by hand; a reasoned answer
   is cited from the notes. Leave the mock files as they are: a part whose question would need
-  rewording is reported `question`, its key unchanged.
+  rewording is reported `question`, its key unchanged, and its part id goes into `SKIP` in
+  `_build/verify/mock_key.py` (`{"<slug>": ["Q2(a)"]}`, an assert about its instance under `if
+  not skipped(...)`), so the checker leaves it out and holds every other part to KEY OK.
 - Run the key checker from the worktree root, `python3 -I _build/verify/mock_key.py`, until each
   mock's line says KEY OK. Survey with `git status` and `git diff --stat` only, never a command
   that prints a diff, and commit with the subject `Keys: recheck {{SLUGS}} after a staff answer`.
@@ -615,6 +622,29 @@ student reads the main session's chat, so nothing you report may show a key: par
 - Out of scope: a taken mock's key, every subfolder of `practice/` (a finished exam's archive),
   `_build/verify/` but the files above (a change to the reference is the main session's: report
   it, blocked), `notes/`, `cheatsheet/`, `sources/`, and any search outside the files above.
+```
+
+**Reference-change variant** (`08-practice` step 4's rerun clause on the cram night: a `05-verify`
+step 5 rerun changed the reference, and the parts of an untaken mock the key checker now fails need
+their answers rewritten from the new values; there is no staff text and no section list). Replace
+the title, Purpose, the End state's "Done means" line, and the Scope's staff-answers and parts
+lines with the text below, and end the commit subject `after a reference change`:
+
+```text
+# Brief: rewrite the untaken {{EXAM}} mock keys' parts the changed reference fails
+
+## Purpose
+The reference that computes the mock keys changed ({{WHAT CHANGED, NO VALUE}}), so a key answer
+copied from the old values may now be wrong. The student takes {{THE UNTAKEN MOCKS}} tonight and
+marks each against its key, so every failing part must be right before then. The student reads the
+main session's chat, so nothing you report may show a key: part ids only.
+
+- Done means: every part of {{THE UNTAKEN MOCKS}} the key checker fails rewritten from the new
+  values, in one commit on your branch, and each mock's line from the key checker says KEY OK, a
+  `question` part left out of the run as Scope says.
+- The parts: run `python3 -I _build/verify/mock_key.py` first, before any change; each part it
+  reports FAIL on. A part whose instance the new reference makes degenerate (an assert names it)
+  would need fresh numbers: report it `question` and skip it as Scope says.
 ```
 
 ## Polish reader (stage 10)

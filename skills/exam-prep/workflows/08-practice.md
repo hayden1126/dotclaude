@@ -167,8 +167,8 @@ question to the cold solver again (step 5), and rerun step 6 from item 1 and, on
 exists, step 7's items 1 and 2. A change to a key alone reruns items 4 and 5, step 6 and step 7's
 item 2. A change to the reference at any later point (a `05-verify` step 5 rerun) reruns items 2
 and 4: a part whose value changed fails item 4, and its answer is rewritten from the new values.
-In step 8, a failing part of a mock not yet taken goes to the key recheck writer (step 8's
-opening), so its answer never reaches this session; for a taken mock, rewrite the answer from that
+In step 8, a failing part of a mock not yet taken goes to the key recheck writer, from its brief's
+reference-change variant (step 8's opening), so its answer never reaches this session; for a taken mock, rewrite the answer from that
 mock's section of the values file printed alone (`sed -n '/^## <slug>$/,/^## /p'
 practice/mock-values-key.md`), never the whole file.
 
@@ -275,23 +275,44 @@ and offers the checks it held (`09-tutor` step 1's Patches and Waiting checks bu
 - First, on a course with Ed, offer a re-pull, `ed-pull pull` (`01-ingest`, "Ed Discussion"): staff
   answer late questions the night before. A new staff answer that bears on the exam goes through
   `11-next-exam`'s "A source added to this exam", its `Source added:` STATUS line and source log
-  included. Then, while a mock is untaken, its keys: once that path ends, the main session spawns
-  one writer from `<skill>/templates/agent-briefs.md`, section "Key recheck", with `isolation:
-  "worktree"` on the call (load the delegation skill first). It opens each untaken mock's key,
-  finds the parts the answer touches (and any part step 4's item 4 now fails), fixes each one's
-  key as step 4 says (a computed answer copied from the new values), reruns step 4's items 2 and
-  4, and reports part ids, each changed, unchanged or `question` (the question itself would need
-  rewording, left as it is), never key text: this session's chat is the student's, so no answer
-  reaches it. A `question` part goes on that mock's cram order line: skip it and score out of the
-  points left, as a scope cut does (`10-polish` step 3). No
-  attempt starts until its branch is merged. On a `done` report whose branch changes only the
-  untaken mocks' files under `practice/` and `_build/verify/mock_key.py` (`git diff --no-renames
-  --name-status <hub branch>...<branch>`, file names only), `git merge --no-edit <branch>`, then
-  remove its worktree and branch as `09-tutor` step 5.5.3 does. Any other report merges nothing:
-  tell the student which mock's key waits, and dispatch it again. After the merge, what a change
-  to a key reruns (step 4's closing paragraph): step 4's items 4 and 5, step 6's item 2 and step
-  7's items 1 and 2, each with the untaken mocks' keys. Log in STATUS each mock's part ids and
-  what the report says of each.
+  included.
+- **The key recheck.** While a mock is untaken, every run of `11-next-exam`'s "A source added to
+  this exam" ends with it, this re-pull's or any other (a source the student brings), and so does
+  step 4's rerun clause for a changed reference: the main session never opens an untaken mock's
+  key, so one writer does, from `<skill>/templates/agent-briefs.md`, section "Key recheck" (the
+  staff-answer brief, or its reference-change variant), load the delegation skill first:
+  - One writer per path, covering every new staff answer that path took in (or every part the
+    changed reference fails), and never two at once: both rewrite `practice/mock-values-key.md`.
+    A path that ends while one runs waits for its merge, then dispatches its own.
+  - The Agent call carries `isolation: "worktree"` and `run_in_background: true`, and the session
+    tells the student not to open the writer's transcript: its Read and Edit calls show key text,
+    which a foreground subagent would print in this window.
+  - At the dispatch, STATUS gets `Key recheck: dispatched <branch>` (the worktree's branch the
+    Agent call names), committed; step 8.1 reads it, and the merge (or the removal below) strikes
+    it.
+  - The writer opens each untaken mock's key, finds the parts the answer touches (and any part
+    step 4's item 4 now fails), fixes each one's key as step 4 says (a computed answer copied from
+    the new values), reruns step 4's items 2 and 4, and reports part ids, each `changed`,
+    `unchanged` or `question`, never key text: this session's chat is the student's, so no answer
+    reaches it. A `question` part (the question itself would need rewording, which the writer may
+    not do) goes into `mock_key.py`'s `SKIP`, so KEY OK still holds every other part; the main
+    session merges the rest and puts the skip on that mock's cram order line: skip the part and
+    score out of the points left, as a scope cut does (`10-polish` step 3).
+  - No attempt starts until the branch is merged. On a `done` report whose branch changes only
+    `M` lines among the untaken mocks' `practice/mock-<slug>-key.md`, `practice/mock-values-key.md`
+    and `_build/verify/mock_key.py` (`git diff --no-renames --name-status <hub
+    branch>...<branch>`, file names only), `git merge --no-edit <branch>`, then remove its
+    worktree and branch as `09-tutor` step 5.5.3 does. On a conflict, or a merge git refuses,
+    `git merge --abort` as that step does, never resolving it here (its hunks are key text);
+    remove the worktree and the branch, strike the line, and dispatch again from the hub's head.
+  - Any other report merges nothing: remove the worktree and the branch as `09-tutor` step 5.5.1
+    does, strike the line, and tell the student which mock's key waits. A `blocked` report gets the main session's
+    fix first (a change to the reference as step 4's rerun clause says, say), then a dispatch
+    with the brief changed where the report says what stopped it; never a bare redispatch, which
+    stops the same way.
+  - After the merge, what a change to a key reruns (step 4's closing paragraph): step 4's items 4
+    and 5, step 6's item 2 and step 7's items 1 and 2, each with the untaken mocks' keys. Log in
+    STATUS each mock's part ids and what the report says of each.
 - Then the links: the notes page's URL from STATUS, whose top now holds the cram order (step 7.4),
   each mock page's URL, and the cram order's path. One line defines a tier: a block of reading rows
   with a minute budget, ranked by points per minute, read in order until time runs out.
@@ -325,8 +346,8 @@ step 3.4) and from any search over the hub root; the main session runs the other
 merge, as that step says.
 
 1. Before an attempt, no `10-polish` pass runs (STATUS has no `Build running` line), no notes
-   patch is open (`09-tutor` step 5, "One open patch") and no key recheck writer runs (this step's
-   opening), so a sheet either changed is logged, and the
+   patch is open (`09-tutor` step 5, "One open patch") and no key recheck writer runs (STATUS has
+   no unstruck `Key recheck: dispatched` line, this step's opening), so a sheet either changed is logged, and the
    log's pending lines are offered first, as `09-tutor` step 5.5.9 offers them (the patch now, or
    the mock first with them marked `held: mock first`); a mock sheet STATUS logs as changed is shown
    to the student, changes and all (FB-137), and printed again; with the LaTeX engine, the student
