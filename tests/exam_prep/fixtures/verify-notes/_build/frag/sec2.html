@@ -1,0 +1,29 @@
+<section class="note" id="sec-2">
+  <h2><span class="n">§2</span> Paths</h2>
+  <p>Breadth-first search finds a path with the fewest edges. It counts edges, as <a class="xref" href="#sec-1-rules">§1.2 Three counting rules</a> counts choices.</p>
+  <h3 id="sec-2-bfs">2.1 Breadth-first search</h3>
+  <p>BFS expands the shallowest node first <a class="slink">D2 p.7</a>. Ties go alphabetically <a class="slink">D2 p.8</a>.</p>
+  <ol class="steps">
+    <li>Put the start on the frontier.</li>
+    <li>Expand the frontier's first node and add its new neighbours.</li>
+    <li>Stop when the goal is expanded.</li>
+  </ol>
+  <figure id="fig-2-graph"><svg viewBox="0 0 320 120" role="img" aria-label="The graph S to A, S to B, A to G, B to G"><line x1="40" y1="60" x2="160" y2="20" stroke="currentColor"/><line x1="40" y1="60" x2="160" y2="100" stroke="currentColor"/><circle class="bx fill-surf" cx="40" cy="60" r="14"/><text x="40" y="64" class="mono">S</text></svg>
+  <figcaption>Fig 2.1. The graph of Worked example 2.1.</figcaption></figure>
+  <details class="callout example wex" id="ex-2-bfs">
+  <summary><span class="lab">Worked example 2.1</span><span class="wex-t">BFS from <code>S</code> to <code>G</code></span></summary>
+  <p>Setup: edges <code>S</code>-<code>A</code>, <code>S</code>-<code>B</code>, <code>A</code>-<code>G</code>, <code>B</code>-<code>G</code>; ties alphabetical.</p>
+  <ol class="steps"><li>expand <code>S</code>; the frontier is <code>A</code>, <code>B</code>.</li><li>expand <code>A</code>; the frontier is <code>B</code>, <code>G</code>.</li><li>expand <code>B</code>; <code>G</code> is on the frontier already.</li><li>expand <code>G</code>, the goal.</li></ol>
+  <div class="tbl-wrap"><table><thead><tr><th>Step</th><th>Expanded</th><th>Depth</th></tr></thead>
+  <tbody><tr><td>1</td><td><code>S</code></td><td>0</td></tr><tr><td>2</td><td><code>A</code></td><td>1</td></tr><tr><td>3</td><td><code>B</code></td><td>1</td></tr><tr><td>4</td><td><code>G</code></td><td>2</td></tr></tbody></table></div>
+  <p><strong>Result:</strong> visit order <code>S</code>, <code>A</code>, <code>B</code>, <code>G</code>; distance 2.</p>
+  <p><strong>Conclusion:</strong> BFS reaches <code>G</code> at distance 2, the fewest edges.</p>
+  </details>
+  <p class="connects"><strong>How it's tested:</strong> trace BFS and give the visit order. Practice: <a class="slink">HW2 Q3b</a>.</p>
+  <div class="callout warn"><div class="lab">Not on Exam 1</div><p>bidirectional search, past the scope cut <a class="slink">D2 p.20</a>.</p></div>
+  <h3 id="sec-2-must-know">2.2 Must know</h3>
+  <ol>
+    <li><strong>Order:</strong> shallowest first (<a class="xref" href="#sec-2-bfs">§2.1</a>)</li>
+    <li><strong>Ties:</strong> alphabetical (<a class="xref" href="#sec-2-bfs">§2.1</a>)</li>
+  </ol>
+</section>

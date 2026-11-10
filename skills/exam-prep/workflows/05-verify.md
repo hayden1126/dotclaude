@@ -41,13 +41,15 @@ Take the list `04-write` put in STATUS (`grep -n TODO-VERIFY notes/*.md` again).
 add a `value-<slug>` section to `examples.py` that computes it (a value a worked example prints is
 already there), rerun it, and copy the value from `examples.out.md` over the marker: a rerun then
 reproduces every number the notes print. Then compare every worked example in the notes, and
-every value filled from a `value-` section, with `examples.out.md`, by a small script
-(`_build/verify/compare_notes.py`: each example's numbers against its `ex-` section, and every
-order or path it prints, in order), never by eye: a number typed by hand has been wrong before
-(FB-101, L50). Before trusting the script, run it on a scratch copy of the notes with one
-example's number changed, again with two of its steps swapped, and again with two entries of a
-printed order or path swapped: it must fail all three (a first version passed a wrong number and
-a wrong visit order).
+every value filled from a `value-` section, with `examples.out.md`, by script, never by eye: a
+number typed by hand has been wrong before (FB-101, L50). Copy
+`<skill>/templates/compare-notes.py` to `_build/verify/compare_notes.py` and set its `FILLED` to
+each `value-` section and the notes file it filled. First `python3 -I
+_build/verify/compare_notes.py --self-test` must print `SELF-TEST OK`: it plants a changed number
+and a swapped visit order into a copy of the notes (a hand-written first version passed both).
+Then `python3 -I _build/verify/compare_notes.py` must print `NOTES MATCH`; each line it prints
+otherwise names the file and line, the subsection, the example and the values. It reads a trace's
+names only in backticks, as CONVERT.md keeps them.
 
 ## Step 3: Section reviewers
 
