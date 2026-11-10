@@ -55,7 +55,9 @@ the build fails when the view's words, read at READING_RATE words a minute, take
 minutes (both numbers printed); the map's cram block is left out of that count. `- Review view:
 none: <why>`, or no such line, strips the toggle and refuses any class rv. Class rv goes only on
 a worked example (details.callout.example.wex) or a Pitfall (div.callout.warn whose label is
-Pitfall), each directly inside its section.
+Pitfall), each directly inside its section, and never in a section whose Not on <exam> or
+Unverified banner comes before its first h3: the view leaves such a section out whole, its
+Must-know list and its words included.
 
 The cram block (K02): when practice/cram-order.md exists, it must pass cram_check.py against the
 assembled page's ids, and its tiers, rows, Skip line and Out of time line are rendered into a
@@ -115,6 +117,8 @@ KEY_TITLE = "Source key"
 # (CHASSIS.md says how math and code count).
 READING_RATE = 150
 REVIEW_LINE = re.compile(r"^- Review view:(.*)$")
+# A banner label that takes a section out of the Review view when it comes before the first h3.
+OUT_LABEL = re.compile(r"Not on \S.*|Unverified")
 TOGGLE = re.compile(r"<!-- REVIEW TOGGLE -->(.*?)<!-- /REVIEW TOGGLE -->", re.S)
 CRAM = os.path.join("practice", "cram-order.md")
 DEPTH = re.compile(r"(Know cold|Use|Recognize|Not on [^:]+): (\S.*)")
@@ -483,8 +487,22 @@ def label_of(node):
     return " ".join(text_of(lab).split()) if lab else ""
 
 
+def out_of_review(section):
+    """Whether a Not on <exam> or Unverified banner (div.callout.warn) before the section's first h3
+    takes the whole section out of the Review view, its Must-know list included (CHASSIS.md)."""
+    for k in section["kids"]:
+        if not isinstance(k, dict):
+            continue
+        if k["tag"] == "h3":
+            return False
+        if k["tag"] == "div" and {"callout", "warn"} <= classes_of(k) and OUT_LABEL.fullmatch(label_of(k)):
+            return True
+    return False
+
+
 def rv_problems(name, tree):
-    """Where class rv sits on anything but a worked example or a Pitfall directly in its section."""
+    """Where class rv sits on anything but a worked example or a Pitfall directly in its section, or
+    in a section a banner takes out of the Review view."""
     out = []
     for e in elements(tree.root):
         c = classes_of(e)
@@ -504,13 +522,20 @@ def rv_problems(name, tree):
         elif not (parent["tag"] == "section" and "note" in classes_of(parent)):
             out.append(f"{name}: an rv block inside <{parent['tag']}>: it sits directly in its section, "
                        "so the Review view can show it alone")
+        elif out_of_review(parent):
+            out.append(f"{name}: an rv block in §{parent['attrs'].get('id', '?').removeprefix('sec-')}, "
+                       "which a Not on <exam> or Unverified banner before its first h3 takes out of the "
+                       "Review view")
     return out
 
 
 def review_parts(section):
     """The elements of one section.note the Review view shows (CHASSIS.md; the chassis's script
     applies the same rule): its h2, each rv block, each h3 whose subsection holds one, and each
-    Must-know h3 (id ending -must-know) with the first list after it."""
+    Must-know h3 (id ending -must-know) with the first list after it; none of a section a banner
+    takes out (out_of_review)."""
+    if out_of_review(section):
+        return []
     shown, h3, must = [], None, False
     for k in section["kids"]:
         if not isinstance(k, dict):

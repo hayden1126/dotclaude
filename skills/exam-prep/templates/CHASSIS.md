@@ -38,7 +38,10 @@ the skill's.
   block (a worked example, rendered open, or a Pitfall: CONVERT.md's `.rv`), each `h3` whose
   subsection holds one, each Must-know `h3` (`id` ending `-must-know`) with the first list after
   it, the exam-day map and the source key, and hides the rest; one fixed line under the lede says
-  what the view is. Once the map has a cram block, sections and their rail entries take the order
+  what the view is. A section whose `Not on <exam>` or `Unverified` banner (`.callout.warn`) comes
+  before its first `h3` (a section cut whole, or an unverified section, which ends with its own
+  Must-know list) is left out whole, its Must-know list and rail entries included, and
+  `assemble.py` refuses an `rv` block in it; a banner further down hides only itself. Once the map has a cram block, sections and their rail entries take the order
   of each section's first row in it (CSS `order`; subsections keep theirs, and sections it names
   no row for follow in page order). A link to anything the view hides switches to Full notes, then
   jumps. With `- Review view: none: <why>` or no line, `assemble.py` strips the toggle (the

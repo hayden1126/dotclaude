@@ -22,7 +22,8 @@ moves MathJax's loader to its host; a long page whose rail scrolls the page with
 which cuts a long jump short in WebKit (C1); and --views on the mock page (its own class). The
 sample's Review view passes in every viewport, its shots named -review, with the long jump run
 there too; its page broken to show an untagged paragraph, hide an rv block or drop the Must-know
-list fails, and so does a link to a hidden target that doesn't switch to Full notes."""
+list fails, and so does a link to a hidden target that doesn't switch to Full notes; a section
+with an Unverified banner before its first h3 is hidden whole, and shown it fails."""
 import contextlib
 import importlib.util
 import io
@@ -413,6 +414,19 @@ class BrowserCatchesTest(unittest.TestCase):
         self.assertIn("the Review view hides h3#sec-1-sums", out)
         no_must = self.edit("if(must&&(tag==='ul'||tag==='ol')){ must=false; return; }", "")
         self.fails("rvmust", "the Review view hides ul", page=no_must)
+
+    def test_a_section_a_banner_takes_out_is_hidden_whole(self):
+        # An Unverified section (11-next-exam) ends with its own Must-know list: the view hides it all.
+        h2 = '<h2><span class="n">§2</span> Graphs</h2>'
+        page = self.edit(h2, h2 + '\n  <div class="callout warn"><div class="lab">Unverified</div>'
+                         '<p>Added without review.</p></div>')
+        r = self.verify("rvout", page=page)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("  review view shows its blocks and hides the rest", r.stdout)
+        rule = "if(outOfReview(sec)){ sec.classList.add('rvhide'); return; }"
+        self.assertEqual(page.count(rule), 1)
+        self.fails("rvoutshown", "the Review view shows section#sec-2.note, which its banner takes out",
+                   page=page.replace(rule, ""))
 
     def test_a_hidden_target_link_that_doesnt_switch_views(self):
         self.fails("rvlink", "hidden in the Review view, didn't switch to Full notes",

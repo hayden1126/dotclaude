@@ -405,9 +405,19 @@
   var picks=[].slice.call(document.querySelectorAll('.viewtog button[data-pick]'));
   var reviewOn=false;
   function shown(el){ return el.getClientRects().length>0; }
+  // a Not on <exam> or Unverified banner before a section's first h3 takes the whole section out
+  function outOfReview(sec){
+    for(var i=0;i<sec.children.length;i++){ var k=sec.children[i], lab;
+      if(k.tagName.toLowerCase()==='h3') return false;
+      if(k.classList.contains('callout')&&k.classList.contains('warn')&&(lab=k.querySelector('.lab'))
+         &&/^(Not on .|Unverified$)/.test(lab.textContent.replace(/\s+/g,' ').trim())) return true;
+    }
+    return false;
+  }
   if(picks.length){
     main.querySelectorAll('section.note').forEach(function(sec){
       if(sec.querySelector('tr[id^="src-"]')) return;  // the source key shows whole
+      if(outOfReview(sec)){ sec.classList.add('rvhide'); return; }
       var h3=null, must=false;
       [].slice.call(sec.children).forEach(function(k){
         var tag=k.tagName.toLowerCase();
@@ -429,7 +439,7 @@
     links.forEach(function(a){
       var t=document.getElementById(a.dataset.target), s=t&&t.closest('section.note');
       if(s) a.parentNode.style.order=order[s.id];
-      if(t&&t.classList.contains('rvhide')) a.parentNode.classList.add('rvhide');
+      if(t&&t.closest('.rvhide')) a.parentNode.classList.add('rvhide');
     });
   }
   function setView(v){

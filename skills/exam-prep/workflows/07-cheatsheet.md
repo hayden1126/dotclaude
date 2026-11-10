@@ -181,8 +181,9 @@ item 4's: untag from the last ranked subsection up, before anything else.
    N.K: title** {#ex-N-slug .rv}`, and the pitfall that goes with it, `> **Pitfall:** {.rv} ...`
    (`_build/CONVERT.md`'s `.rv`), until the budget is spent. Only a block directly inside its
    section takes the tag, never one inside a list, another callout, a `Not on <exam>` banner or an
-   `Unverified` callout: `assemble.py` refuses each. Must-know lists are always in the view,
-   untagged. No text is added: a subsection with no worked example or pitfall shows only through
+   `Unverified` callout, nor any block of a section whose banner comes before its first `h3` (cut
+   or unverified whole: the view leaves it out, Must-know list and all): `assemble.py` refuses
+   each. Must-know lists are otherwise always in the view, untagged. No text is added: a subsection with no worked example or pitfall shows only through
    its Must-know line.
 3. **The fragments.** Make the same edit in each `_build/frag/sec<N>.html`, class `rv` on the
    block as CONVERT.md maps it (or have the section converted again, `06-site` step 3), then

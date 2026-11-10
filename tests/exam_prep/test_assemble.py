@@ -19,8 +19,9 @@ and opens; with none, the map stays closed; a cram order failing cram_check (an 
 them), a row with no depth label or Markdown the map can't render, a hand-written cram block or an
 open attribute in examnav.html is refused. PLAN.md's `- Review view: <N> minutes of reading` keeps
 the toggle, `none` or no line strips it and refuses class rv; rv anywhere but a worked example or
-a Pitfall directly in its section, an unreadable line, and a view over its minutes are refused;
-the map's cram block is left out of the minutes.
+a Pitfall directly in its section, rv in a section whose Not on or Unverified banner comes before
+its first h3, an unreadable line, and a view over its minutes are refused; the map's cram block
+and a section such a banner takes out are left out of the minutes.
 The skill repo's synthetic sample hub, the source of the chassis's
 reference screenshots, is the template filled, links the skill's CHASSIS.md and assembles with
 every link resolved; with EXAM_PREP_PLAYWRIGHT set, its page also passes verify_page.mjs, run as a
@@ -770,6 +771,36 @@ class AssembleTest(unittest.TestCase):
         h = self.cram_hub(plan="- Review view: 4 minutes of reading\n", sec1=sec1, cram=None)
         rc, out = h.run()
         self.assertEqual(rc, 0, out)
+
+    def banner_sec1(self, label, must="x"):
+        """SEC1_MK with a label banner before its first h3, and its Must-know list holding must."""
+        return SEC1_MK.replace('<h3 id="sec-1-basics">', f'<div class="callout warn"><div class="lab">{label}'
+                               '</div><p>Kept for a later exam.</p></div>\n  <h3 id="sec-1-basics">') \
+            .replace("<ul><li>x</li></ul>", f"<ul><li>{must}</li></ul>")
+
+    def test_rv_in_a_section_a_banner_takes_out_refused(self):
+        plan = "- Review view: 5 minutes of reading\n"
+        for label in ("Not on Exam 1", "Unverified"):
+            with self.subTest(label=label):
+                sec1 = self.banner_sec1(label).replace('<div class="callout def">', RV_PITFALL + '<div class="callout def">')
+                self.assertRefused(self.cram_hub(plan=plan, sec1=sec1, cram=None),
+                                   "frag/sec1.html: an rv block in §1, which a Not on <exam> or Unverified banner")
+        # A banner after the first h3 (a subsection cut, a short unverified subsection) leaves the
+        # section in the view.
+        late = SEC1_MK.replace('<div class="callout def">', RV_PITFALL + '<div class="callout warn"><div class="lab">'
+                               'Unverified</div><p>y</p></div><div class="callout def">')
+        h = self.cram_hub(plan=plan, sec1=late, cram=None)
+        rc, out = h.run()
+        self.assertEqual(rc, 0, out)
+
+    def test_a_section_a_banner_takes_out_is_left_out_of_the_minutes(self):
+        long = "word " * 400
+        for label, ok in (("Unverified", True), ("Not on Exam 1", True), ("Pitfall", False)):
+            with self.subTest(label=label):
+                h = self.cram_hub(plan="- Review view: 2 minutes of reading\n", sec1=self.banner_sec1(label, long),
+                                  cram=None)
+                rc, out = h.run()
+                self.assertEqual(rc == 0, ok, out)
 
     def test_the_cram_block_is_left_out_of_the_review_views_minutes(self):
         # A page tagged up to its minutes still builds once 08 step 7 writes the cram order.

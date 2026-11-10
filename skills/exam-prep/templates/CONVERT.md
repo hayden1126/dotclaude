@@ -86,8 +86,9 @@ this one section: a figure placed outside it shifts every later section's accent
   class `rv` on the block itself, `<details class="callout example wex rv" id="ex-N-slug">` and
   `<div class="callout warn rv">`, and the block stays directly inside the section, never nested in
   a list or another callout. Nothing else takes it: not a `Not on <exam>` or `Unverified` callout,
-  a heading, a paragraph or a list (Must-know lists are always in the view, untagged).
-  `assemble.py` refuses class `rv` anywhere else, and on any block when PLAN.md gives the Review
+  a heading, a paragraph or a list (Must-know lists are in the view, untagged, unless a banner
+  takes their section out), nor a block in a section whose `Not on <exam>` or `Unverified` banner
+  comes before its first `###` (CHASSIS.md). `assemble.py` refuses class `rv` anywhere else, and on any block when PLAN.md gives the Review
   view no minutes; `fidelity.py` compares the marker like an id.
 - `**How it's tested:** ...`: `<p class="connects"><strong>How it's tested:</strong> ...</p>`.
 - `**Connects to:** ...`: `<p class="connects"><strong>Connects to:</strong> ...</p>`.

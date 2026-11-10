@@ -46,7 +46,7 @@
 // figures, which it hides, aside), its shots named <width>-<scheme>-review-..., and checks there
 // that the view shows exactly what CHASSIS.md says (every rv block, worked examples open, each h3
 // over one, each Must-know h3 and its list, the map, the source key, the fixed line) and hides the
-// rest, and that clicking a link to something it hides switches to Full notes and lands on it.
+// rest, a section with a Not on <exam> or Unverified banner before its first h3 whole, and that clicking a link to something it hides switches to Full notes and lands on it.
 // Then the long jump (CHASSIS.md, C1), at 390 and 1280 px with smooth scrolling on, in Chromium and
 // in WebKit (Safari's engine, where a page scroll the rail starts cancels the jump): from the top it
 // clicks the last rail entry (#toc a), from the bottom the first, the drawer opened first where the
@@ -213,6 +213,17 @@ for (const width of [390, 1280]) {
         const bad = [];
         for (const sec of document.querySelectorAll('#main section.note')) {
           if (sec.querySelector('tr[id^="src-"]')) { if (!vis(sec)) bad.push('hides the source key'); continue; }
+          // A Not on <exam> or Unverified banner before the first h3 takes the whole section out.
+          let out = false;
+          for (const k of sec.children) {
+            if (k.tagName.toLowerCase() === 'h3') break;
+            const lab = k.classList.contains('callout') && k.classList.contains('warn') && k.querySelector('.lab');
+            if (lab && /^(Not on .|Unverified$)/.test(lab.textContent.replace(/\s+/g, ' ').trim())) { out = true; break; }
+          }
+          if (out) {
+            if (vis(sec)) bad.push(`shows ${name(sec)}, which its banner takes out`);
+            continue;
+          }
           let h3 = null;
           let must = false;
           const want = new Map();
