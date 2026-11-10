@@ -8,15 +8,16 @@ student will reach for it mid-question (FB-141). When PLAN.md includes a mock (`
 this stage builds the mock sheet, `cheatsheet/<exam-slug>-mock.html`: it holds nothing derived
 from the mock and is the one published. The final sheet adds the mock-derived items after the
 attempt ("The final sheet" below, which 08 runs). Without a mock there is one sheet,
-`cheatsheet/<exam-slug>.html` (FB-133).
+`cheatsheet/<exam-slug>.html` (FB-133). With no sheet allowed, this stage tags the notes page's
+Review view instead ("Tag the review" below).
 
 ## Step 1: Check the inputs
 
 - CLAUDE.md's rules allow a sheet. Quote the rule in STATUS: its size, one side or two, whether it
-  is collected and whether it must carry a name (FB-130). Not allowed: when PLAN.md's Review page
-  line holds a condensed review page (intake offered it, FB-143), build that instead, as "The
-  condensed review page" below says, in place of steps 2 to 6. Otherwise skip this stage and log it
-  (as the build's last stage, or run alone, removing the `Build running` line).
+  is collected and whether it must carry a name (FB-130). Not allowed: when PLAN.md's `Review
+  view:` line gives minutes (intake offered it, FB-143), tag the review instead, as "Tag the review"
+  below says, in place of steps 2 to 6. Otherwise skip this stage and log it (as the build's last
+  stage, or run alone, removing the `Build running` line).
 - `05-verify` is done. The sheet derives from the notes and the checker's output
   (`_build/verify/examples.out.md`) only: never from a key, the mock, or a source MANIFEST marks
   `reserved`, and never an answer from a set it doesn't mark `yes, attempted`.
@@ -149,7 +150,7 @@ when it was built: it fills like any sheet. So the final sheet makes room for it
 
 ## After shipping
 
-- Any change to a shipped sheet or the review page, a fix or an addition, runs `08-practice`'s
+- Any change to a shipped sheet, a fix or an addition, runs `08-practice`'s
   "Changing the notes or a sheet", the one list of the published products and what a change does
   to each: the draft shown first (FB-137), every copy of the fact changed, the rebuild and its
   checks, the republish. During study Q&A a dispatched writer makes it (hard rule 9; `09-tutor`
@@ -159,47 +160,45 @@ when it was built: it fills like any sheet. So the final sheet makes room for it
 - Space a later scope cut frees stays blank for the final sheet's items. Check which sections it
   would help, list them in STATUS, and ask the student when they are next here (FB-140).
 
-## The condensed review page (no sheet allowed)
+## Tag the review (no sheet allowed)
 
 When the exam allows no sheet, the student still needs a recall layer shorter than the notes
-(FB-143). Its length is the number of printed pages PLAN.md's Review page line records (asked
-once, at intake). It
-derives from the verified notes and `examples.out.md` only, under step 1's rules for a sheet, and
-nothing on it is new teaching.
+(FB-143). It is the notes page's Review view (`_build/CHASSIS.md`): a Review / Full notes toggle
+whose Review view shows each section's Must-know list, the exam-day map and the blocks the notes
+tag `.rv`, and hides the rest. It copies nothing: this stage only tags worked examples and pitfalls
+the verified notes already hold. Its budget is PLAN.md's `- Review view: <N> minutes of reading`
+line, asked once, at intake. `assemble.py` counts the view's words at 150 a minute (`READING_RATE`,
+an unmeasured estimate for dense study notes) and fails the build when they take more than N
+minutes, printing both numbers.
 
-1. **Order and rows.** Cram-ordered: the sections in the order `08-practice` step 7 ranks them
-   (points per minute; before the cram order exists, the backbone's How it's tested weights). Each
-   row is one point: a worked example (fresh numbers from `examples.out.md`, S7) and the trap that
-   goes with it, its depth label (S33), and a link to its subsection on the notes page
-   (`<notes URL>#<id>`, the URL in STATUS). Cut rows from the last tier up until it fits the length.
-2. **The opening.** It says what the page is (a recall layer over the notes), what it leaves out
-   (proofs, background, anything under a `Not on <exam>` banner, any point it had no room for),
-   and when to go to the notes instead (a row that doesn't come back from memory, a point it
-   omits).
-3. **Build it on the notes chassis**, in a root of its own, `_build/review/`, laid out the way
-   `assemble.py` reads a hub: its Markdown in `_build/review/notes/NN-<slug>.md` (a file per tier),
-   a copy of `_build/chassis.html` and `_build/CHASSIS.md` in `_build/review/_build/` (its title,
-   heading and `.lede` refilled for the review page, the `.lede` holding the opening), each file
-   converted by the "Convert" brief (`06-site` step 3) into `_build/review/_build/frag/`, an
-   exam-day map fragment there too (`06-site` step 4), and a copy of `MANIFEST.md` in
-   `_build/review/` when it cites a source. Then `python3 -I <skill>/scripts/assemble.py --root
-   _build/review`, and `06-site` step 5's checks on `_build/review/_build/notes.html`. It is built
-   after `05-verify`, so `05-verify` step 5's questions check runs again here with its Markdown,
-   `_build/review/notes/*.md`, added to `--pages`, and prints QUESTIONS OK (FB-191). It has no
-   step-throughs (a row that needs one links to its figure on the notes page, and its fragments
-   keep no FIG marker), so `verify_page.mjs` runs on it without `--steps`, its shots in
-   `_build/shots/review/` (gitignored). Count its printed pages (a print to PDF of the page)
-   against the length.
-4. **Audit** with fresh reviewers, as step 5 audits a sheet (FB-105): every row against the notes
-   it links.
-5. **Publish** it privately, as `06-site` step 6 publishes the notes, its URL in STATUS, then
-   commit and hand off as step 6 does for a sheet (the `Build running` line removed in that commit
-   when this stage ends the build). A later change runs `08-practice`'s "Changing the notes or a
-   sheet", as "After shipping" says.
+1. **Rank the subsections.** Before the cram order exists, by the backbone's How it's tested
+   weights; once it exists (`08-practice` step 7), in its rows' order. A subsection under a `Not on
+   <exam>` banner, or one a MANIFEST.md topic cut takes out, has no rank.
+2. **Tag**, in that order, in the Markdown: per subsection one worked example, `> **Worked example
+   N.K: title** {#ex-N-slug .rv}`, and the pitfall that goes with it, `> **Pitfall:** {.rv} ...`
+   (`_build/CONVERT.md`'s `.rv`), until the budget is spent. Only a block directly inside its
+   section takes the tag, never one inside a list, another callout, a `Not on <exam>` banner or an
+   `Unverified` callout: `assemble.py` refuses each. Must-know lists are always in the view,
+   untagged. No text is added: a subsection with no worked example or pitfall shows only through
+   its Must-know line.
+3. **The fragments.** Make the same edit in each `_build/frag/sec<N>.html`, class `rv` on the
+   block as CONVERT.md maps it (or have the section converted again, `06-site` step 3), then
+   `06-site` step 3's `fidelity.py`, which compares the marker like an id.
+4. **Assemble and check**, `06-site` step 5, all of it. `assemble.py` enforces the budget: over
+   it, untag from the last ranked subsection up and rerun from item 3. `verify_page.mjs` checks and
+   shoots both views; look at the `-review` screenshots too. Since no text changes, `05-verify`
+   step 5's questions check needs no extra pages (FB-191), and there is no audit of copied text.
+5. **Republish** the notes page to its same URL, as `06-site` step 6 says, its version bumped on
+   its STATUS line as `08-practice`'s "Changing the notes or a sheet" item 5 does. Then commit and
+   hand off as step 6 does for a sheet (the `Build running` line removed in that commit when this
+   stage ends the build). A later change to the notes runs that list like any other: the view is
+   part of the notes page.
 
 ## Done when
 
 `check_pdf.py` passes on each sheet with every warning judged; the audit's findings are applied;
 the page images look right; the published sheet's URL is in STATUS (an HTML sheet); it is
-committed. Or, with no sheet allowed, the condensed review page when PLAN.md includes it: built,
-checked, audited, within its length, published privately with its URL in STATUS, and committed.
+committed. Or, with no sheet allowed, the Review view when PLAN.md gives it minutes: tagged in the
+notes and the fragments, `fidelity.py`, `assemble.py` (within the minutes), `linkcheck.py --html`
+and `verify_page.mjs` passing, both views' screenshots seen, the notes page republished to its URL,
+and committed.
