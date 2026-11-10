@@ -347,12 +347,7 @@ merge, as that step says.
      --format=%s <branch>`) is merged as a `done` report's is, but its `Key checked:` lines stay as
      they are (no report says what it checked), its `question` parts come from the run below (each
      mock's `KEY OK: ...; skipped: <ids>` line), and STATUS logs the report as lost. A recheck
-     writer's worktree with no commit of its own is removed as `09-tutor` step 5.5.1 does. An
-     older hub's unstruck `Key recheck: dispatched` line, from the flow before this gate, stands for
-     a running writer whose Agent call has no `Key recheck` description to find it by: the attempt
-     waits while `delegation-ledger watch` shows any live background agent, then the writer is
-     settled as above (its report, or with none its worktree), and only then is the line taken
-     out, committed.
+     writer's worktree with no commit of its own is removed as `09-tutor` step 5.5.1 does.
    - **Due or not.** Run, in this order, each with the untaken mocks' keys and printing part ids
      only: step 4's item 4, `python3 -I _build/verify/mock_key.py`, which adds no `Key checked:`
      line here; the leak checks of step 4's item 5, step 6's item 2 and step 7's item 2 (a hit
@@ -371,9 +366,7 @@ merge, as that step says.
      The order is git's, never the dates': a source added the day a mock was built
      is still after it. A mock with no `Key checked:` line (a hub built before the line existed)
      takes the sha of the commit that added `Stage 08 built`
-     (`git log -1 --format=%h -S'Stage 08 built' -- STATUS.md`), and such a hub's `Key recheck:
-     owed` line is taken out: the gate covers its causes (a `dispatched` one waits for its writer,
-     above). Not due: the gate passes.
+     (`git log -1 --format=%h -S'Stage 08 built' -- STATUS.md`). Not due: the gate passes.
    - **Spawn.** Commit everything uncommitted first (`git status` and `git diff --stat` only), as
      `09-tutor` step 5.4 does: a reference change and item 4's run leave the reference and
      `practice/mock-values-key.md` changed, and the writer's worktree starts from the hub's last

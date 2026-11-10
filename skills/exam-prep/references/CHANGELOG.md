@@ -105,8 +105,7 @@ evidence ids.
     to the writer's base (the head the session noted at the spawn, or the report's sha, never the
     current HEAD), so a `/clear`, a lost report or a failed merge leaves the check due with no
     state of its own; this replaced stored STATUS lines for a pending and a running recheck, which
-    review found could start a writer mid-build (an older hub's `owed` line is taken out at the
-    gate, and its `dispatched` line stands for a running writer until that writer is settled). One writer
+    review found could start a writer mid-build. One writer
     runs at a time, in the background with its transcript unopened, its whole reply the JSON block
     (part ids and file names only), spawned once everything uncommitted is committed, and a merge
     with no report takes its `question` parts from the key checker's skipped list. Such a leak
