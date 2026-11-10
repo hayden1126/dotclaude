@@ -34,7 +34,8 @@ would miss it), and stops, naming the file, at a mock or key that isn't UTF-8 te
 SKIP leaves named parts out of the run: a part whose question would need rewording, which the
 key recheck writer may not do (08-practice step 8), so KEY OK still holds every other part to its
 value. A skipped part's value() and reasoned() calls do nothing, it needs neither, its key answer
-isn't compared, and the KEY OK line lists it as skipped; an assert about its instance goes under
+isn't compared (the writer replaces it with a `Skipped tonight:` line, which no value would
+match), and the KEY OK line lists it as skipped; an assert about its instance goes under
 `if not skipped(slug, part):`. SKIP naming a slug not in MOCKS or a part the mock lacks fails.
 KEY OK prints only when the whole run passes. The terminal shows part ids, never an answer: the
 student may be watching. With no key written yet it still writes the values (NO KEY) and exits

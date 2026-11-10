@@ -16,7 +16,8 @@ isn't one or whose part isn't a part id (swapped arguments print no value). A st
 prints an assert's message only when the assert is the checker's own, and an exit's or a
 print's never. A run that crashes keeps
 the last good values file. SKIP leaves a part out (its value, its answer and an assert under
-skipped() aside, listed as skipped on the KEY OK line) while every other part is still checked,
+skipped() aside, listed as skipped on the KEY OK line, its answer the writer's `Skipped tonight:`
+line or any other) while every other part is still checked,
 and a SKIP naming a slug or part the mocks lack fails."""
 import importlib.util
 import os
@@ -183,6 +184,22 @@ class MockKey(unittest.TestCase):
         # Every other part is still held to its value.
         self.edit("mock-exam1-key.md", "**(a)** Answer: 6", "**(a)** Answer: 5")
         self.fails("FAIL  exam1 Q1(a)", fill(guarded, skip='{"exam1": ["Q2(a)"]}'))
+
+    def test_a_skipped_parts_answer_replaced_by_the_skip_line_passes(self):
+        # The key recheck writer replaces a `question` part's answer with a fixed line and deletes
+        # its working (agent-briefs.md, "Key recheck"): the checker never compares it.
+        self.edit("mock-exam1-key.md",
+                  "Answer: S A B C T, dist(T) = 7\n\nS 0; A 2; B 3 through A; C 4 through B; T 7 through C ([L3 p.5]).\n",
+                  "Answer: Skipped tonight: exam1 Q2(a) needs rewording.\n")
+        guarded = BODY.replace('    value("exam1", "Q2(a)"', '    if not skipped("exam1", "Q2(a)"):\n'
+                               '        value("exam1", "Q2(a)"')
+        rc, out = self.run_key(fill(guarded, skip='{"exam1": ["Q2(a)"]}'))
+        self.assertEqual(rc, 0, out)
+        self.assertEqual(out.strip().splitlines()[-1],
+                         "KEY OK: exam1: 3 of 9 parts asserted; reasoned: Q2(b), Q4(a), Q4(b), Q4(c), Q4(d); "
+                         "skipped: Q2(a)")
+        # Unskipped, the same key fails on that part: the line is no answer.
+        self.fails("FAIL  exam1 Q2(a)")
 
     def test_a_skip_naming_no_part_of_the_mock_fails(self):
         self.fails("exam1 SKIP NAMES Q9(a), NOT IN THE MOCK", fill(skip='{"exam1": ["Q9(a)"]}'))

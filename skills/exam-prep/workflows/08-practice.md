@@ -326,8 +326,10 @@ and offers the checks it held (`09-tutor` step 1's Patches and Waiting checks bu
     reaches it. Its whole reply is the brief's JSON block, no text before or after it (a
     background agent's reply reaches this chat as its completion notice), and its summary and
     blocked_actions name part ids and file names only, never a value. A `question` part (the
-    question itself would need rewording, which the writer may not do) goes into `mock_key.py`'s `SKIP`, so KEY OK still holds every other part; the main
-    session merges the rest and puts the skip on that mock's cram order line: skip the part and
+    question itself would need rewording, which the writer may not do) goes into `mock_key.py`'s
+    `SKIP`, so KEY OK still holds every other part, and its key's answer becomes `Skipped
+    tonight: <slug> <part id> needs rewording.`, its working deleted, so the student opens no
+    answer the writer judged no longer fits; the main session merges the rest and puts the skip on that mock's cram order line: skip the part and
     score out of the points left, as a scope cut does (`10-polish` step 3).
   - No attempt starts until the branch is merged. On a `done` report whose branch changes only
     `M` lines among the untaken mocks' `practice/mock-<slug>-key.md`, `practice/mock-values-key.md`

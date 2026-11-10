@@ -615,7 +615,11 @@ student reads the main session's chat, so nothing you report may show a key: par
 - Fix as `08-practice` step 4 says: a computed answer is copied from `practice/mock-values-key.md`
   after `python3 -I _build/verify/mock_key.py` writes it, never worked by hand; a reasoned answer
   is cited from the notes. Leave the mock files as they are: a part whose question would need
-  rewording is reported `question`, its key unchanged, and its part id goes into `SKIP` in
+  rewording is reported `question`. Its key's answer goes: its line reads `**(x)** Answer:
+  Skipped tonight: <slug> <part id> needs rewording.` and the working under it is deleted, since
+  the student reads the key after the attempt and must not find an answer you judged no longer
+  fits (the slug and part id keep the line from being another key's answer, which the leak check
+  would flag). Its part id goes into `SKIP` in
   `_build/verify/mock_key.py` (`{"<slug>": ["Q2(a)"]}`, an assert about its instance under `if
   not skipped(...)`), so the checker leaves it out and holds every other part to KEY OK.
 - Run the key checker from the worktree root, `python3 -I _build/verify/mock_key.py`, until each
