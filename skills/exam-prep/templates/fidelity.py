@@ -22,7 +22,9 @@ both the way CONVERT.md maps one onto the other, and compares, in order:
 - the callouts: each worked example (its id and number), Pitfall, Not on <exam>, Unverified,
   Background, How it's tested, Connects to and Depth, and whether each joins the Review view (the
   Markdown's `.rv` in its attribute block, `{#ex-N-slug .rv}` or `**Pitfall:** {.rv}`, against
-  class `rv`); a `.rv` on any other Markdown line is a difference too;
+  class `rv`); a `.rv` on any other Markdown line is a difference too. An attribute block counts
+  only where CONVERT.md puts one, after a space at a line's end or right after a callout's label;
+  braces anywhere else, as in `x^{.5}`, are text;
 - the list items and steps, with their ids: a `Step N:` line against an `<li>` of
   `<ol class="steps">`, a `-`, `*` or `1.` item against any other `<li>`.
 Each difference prints one line: the fragment, the section (the nearest heading's id) and what
@@ -52,7 +54,13 @@ COMMENT = re.compile(r"<!--.*?-->")
 RULE = re.compile(r"^\s*([-*_])(?:\s*\1){2,}\s*$")
 TABLE_SEP = re.compile(r"^\s*\|?\s*:?-{3,}:?\s*(?:\|\s*:?-{3,}:?\s*)*\|?\s*$")
 HEADING = re.compile(r"^(#{1,6})\s+(.*)$")
-ANCHOR = re.compile(r"\{((?:\s*[#.][\w-]+)+)\s*\}")
+# An attribute block (`{#id}`, `{#id .rv}`, `{.rv}`) sits only where CONVERT.md puts one: at a line's
+# end (a heading, a worked example's label line, a lettered set's item) or right after a callout's
+# label (`**Pitfall:** {.rv}`), after a space. Braces anywhere else, `x^{.5}` in math among them,
+# are text.
+_BLOCK = r"(?<!\S)\{((?:\s*[#.][A-Za-z][\w-]*)+)\s*\}"
+END_ATTR = re.compile(r"\s*" + _BLOCK + r"\s*$")
+LEAD_ATTR = re.compile(r"\s*" + _BLOCK)
 CITE = re.compile(r"(?<!\\)\[([A-Za-z][\w.-]*\s[^\]]*)\](?!\()")
 LINK = re.compile(r"\[([^\]]*)\]\(([^)\s]*)\)")
 STEP = re.compile(r"^\s*(?:\*\*)?Step\s+\d+\s*[:.](?:\*\*)?\s*")
@@ -102,10 +110,16 @@ class Doc:
 
 # ---- the Markdown side ----------------------------------------------------------------------
 
-def attrs(text):
-    """(the ids, "rv" or "") in a line's attribute blocks: `{#id}`, `{#id .rv}`, `{.rv}`."""
-    toks = [t for block in ANCHOR.findall(text) for t in block.split()]
+def attrs(blocks):
+    """(the ids, "rv" or "") in attribute blocks' insides: `#id`, `#id .rv`, `.rv`."""
+    toks = blocks.split()
     return [t[1:] for t in toks if t.startswith("#")], "rv" if ".rv" in toks else ""
+
+
+def end_attrs(text):
+    """(text without its line-end attribute block, the block's inside or "")."""
+    e = END_ATTR.search(text)
+    return (text[:e.start()], e.group(1)) if e else (text, "")
 
 
 def read_md(md):
@@ -127,18 +141,24 @@ def read_md(md):
             continue
         h = HEADING.match(body)
         if h and not q:
-            ids, rv = attrs(h.group(2))
+            text, block = end_attrs(h.group(2))
+            ids, rv = attrs(block)
             if rv:
                 doc.misplaced.append(label)
-            title = words(LINK.sub(r"\1", ANCHOR.sub(" ", h.group(2))))
+            title = words(LINK.sub(r"\1", text))
             level = len(h.group(1)) + 1
             m = H1.match(body)
             label = ids[0] if ids else (f"sec-{m.group(1)}" if m else label)
             doc.headings.append(((level, ids[0] if ids else "", title), label))
             item = False
             continue
-        ids, rv = attrs(body)
-        body = ANCHOR.sub(" ", body)
+        body, block = end_attrs(body)
+        lab = None if WEX.match(body) else LABEL.match(body)
+        lead = lab and LEAD_ATTR.match(body, lab.end())
+        if lead:
+            block += " " + lead.group(1)
+            body = body[:lab.end()] + " " + body[lead.end():]
+        ids, rv = attrs(block)
         m = WEX.match(body)
         if m:
             doc.callouts.append((("example", ids[0] if ids else "",

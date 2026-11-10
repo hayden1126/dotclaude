@@ -5,7 +5,8 @@ Each runs in a temp hub copied from fixtures/verify-notes (two notes files, thei
 examples.out.md, all matching), as the workflows run it: `python3 -I` from the hub root. Pinned:
 each self-test passes on the hub; a clean hub passes; each error the brief names, planted into
 the hub's own files, fails the real run with a line naming where and what (a dropped `.rv`, and
-a `.rv` on a Not-on banner, among them); and each self-test
+a `.rv` on a Not-on banner, among them); braces in math or mid-heading, `x^{.5}`, are read as
+text, not as an attribute block; and each self-test
 fails when its comparison is made a no-op (NOT CAUGHT) or its plant changes nothing (PLANT DID
 NOTHING)."""
 import os
@@ -241,6 +242,24 @@ class Fidelity(Hub):
         # Its self-test plants the drop in the hub's own fragment too.
         self.edit("_build/frag/sec1.html", '<div class="callout warn">', '<div class="callout warn rv">')
         self.assertRegex(self.fidelity("--self-test").stdout, r"PASS  sec1\.html: a dropped \.rv \(.*\): caught")
+
+    def test_math_braces_are_text_not_an_attribute_block(self):
+        # `x^{.5}` or `y_{#k}` in math, and `x^{.rv}` in a heading, are text: only a block at a
+        # line's end or right after a callout's label, after a space, is an attribute block.
+        self.edit("notes/01-counting.md", "Step 1: Count its terms: \\(b - a + 1\\).",
+                  "Step 1: Count its terms: \\(b - a + 1\\), not \\(x^{.5}\\) or \\(y_{#k}\\).")
+        self.edit("_build/frag/sec1.html", "<li>Count its terms: \\(b - a + 1\\).</li>",
+                  "<li>Count its terms: \\(b - a + 1\\), not \\(x^{.5}\\) or \\(y_{#k}\\).</li>")
+        self.edit("notes/01-counting.md", "## 1.1 Sums of a range {#sec-1-sums}",
+                  "## 1.1 Sums of a range, x^{.rv} {#sec-1-sums}")
+        self.edit("_build/frag/sec1.html", '<h3 id="sec-1-sums">1.1 Sums of a range</h3>',
+                  '<h3 id="sec-1-sums">1.1 Sums of a range, x^{.rv}</h3>')
+        r = self.fidelity()
+        self.assertEqual(r.stdout.strip(), "FIDELITY OK: 2 fragments", r.stdout + r.stderr)
+        self.edit("_build/frag/sec1.html", "\\(x^{.5}\\)", "\\(x^{.7}\\)")
+        r = self.fidelity()
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("sec1.html sec-1-sums: text:", r.stdout)
 
     def test_rv_on_a_not_on_banner_fails(self):
         self.edit("notes/02-paths.md", "> **Not on Exam 1:** bidirectional", "> **Not on Exam 1:** {.rv} bidirectional")
