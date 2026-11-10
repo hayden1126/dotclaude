@@ -389,6 +389,32 @@ class BrowserCatchesTest(unittest.TestCase):
                          page=closed, long_jump=True)
         self.assertIn("long jump webkit 1280px bottom->first: #sec-1 landed at top", out)
 
+    def test_the_review_view_shows_its_blocks_and_hides_the_rest(self):
+        r = self.verify("review", long_jump=True)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("[1280-light-review]", r.stdout)
+        self.assertIn("  review view shows its blocks and hides the rest", r.stdout)
+        self.assertIn("hidden-target link #sec-2-walks: switched to Full notes", r.stdout)
+        self.assertIn("long jump chromium 1280px review top->last ok:", r.stdout)
+        self.assertIn("long jump chromium 390px review bottom->first ok: #sec-2", r.stdout)
+        shots = set(os.listdir(os.path.join(self.tmp, "review", "shots")))
+        for name in ("390-dark-review-top.png", "1280-light-review-map.png", "1280-light-review-key.png"):
+            self.assertIn(name, shots)
+
+    def test_a_review_view_that_shows_an_untagged_paragraph_or_hides_an_rv_block(self):
+        # The page's own rule broken one way at a time: the check reads CHASSIS.md's rule itself.
+        keep_p = self.edit("if(tag==='h2') return;", "if(tag==='h2'||tag==='p') return;")
+        self.fails("rvshowp", "the Review view shows p", page=keep_p)
+        hide_rv = self.edit("if(k.classList.contains('rv')){ if(h3) h3.classList.remove('rvhide'); return; }", "")
+        out = self.fails("rvhide", "the Review view hides div.callout.warn.rv", page=hide_rv)
+        self.assertIn("the Review view hides h3#sec-1-sums", out)
+        no_must = self.edit("if(must&&(tag==='ul'||tag==='ol')){ must=false; return; }", "")
+        self.fails("rvmust", "the Review view hides ul", page=no_must)
+
+    def test_a_hidden_target_link_that_doesnt_switch_views(self):
+        self.fails("rvlink", "hidden in the Review view, didn't switch to Full notes",
+                   page=self.edit("if(!t||shown(t)) return;", "return;"))
+
     def test_overflow_inside_an_open_worked_example(self):
         self.fails("wexwide", "with the worked examples and map open", page=self.edit(
             "<p>Setup: the range 3 to 7.</p>",

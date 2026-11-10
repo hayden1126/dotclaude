@@ -41,12 +41,19 @@
 //     holds the same parts (distinct data-part values) as the first view, and has no zero-size
 //     math and no horizontal overflow, its closed stems (details) opened too; fewer than two
 //     buttons fail.
+// A notes page with the Review / Full notes toggle (.viewtog, CHASSIS.md) runs all of the above a
+// second time in the Review view (pressed through its own button; step-throughs and static
+// figures, which it hides, aside), its shots named <width>-<scheme>-review-..., and checks there
+// that the view shows exactly what CHASSIS.md says (every rv block, worked examples open, each h3
+// over one, each Must-know h3 and its list, the map, the source key, the fixed line) and hides the
+// rest, and that clicking a link to something it hides switches to Full notes and lands on it.
 // Then the long jump (CHASSIS.md, C1), at 390 and 1280 px with smooth scrolling on, in Chromium and
 // in WebKit (Safari's engine, where a page scroll the rail starts cancels the jump): from the top it
 // clicks the last rail entry (#toc a), from the bottom the first, the drawer opened first where the
 // rail is one. Once the scroll settles (L18), the target's top sits between 0 and its own
 // scroll-margin-top, plus 24 px (where the page's end stops it short of that, where the end leaves
-// it). A missing WebKit is one WARN line, not a failure; a page with no rail (the mock page) skips it.
+// it), in both views when the page has the toggle (the rail's first and last shown entries, in the
+// order the view puts them). A missing WebKit is one WARN line, not a failure; a page with no rail (the mock page) skips it.
 // --no-long-jump skips it, with one line: the skill's own tests pass it, a build never does.
 // Screenshots of the viewport (never full page, L23) go to <outdir>: <width>-<scheme>-top.png, one
 // per spy target, one per step-through at its last frame, one per static figure (its id; one inside
@@ -125,6 +132,20 @@ const mjRoot = mjSrc ? mjSrc.replace(/\/[^/]*$/, '') : null;
 const pins = scriptTags.filter((m) => !/\bsrc=/.test(m[1]))
   .map((m) => (m[2].match(/\bpaths\s*:\s*\{\s*mathjax\s*:\s*['"]([^'"]+)['"]/) || [])[1]).filter(Boolean);
 
+// The Review view's toggle, inside a tag so a class named in a code block doesn't count.
+const hasToggle = /<[a-z][^<>]*\bclass\s*=\s*["']?[^"'<>]*\bviewtog\b/i.test(src);
+const pageViews = hasToggle ? ['full', 'review'] : ['full'];
+
+// Press the Review or Full notes button (the first the page has; both drive one state).
+async function pickView(page, v) {
+  return page.evaluate((want) => {
+    const b = document.querySelector(`.viewtog button[data-pick="${want}"]`);
+    if (!b) return false;
+    b.click();
+    return (document.documentElement.getAttribute('data-notesview') === 'review') === (want === 'review');
+  }, v);
+}
+
 const browser = await launch(chromium);
 let failures = 0;
 const fail = (m) => { failures++; console.log('  FAIL ' + m); };
@@ -137,8 +158,10 @@ else if (!pins.includes(mjRoot)) {
 let mathjaxDown = false;
 for (const width of [390, 1280]) {
   if (mathjaxDown) break;
-  for (const scheme of ['light', 'dark']) {
-    const tag = `${width}-${scheme}`;
+  for (const scheme of ['light', 'dark']) for (const view of pageViews) {
+    if (mathjaxDown) break;
+    const review = view === 'review';
+    const tag = `${width}-${scheme}${review ? '-review' : ''}`;
     console.log(`[${tag}]`);
     const ctx = await browser.newContext({ viewport: { width, height: 900 }, colorScheme: scheme, reducedMotion: 'reduce' });
     const page = await ctx.newPage();
@@ -180,6 +203,39 @@ for (const width of [390, 1280]) {
       break;
     }
     await page.evaluate(() => document.fonts.ready);
+    if (review) {
+      if (!(await pickView(page, 'review'))) fail(`${tag}: pressing Review didn't switch the page to the Review view`);
+      await page.waitForTimeout(300);
+      const rv = await page.evaluate(() => {
+        const vis = (e) => e.getClientRects().length > 0;
+        const name = (e) => e.tagName.toLowerCase() + (e.id ? '#' + e.id : '') +
+          (e.className && typeof e.className === 'string' ? '.' + e.className.trim().split(/\s+/).join('.') : '');
+        const bad = [];
+        for (const sec of document.querySelectorAll('#main section.note')) {
+          if (sec.querySelector('tr[id^="src-"]')) { if (!vis(sec)) bad.push('hides the source key'); continue; }
+          let h3 = null;
+          let must = false;
+          const want = new Map();
+          for (const k of sec.children) {
+            const tag = k.tagName.toLowerCase();
+            if (tag === 'h2') want.set(k, true);
+            else if (tag === 'h3') { h3 = k; must = /-must-know$/.test(k.id); want.set(k, must); }
+            else if (k.classList.contains('rv')) { want.set(k, true); if (h3) want.set(h3, true); }
+            else if (must && (tag === 'ul' || tag === 'ol')) { want.set(k, true); must = false; } else want.set(k, false);
+          }
+          for (const [k, w] of want) if (w !== vis(k)) bad.push(`${w ? 'hides' : 'shows'} ${name(k)}`);
+        }
+        const closed = [...document.querySelectorAll('#main details.wex.rv')].filter((d) => !d.open).map(name);
+        if (closed.length) bad.push(`leaves worked examples closed: ${closed.join(', ')}`);
+        const map = document.querySelector('details.examnav');
+        if (map && !vis(map)) bad.push('hides the exam-day map');
+        const lede = document.querySelector('.rvlede');
+        if (!lede || !vis(lede)) bad.push('shows no line saying what the view is (.rvlede)');
+        return bad;
+      });
+      for (const b of rv) fail(`${tag}: the Review view ${b}`);
+      if (!rv.length) console.log('  review view shows its blocks and hides the rest');
+    }
     const r = await page.evaluate(() => {
       const main = document.getElementById('main') || document.body;
       const mj = [...document.querySelectorAll('mjx-container')];
@@ -253,7 +309,7 @@ for (const width of [390, 1280]) {
     if (r.dup.length) fail('duplicate ids: ' + r.dup.join(', '));
     if (r.sw > r.cw + 1) fail(`horizontal overflow ${r.sw} > ${r.cw}: ${r.wide.join(' ')}`);
     for (const f of r.fonts) if (!f.loaded) fail(`font ${f.fam} (${f.v}) never loaded: the Google Fonts link, or allowed_domains (L24)`);
-    if (r.openWex) fail(`${r.openWex} worked examples open by default`);
+    if (r.openWex && !review) fail(`${r.openWex} worked examples open by default`);
     if (!r.safe) fail("MathJax's ui/safe isn't loaded: the page's window.MathJax lacks load:['ui/safe'] in its loader (the templates have it)");
     if (r.mathAttrs) fail(`${r.mathAttrs} elements inside math with a class, id or style MathJax's own output never has (a \\class, \\cssId, \\style or \\bbox)`);
     if (r.jsLinks) fail(`${r.jsLinks} javascript: links (a MathJax \\href or \\mmlToken the build let through)`);
@@ -277,11 +333,13 @@ for (const width of [390, 1280]) {
       const where = await page.evaluate((i) => {
         const el = document.getElementById(i);
         if (!el) return 'missing';
+        if (!el.getClientRects().length) return 'hidden';
         if (!window.__spyReachable(el)) return 'end';
         el.scrollIntoView({ block: 'start' });
         return 'ok';
       }, id);
       if (where === 'missing') { fail(`scroll-spy target #${id} not on the page`); continue; }
+      if (where === 'hidden') { console.log(`  spy skip #${id}: hidden in this view`); continue; }
       if (where === 'end') { console.log(`  spy skip #${id}: too near the page's end to reach the spy line`); continue; }
       await page.waitForTimeout(400);
       await page.evaluate(() => window.dispatchEvent(new Event('scroll')));
@@ -292,10 +350,10 @@ for (const width of [390, 1280]) {
       await page.screenshot({ path: path.join(outDir, `${tag}-${id}.png`) });
     }
 
-    const figs = await page.evaluate(() => [...document.querySelectorAll('figure')]
+    const figs = review ? [] : await page.evaluate(() => [...document.querySelectorAll('figure')]
       .filter((f) => f.querySelector('.fig-controls'))
       .map((f) => ({ id: f.id, handler: typeof (window.NotesFig || {})[f.id] === 'function' })));
-    for (const id of Object.keys(steps)) {
+    for (const id of review ? [] : Object.keys(steps)) {
       if (!figs.some((f) => f.id === id)) fail(`--steps lists #${id}, which is no step-through on the page`);
     }
     for (const f of figs) {
@@ -352,7 +410,7 @@ for (const width of [390, 1280]) {
     }
 
     // Every static figure too: only a look catches an edge drawn through a node or a label on a line.
-    const statics = await page.evaluate(() => [...document.querySelectorAll('figure[id]')]
+    const statics = review ? [] : await page.evaluate(() => [...document.querySelectorAll('figure[id]')]
       .filter((f) => !f.querySelector('.fig-controls')).map((f) => f.id));
     for (const id of statics) {
       await page.evaluate((i) => {
@@ -397,7 +455,7 @@ for (const width of [390, 1280]) {
       if (o.zero) fail(`${o.zero} zero-size math in the opened worked examples or map`);
       if (o.sw > o.cw + 1) fail(`horizontal overflow with the worked examples and map open ${o.sw} > ${o.cw}: ${o.wide.join(' ')}`);
       else console.log(`  ${opened} worked examples and maps opened: no overflow`);
-      for (const [sel, name] of [['details.wex', 'wex'], ['details.examnav', 'map']]) {
+      for (const [sel, name] of [[review ? 'details.wex.rv' : 'details.wex', 'wex'], ['details.examnav', 'map']]) {
         if (!(await page.evaluate((q) => !!document.querySelector(q), sel))) continue;
         // Scroll back past the sticky top bar, so the opened summary shows too.
         await page.evaluate((q) => { document.querySelector(q).scrollIntoView({ block: 'start' }); window.scrollBy(0, -90); }, sel);
@@ -426,7 +484,8 @@ for (const width of [390, 1280]) {
       await settle(page);
       const lastActive = await page.evaluate(() => {
         const spied = [...document.querySelectorAll('#main section.note, #main section.note h3[id]')]
-          .filter((e) => e.id);
+          .filter((e) => e.id && e.getClientRects().length)
+          .sort((a, b) => a.getBoundingClientRect().top - b.getBoundingClientRect().top);
         const last = spied[spied.length - 1];
         const a = last && document.querySelector(`#toc a[data-target="${CSS.escape(last.id)}"]`);
         return a ? { id: last.id, active: a.classList.contains('active') } : null;
@@ -435,7 +494,36 @@ for (const width of [390, 1280]) {
       else if (lastActive) console.log(`  at the bottom the rail marks #${lastActive.id} active`);
       await page.screenshot({ path: path.join(outDir, `${tag}-key.png`) });
     }
-    if (viewsArg) {
+    if (review) {
+      // A link to something the Review view hides switches to Full notes and lands there.
+      await page.evaluate(() => window.scrollTo({ top: 0, behavior: 'instant' }));
+      const hid = await page.evaluate(() => {
+        const vis = (e) => e.getClientRects().length > 0;
+        const a = [...document.querySelectorAll('#main a[href^="#"]')].find((x) => {
+          const t = document.getElementById(decodeURIComponent(x.getAttribute('href').slice(1)));
+          return vis(x) && t && !vis(t);
+        });
+        if (!a) return null;
+        a.setAttribute('data-vp-hid', '1');
+        return decodeURIComponent(a.getAttribute('href').slice(1));
+      });
+      if (!hid) console.log('  no link to a hidden target to check');
+      else {
+        await page.click('[data-vp-hid]');
+        await settle(page);
+        const land = await page.evaluate((id) => {
+          const t = document.getElementById(id);
+          const top = t.getBoundingClientRect().top;
+          return { full: !document.documentElement.hasAttribute('data-notesview'), top: Math.round(top),
+            shown: t.getClientRects().length > 0, max: innerHeight };
+        }, hid);
+        if (!land.full) fail(`${tag}: a link to #${hid}, hidden in the Review view, didn't switch to Full notes`);
+        else if (!land.shown || land.top < -2 || land.top > land.max - 20) {
+          fail(`${tag}: a link to #${hid}, hidden in the Review view, switched to Full notes but landed at top ${land.top} px`);
+        } else console.log(`  hidden-target link #${hid}: switched to Full notes, landed at top ${land.top} px`);
+      }
+    }
+    if (viewsArg && !review) {
       const views = await page.evaluate(() => [...document.querySelectorAll('nav.views button[data-view]')]
         .map((b) => b.dataset.view));
       if (views.length < 2) fail(`--views: ${views.length} view buttons (nav.views button[data-view]); want two or more`);
@@ -497,7 +585,7 @@ async function settle(page) {
 // The long jump in one engine; false when the page has no rail to jump from.
 const JUMP_TOL = 24;
 async function longJump(engine, b) {
-  for (const width of [390, 1280]) {
+  for (const width of [390, 1280]) for (const view of pageViews) {
     const ctx = await b.newContext({ viewport: { width, height: 900 }, colorScheme: 'light', reducedMotion: 'no-preference' });
     const page = await ctx.newPage();
     await page.goto(pathToFileURL(wrapped).href, { waitUntil: 'networkidle' });
@@ -515,6 +603,8 @@ async function longJump(engine, b) {
       await ctx.close();
       continue;
     }
+    const vtag = view === 'review' ? ' review' : '';
+    if (view === 'review' && !(await pickView(page, 'review'))) fail(`long jump ${engine} ${width}px: pressing Review didn't switch views`);
     for (const dir of ['top->last', 'bottom->first']) {
       const toFirst = dir === 'bottom->first';
       await page.evaluate((toEnd) => {
@@ -529,7 +619,14 @@ async function longJump(engine, b) {
         await page.click('#menuBtn');
         await page.waitForTimeout(400);
       }
-      const link = page.locator('#toc a[href^="#"]')[toFirst ? 'first' : 'last']();
+      // The rail's first or last shown entry, in the order the view puts them.
+      await page.evaluate(() => {
+        const shown = [...document.querySelectorAll('#toc a[href^="#"]')].filter((a) => a.getClientRects().length)
+          .sort((a, b) => a.getBoundingClientRect().top - b.getBoundingClientRect().top);
+        document.querySelectorAll('#toc a[data-vp-jump]').forEach((a) => a.removeAttribute('data-vp-jump'));
+        if (shown.length) { shown[0].dataset.vpJump = 'first'; shown[shown.length - 1].dataset.vpJump = 'last'; }
+      });
+      const link = page.locator(`#toc a[data-vp-jump="${toFirst ? 'first' : 'last'}"]`);
       const id = decodeURIComponent((await link.getAttribute('href')).slice(1));
       await link.click();
       await page.waitForTimeout(100);
@@ -543,7 +640,7 @@ async function longJump(engine, b) {
         const at = top + window.scrollY;
         return { top: Math.round(top), want: Math.round(at - Math.min(Math.max(at - margin, 0), max)) };
       }, id);
-      const label = `long jump ${engine} ${width}px ${dir}`;
+      const label = `long jump ${engine} ${width}px${vtag} ${dir}`;
       if (!r) fail(`${label}: no #${id} on the page`);
       else if (r.top < -2 || r.top > r.want + JUMP_TOL) {
         fail(`${label}: #${id} landed at top ${r.top} px, want 0 to ${r.want + JUMP_TOL} px (a jump cut short, C1)`);
