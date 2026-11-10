@@ -14,12 +14,14 @@ exam-format statement are in `CLAUDE.md`. This plan points to both and restates 
 
 ## Decisions
 
-Each line ends with its source: the student, `Ed #N`, `<file>:<line>`, or (default).
+Each line ends with its source: the student, `Ed #N`, `<file>:<line>`, or (default). The Review
+view line is the one exception: `assemble.py` reads it as written, so it ends at its value, and its
+source is the student's answer to `00-intake` question 5.
 
 - Scope authority: {{<WORK: the document or set that mirrors the exam, e.g. PE1> mirrors the exam, so scope and the mocks follow it | full coverage, mock shapes beyond the review}} ({{SOURCE}})
 - Sources: the `in` rows of `MANIFEST.md`; `reserved` and `out` rows are never opened ({{SOURCE}})
 - Cheat sheet: {{allowed, as CLAUDE.md states | not allowed}} ({{SOURCE}})
-- Review page: {{none: a sheet is allowed | a condensed review page, <N> printed pages | none: the student declined it}} ({{SOURCE}})
+- Review view: {{<N> minutes of reading | none: a sheet is allowed | none: the student declined it}}
 - Deliverables: the table below ({{SOURCE}})
 - Depth: weighted by how the exam tests; procedures get depth, definitions stay brief (default)
 - Figures: where prose can't carry a mechanism, plus {{N}} step-throughs: {{PROCEDURES}} (default)
@@ -35,7 +37,7 @@ Each line ends with its source: the student, `Ed #N`, `<file>:<line>`, or (defau
 |---|---|---|---|
 | 1 | Topic notes, the source of truth | `notes/NN-<slug>.md` | `linkcheck.py` clean (plain-text notes: references checked by hand), reviews applied |
 | 2 | Notes page | `_build/notes.html`, a private artifact | `verify_page.mjs` passes, URL in STATUS |
-| 3 | Cheat sheet, only if allowed: a mock sheet with nothing derived from the mock, and a final sheet that adds those items after the attempt. With no sheet allowed, the condensed review page when the Review page line holds one, in place of the sheets | `cheatsheet/`; the review page `_build/review/_build/notes.html`, a private artifact | `check_pdf.py` passes on both; the review page: `verify_page.mjs` passes, its printed pages within the Review page line's length, URL in STATUS |
+| 3 | Cheat sheet, only if allowed: a mock sheet with nothing derived from the mock, and a final sheet that adds those items after the attempt. With no sheet allowed, the notes page's Review view when the Review view line gives minutes, in place of the sheets | `cheatsheet/`; the Review view: `.rv` tags in `notes/` and `_build/frag/` | `check_pdf.py` passes on both; the Review view: `assemble.py` passes within the Review view line's minutes, `verify_page.mjs` passes in both views, the notes page republished |
 | 4 | Mock exams, quarantined keys, mock pages | `practice/mock-<slug>.md` (slugs `{{EXAM_SLUG}}`, `{{EXAM_SLUG}}-<n>`, `{{EXAM_SLUG}}-harder`), each keyed by `practice/mock-<slug>-key.md` | the key script prints KEY OK for each (with a checker, every computable value asserted); the cold solver's disagreements are settled; `mock_leak.py` prints LEAK OK on each mock page |
 | 5 | Cram order, offered the night before | `practice/cram-order.md` | every item points into the verified notes (a link, or plain-text notes' `§x.y` title); `cram_check.py` prints CRAM OK |
 | 6 | Checker, {{ONLY IF SOMETHING IS COMPUTABLE}} | `_build/verify/` | its self-test checks every official part (or skips one it can't compute) |
@@ -58,7 +60,7 @@ spawn, and spawn unnamed.
 | 04 write | {{N}} writers, or the main session alone (two or three short sections, `04-write`) | one per backbone section | `notes/NN-<slug>.md` |
 | 05 verify | main, {{N}} section reviewers, {{N}} checklist auditors, {{N}} cold readers (one per two or three sections) | | fixes applied single-threaded |
 | 06 site | {{N}} converters, then main | | the notes page |
-| 07 cheat sheet, or the review page | {{SHEET: main, {{N}} content gap scanners, then 1 question-type scanner, then 1 auditor | REVIEW PAGE: main, {{N}} converters, then {{N}} auditors | NEITHER: skipped}} | {{the sheet, if allowed | the review page, <N> printed pages | skipped: no sheet allowed and no review page}} | `cheatsheet/`, or `_build/review/` |
+| 07 cheat sheet, or the Review view | {{SHEET: main, {{N}} content gap scanners, then 1 question-type scanner, then 1 auditor | REVIEW VIEW: main | NEITHER: skipped}} | {{the sheet, if allowed | the Review view, <N> minutes of reading | skipped: no sheet allowed and no Review view}} | `cheatsheet/`, or the `.rv` tags in `notes/` and `_build/frag/` |
 | 08 practice | {{N}} mock writers (the harder set's included), then 1 cold solver per mock, then 1 cram order auditor | {{QUESTION SHAPES}} | `practice/` |
 
 `pending` rows of `MANIFEST.md` are checked at every stage boundary: one that has arrived is
