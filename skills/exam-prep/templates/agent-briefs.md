@@ -596,7 +596,9 @@ so nothing you report may show a key: part ids only.
 - Artifact path: your branch, in your worktree of {{ROOT}}.
 - Report: your whole reply is the JSON block (status, summary, artifacts, blocked_actions), with
   no text before or after it: you run in the background, and your reply reaches the student's
-  chat as its completion notice. artifacts[0] is `<branch>@<sha>`. The summary lists, per mock,
+  chat as its completion notice. artifacts[0] is `<branch>@<sha>`: your commit, or, when nothing
+  needed a change and you committed nothing, your worktree's HEAD (`git rev-parse --short HEAD`),
+  the hub commit you started from. The summary lists, per mock,
   each part id you checked and one word for it: `changed`, `unchanged`, or `question` (the
   question itself would need rewording). A `blocked` report's summary and blocked_actions name
   what stopped you by part id and file name only. Nothing else, in the reply or the commit

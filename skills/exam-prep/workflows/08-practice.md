@@ -359,7 +359,9 @@ merge, as that step says.
      `09-tutor` step 5.4 does: a reference change and item 4's run leave the reference and
      `practice/mock-values-key.md` changed, and the writer's worktree starts from the hub's last
      commit, so it would start stale, and its merge would refuse over the dirty file, leaving `git
-     merge --abort` nothing to abort. The Agent call carries `isolation: "worktree"`,
+     merge --abort` nothing to abort. Then note the hub's head, `git rev-parse --short HEAD`, in
+     this session: it is the writer's base, the commit its worktree starts from, which a `done`
+     report's `Key checked:` lines need (below). The Agent call carries `isolation: "worktree"`,
      `run_in_background: true` and the description `Key recheck`, and the session tells the student
      not to open the writer's transcript: its Read and Edit calls show key text, which a foreground
      subagent would print in this window. One writer covers every untaken mock and every cause in
@@ -380,14 +382,21 @@ merge, as that step says.
      opens no answer the writer judged no longer fits; the main session merges the rest and puts
      the skip on that mock's cram order line: skip the part and score out of the points left, as a
      scope cut does (`10-polish` step 3).
-   - **A `done` report.** First take its base, `git merge-base HEAD <branch>`. A branch with a
-     commit of its own that changes only `M` lines among the untaken mocks'
+   - **A `done` report.** First take its base, the hub's head at the spawn, before anything
+     merges: the head this session noted at the spawn, or without that note, `git merge-base HEAD
+     <sha>`, `<sha>` from the report's `artifacts[0]` `<branch>@<sha>` (when the writer committed
+     nothing, it is that head itself: the Agent tool removes a worktree that changed nothing, and
+     its branch with it). Never the current HEAD: a line committed while the writer ran (a source
+     finished) would drop out of the next range. With neither (a fresh session, a sha git doesn't
+     know), no `Key checked:` line is rewritten below, so the gate stays due and spawns again. A
+     branch with a commit of its own that changes only `M` lines among the untaken mocks'
      `practice/mock-<slug>-key.md`, `practice/mock-values-key.md` and `_build/verify/mock_key.py`
      (`git diff --no-renames --name-status <hub branch>...<branch>`, file names only) merges, `git
      merge --no-edit <branch>`; with no commit of its own (nothing needed changing), nothing
-     merges. Remove its worktree and branch as `09-tutor` step 5.5.3 does, and rewrite each untaken
-     mock's line to `Key checked: <slug> <date> at <base>`: a line committed after the base (a
-     source finished while the writer ran) stays in the next range. After a merge, what a change to
+     merges. Remove its worktree and branch as `09-tutor` step 5.5.3 does, unless the Agent tool
+     already did, and rewrite each untaken mock's line to `Key checked: <slug> <date> at <base>`: a
+     line committed after the base (a source finished while the writer ran) stays in the next
+     range. After a merge, what a change to
      a key reruns (step 4's closing paragraph): step 4's items 4 and 5, step 6's item 2 and step
      7's items 1 and 2, each with the untaken mocks' keys. Log in STATUS each mock's part ids and
      what the report says of each, commit, and run the gate again: it passes.
