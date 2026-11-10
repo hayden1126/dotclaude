@@ -1,4 +1,4 @@
-<!-- exam-prep template MANIFEST.md.tmpl. Baseline as of 2026-10-20; changes only via `12-retro`. Drop this line in the hub copy. -->
+<!-- exam-prep template MANIFEST.md.tmpl. Baseline as of 2026-11-10; changes only via `12-retro`. Drop this line in the hub copy. -->
 # Source manifest: {{COURSE}} {{EXAM}}
 
 One row per source file. **These rows are the one statement of scope:** `CLAUDE.md` and
@@ -10,16 +10,16 @@ Counts come from disk (`pdfinfo`, `ls`), never from memory.
 - Renders: `_build/pages/<doc>/p-NNN.png` and `_build/text/<doc>/p-NNN.txt` (gitignored).
 - Originals: {{kept at WHERE | deleted YYYY-MM-DD after a SHA-256 match; `sources/` is the only copy}}.
 
-| Doc id | File | Pages | Scope | Answers | Rendered | Notes |
-|---|---|---|---|---|---|---|
-| D1 | `sources/lectures/{{FILE}}.pdf` | {{N}} | in | no | yes | |
-| D2 | `sources/lectures/{{FILE}}.pdf` | {{N}} | in, PDF pp.1-{{K}} (last in-scope slide: PDF p.{{K}} = printed {{M}}) | no | yes | {{WHY THE CUT}} |
-| HW1 | `sources/homework/{{FILE}}.pdf` | {{N}} | in | no | yes | |
-| HW1S | `sources/homework/{{FILE}}.pdf` | {{N}} | in | yes | yes | official solutions to HW1 |
-| ED | `sources/ed/ed-digest.md` | n/a | in | no | n/a | the Ed pull; cursor in `sources/ed/cursor.json` |
-| D9 | `sources/lectures/{{FILE}}.pdf` | {{N}} | reserved: {{LATER EXAM}} | no | no | raw copy only, never opened |
-| D10 | {{EXPECTED FILE}} | | pending: in, PDF pp.1-{{K}} (through {{LAST SLIDE}}) | {{yes or no}} | no | {{WHEN IT ARRIVES}} |
-| X1 | `sources/{{FILE}}` | {{N}} | out | no | no | {{WHY}} |
+| Doc id | File | By | Pages | Scope | Answers | Rendered | Notes |
+|---|---|---|---|---|---|---|---|
+| D1 | `sources/lectures/{{FILE}}.pdf` | staff | {{N}} | in | no | yes | |
+| D2 | `sources/lectures/{{FILE}}.pdf` | staff | {{N}} | in, PDF pp.1-{{K}} (last in-scope slide: PDF p.{{K}} = printed {{M}}) | no | yes | {{WHY THE CUT}} |
+| HW1 | `sources/homework/{{FILE}}.pdf` | staff | {{N}} | in | no | yes | |
+| HW1S | `sources/homework/{{FILE}}.pdf` | staff | {{N}} | in | yes | yes | official solutions to HW1 |
+| ED | `sources/ed/ed-digest.md` | staff | n/a | in | no | n/a | the Ed pull; cursor in `sources/ed/cursor.json` |
+| D9 | `sources/lectures/{{FILE}}.pdf` | staff | {{N}} | reserved: {{LATER EXAM}} | no | no | raw copy only, never opened |
+| D10 | {{EXPECTED FILE}} | staff | | pending: in, PDF pp.1-{{K}} (through {{LAST SLIDE}}) | {{yes or no}} | no | {{WHEN IT ARRIVES}} |
+| X1 | `sources/{{FILE}}` | staff | {{N}} | out | no | no | {{WHY}} |
 
 Topic cuts: {{none | one line each:}}
 - {{TOPIC}}: not on {{EXAM}} ({{SOURCE: Ed #N, a staff post, date | the syllabus, its line}});
@@ -31,6 +31,13 @@ Topic cuts: {{none | one line each:}}
   opened; `pending: <planned scope>`, not here yet, its scope fixed at intake and written in one
   of the `in` forms when the file arrives; `out`. Notes go in parentheses, and never hold a page
   range (it would go unchecked); `extract_check.py` refuses any other wording.
+- **By:** who made the source, which the page's source key shows: `staff` (the course's own
+  slides, sets and posts), `classmate` (a shared study guide), `textbook`, `student` (the student's
+  own notes), or a few words of free text. Optional: a table without the column still reads, and
+  its key then has no Made by column.
+- **Notes:** what the source is, in a few words ("Lecture 4: search"), which the source key shows;
+  an empty cell shows the file's base name there. A remark on the row (why a range is cut) follows
+  it.
 - **Answers:** `yes` marks a file that holds answers (official solutions, a past exam's key), with
   `solutions to <doc>` in Notes naming the set it answers. Mock writers never read it. Nothing
   published quotes it until the student has attempted that set, which the cell then records as

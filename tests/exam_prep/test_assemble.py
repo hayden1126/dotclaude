@@ -9,7 +9,8 @@ comment, or across a step-through and the text at its marker, a FIG marker insid
 or with no step-through or outside a section, a name= attribute or an id with no hyphen, a
 step-through that isn't one <figure> with its id or is placed other than once, no map) writes nothing and leaves the last good page alone, while escaped markup in a
 code block is text and passes. The source key is one last section with a row per code the page
-cites (from MANIFEST.md, an uncited row left out), each citation linked to its row; a code with no
+cites (from MANIFEST.md, an uncited row left out; a Made by column only when a cited row has a By
+cell; what a source is from Notes, else the file's base name), each citation linked to its row; a code with no
 row, an empty citation or one with its own href, a MANIFEST it can't read, or none when the page
 cites, is refused. The skill repo's synthetic sample hub, the source of the chassis's
 reference screenshots, is the template filled, links the skill's CHASSIS.md and assembles with
@@ -161,16 +162,45 @@ class AssembleTest(unittest.TestCase):
         key = page[page.index('<section class="note" id="sec-3">'):]
         self.assertGreater(page.index('id="sec-3"'), page.index('id="sec-2"'))
         self.assertIn('<h2><span class="n">§3</span> Source key</h2>', key)
-        # One row per cited code, in MANIFEST's order: Notes, or Scope when Notes is empty. D9,
-        # reserved and cited nowhere, never appears.
+        # One row per cited code, in MANIFEST's order: Notes, or the file's base name when Notes is
+        # empty, never the Scope. D9, reserved and cited nowhere, never appears. This MANIFEST has
+        # no By column (the older form), so the key has no Made by column.
         self.assertEqual(re.findall(r'<tr id="([^"]+)">', key), ["src-D1", "src-HW1"])
         self.assertIn('<tr id="src-D1"><td><code>D1</code></td><td>d1-widgets.pdf</td><td>Lecture 1: widgets</td></tr>', key)
-        self.assertIn('<tr id="src-HW1"><td><code>HW1</code></td><td>hw1.pdf</td><td>in</td></tr>', key)
+        self.assertIn('<tr id="src-HW1"><td><code>HW1</code></td><td>hw1.pdf</td><td>hw1.pdf</td></tr>', key)
+        self.assertIn("<th>What it is</th></tr>", key)
+        self.assertNotIn("Made by", key)
         self.assertNotIn("D9", page)
         self.assertIn('<a class="slink" href="#src-D1" title="D1: d1-widgets.pdf, Lecture 1: widgets">D1 p.2</a>', page)
         self.assertIn('<a class="slink" href="#src-D1" title="D1: d1-widgets.pdf, Lecture 1: widgets">D1 p.3</a>', page)
-        self.assertIn('<a class="slink" href="#src-HW1" title="HW1: hw1.pdf, in">HW1 Q2c</a>', page)
+        self.assertIn('<a class="slink" href="#src-HW1" title="HW1: hw1.pdf">HW1 Q2c</a>', page)
         self.assertNotIn('<a class="slink">', page)
+
+    def test_a_by_column_adds_made_by_to_the_key(self):
+        cites = SEC2.replace("<ol", '<p>Try it <a class="slink">HW1 Q2c</a>.</p>\n  <ol')
+        by = MANIFEST.replace("| Answers | Rendered | Notes |", "| Answers | By | Rendered | Notes |")
+        by = by.replace("|---|---|---|---|---|---|---|", "|---|---|---|---|---|---|---|---|")
+        by = by.replace("| 4 | in | no | yes |", "| 4 | in | no | staff | yes |")
+        by = by.replace("| 2 | in | no | yes |", "| 2 | in | no | | yes |")
+        by = by.replace("| 9 | reserved: Final | no | no |", "| 9 | reserved: Final | no | textbook | no |")
+        h = self.hub(sections={1: SEC1, 2: cites})
+        h.write("MANIFEST.md", by)
+        rc, out = h.run()
+        self.assertEqual(rc, 0, out)
+        page = h.page()
+        key = page[page.index('<section class="note" id="sec-3">'):]
+        self.assertIn("<th>What it is</th><th>Made by</th></tr>", key)
+        self.assertIn("its file, what it is and who made it.", key)
+        self.assertIn('<tr id="src-D1"><td><code>D1</code></td><td>d1-widgets.pdf</td><td>Lecture 1: widgets</td><td>staff</td></tr>', key)
+        # A cited row with an empty By cell gets an empty cell; the Notes fallback still holds.
+        self.assertIn('<tr id="src-HW1"><td><code>HW1</code></td><td>hw1.pdf</td><td>hw1.pdf</td><td></td></tr>', key)
+        self.assertIn('title="D1: d1-widgets.pdf, Lecture 1: widgets, by staff">D1 p.2</a>', page)
+        # A By cell only on an uncited row (D9) adds no column.
+        h = self.hub(sections={1: SEC1, 2: cites})
+        h.write("MANIFEST.md", by.replace("| no | staff | yes |", "| no | | yes |"))
+        rc, out = h.run()
+        self.assertEqual(rc, 0, out)
+        self.assertNotIn("Made by", h.page())
 
     def test_a_citation_whose_code_has_no_manifest_row_refused(self):
         self.assertRefused(self.in_sec1('<p>See <a class="slink">X7 p.1</a>.</p>'),

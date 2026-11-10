@@ -196,7 +196,7 @@ These are the Markdown forms the page's converter reads (06-site); use them exac
   source | NONE: no statement says; mark each label inferred}}.
 - Names in a trace or a state (nodes, states, variables, table rows) go in backticks in worked
   examples: CONVERT.md keeps them as code, and the notes-to-checker comparison counts a name only
-  in backticks.
+  in backticks (K67).
 - The last subsection is `## {{N}}.K Must know {#sec-{{N}}-must-know}`: one line per point, each
   ending with a link into this section, `([§{{N}}.2](#<id>))`. {{FORMAT STATEMENT: It ends with a
   `Written from memory:` line and a `Provided on the exam:` line, each naming this section's

@@ -285,6 +285,19 @@ class ExtractCheck(unittest.TestCase):
         self.assertEqual(code, 0, out)
         self.assertIn("D1: 7 pages in scope, 7 rendered, 7 with a block", out)
 
+    def test_a_by_column_present_or_absent_passes(self):
+        # The optional By column (who made a source, for the page's source key) is read by no
+        # check here: with it, every line reads as without it.
+        _, plain = self.run_check()
+        by = MANIFEST.replace("| Answers | Rendered | Notes |", "| Answers | By | Rendered | Notes |")
+        by = by.replace("|---|---|---|---|---|---|---|", "|---|---|---|---|---|---|---|---|")
+        by = re.sub(r"^(\| [A-Z0-9]+ \|(?:[^|]*\|){4})", r"\1 staff |", by, flags=re.M)
+        self.assertEqual(by.count("| staff |"), 10, by)
+        self.write("MANIFEST.md", by)
+        code, out = self.run_check()
+        self.assertEqual(code, 0, out)
+        self.assertEqual(out, plain)
+
     def test_a_scope_word_it_doesnt_know_fails(self):
         for scope in ("concept only", "`in`", ""):
             with self.subTest(scope=scope):

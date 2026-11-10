@@ -20,7 +20,7 @@ both the way CONVERT.md maps one onto the other, and compares, in order:
 - the citations, `[D5 p.23]` against `<a class="slink">D5 p.23</a>`;
 - the in-page links' targets, `[text](#id)` against `<a class="xref" href="#id">`;
 - the callouts: each worked example (its id and number), Pitfall, Not on <exam>, Unverified,
-  Background, How it's tested and Connects to;
+  Background, How it's tested, Connects to and Depth;
 - the list items and steps, with their ids: a `Step N:` line against an `<li>` of
   `<ol class="steps">`, a `-`, `*` or `1.` item against any other `<li>`.
 Each difference prints one line: the fragment, the section (the nearest heading's id) and what
@@ -57,7 +57,7 @@ STEP = re.compile(r"^\s*(?:\*\*)?Step\s+\d+\s*[:.](?:\*\*)?\s*")
 LIST = re.compile(r"^\s*(?:[-*+]|\d+[.)])\s+")
 WEX = re.compile(r"^\s*\*\*Worked example\s+(\d+(?:\.\d+)*)\s*:\s*")
 LABEL = re.compile(r"^\s*\*\*(Pitfall|Not on [^*:]+|Unverified|Background)\s*:\s*\*\*")
-CONNECTS = re.compile(r"^\s*\*\*(How it['’]s tested|Connects to)\s*:\s*\*\*")
+CONNECTS = re.compile(r"^\s*\*\*(How it['’]s tested|Connects to|Depth)\s*:\s*\*\*")
 WARN = ("Pitfall", "Not on", "Unverified")
 
 SYMBOLS = {
@@ -317,6 +317,8 @@ Search order matters. It sets every trace, as [§1.1 Order](#sec-1-order) shows.
 
 ## 1.1 Order {#sec-1-order}
 
+**Depth:** Use (inferred: a sample with no format statement).
+
 A frontier is the set of generated, unexpanded nodes [D1 p.2]. A cost of n^2 grows fast, and g(n) <= h(n) is the test `if a < b`.
 
 Step 1: Pop the cheapest node.
@@ -353,6 +355,7 @@ SAMPLE_HTML = r"""<section class="note" id="sec-1">
   <h2><span class="n">§1</span> Sample</h2>
   <p>Search order matters. It sets every trace, as <a class="xref" href="#sec-1-order">§1.1 Order</a> shows.</p>
   <h3 id="sec-1-order">1.1 Order</h3>
+  <p class="connects"><strong>Depth:</strong> Use (inferred: a sample with no format statement).</p>
   <div class="callout def"><div class="lab">Definition</div><p>A frontier is the set of generated, unexpanded nodes <a class="slink">D1 p.2</a>.</p></div>
   <p>A cost of \(n^2\) grows fast, and \(g(n) \le h(n)\) is the test <code>if a &lt; b</code>.</p>
   <ol class="steps"><li>Pop the cheapest node.</li><li>Expand it <a class="slink">D1 p.3</a>.</li></ol>

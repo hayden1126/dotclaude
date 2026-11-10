@@ -50,8 +50,9 @@
 // --no-long-jump skips it, with one line: the skill's own tests pass it, a build never does.
 // Screenshots of the viewport (never full page, L23) go to <outdir>: <width>-<scheme>-top.png, one
 // per spy target, one per step-through at its last frame, one per static figure (its id; one inside
-// a closed worked example is shot with it opened), the first worked example opened (-wex)
-// and the exam-day map opened (-map), and with --views one per view (-view-<name>). Exit 0 when every check passes, 1 on any failure, 2 on bad
+// a closed worked example is shot with it opened), the first worked example opened (-wex),
+// the exam-day map opened (-map), the source key with its first row targeted (-key; the row must
+// be the :target and on screen), and with --views one per view (-view-<name>). Exit 0 when every check passes, 1 on any failure, 2 on bad
 // usage.
 import fs from 'node:fs';
 import path from 'node:path';
@@ -402,6 +403,23 @@ for (const width of [390, 1280]) {
         await page.waitForTimeout(200);
         await page.screenshot({ path: path.join(outDir, `${tag}-${name}.png`) });
       }
+    }
+    // The source key (FB-123): its first row targeted, as a citation's link leaves it, so its shot
+    // shows the tr:target highlight.
+    const keyRow = await page.evaluate(() => {
+      const r = document.querySelector('tr[id^="src-"]');
+      return r ? r.id : null;
+    });
+    if (keyRow) {
+      await page.evaluate((id) => { location.hash = '#' + id; }, keyRow);
+      await settle(page);
+      const shown = await page.evaluate((id) => {
+        const r = document.getElementById(id);
+        const b = r.getBoundingClientRect();
+        return r.matches(':target') && b.top >= 0 && b.bottom <= innerHeight;
+      }, keyRow);
+      if (!shown) fail(`${tag}: source key row #${keyRow} not targeted and on screen for its shot`);
+      await page.screenshot({ path: path.join(outDir, `${tag}-key.png`) });
     }
     if (viewsArg) {
       const views = await page.evaluate(() => [...document.querySelectorAll('nav.views button[data-view]')]

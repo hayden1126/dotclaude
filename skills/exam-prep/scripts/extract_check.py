@@ -3,8 +3,9 @@
 
   extract_check.py [--root DIR]
 
-MANIFEST's table is read by its header names (Doc id, File, Pages, Scope, Answers, Notes); with no
-Doc id, File or Scope column it fails. Every row's Scope starts with `in`, `concepts only`,
+MANIFEST's table is read by its header names (Doc id, File, Pages, Scope, Answers, Notes; any
+other column, such as the optional By, is ignored); with no Doc id, File or Scope column it
+fails. Every row's Scope starts with `in`, `concepts only`,
 `reserved`, `pending` or `out`; any other word fails. An in-scope Scope is `in` or `concepts
 only`, then nothing, `PDF pp.A-B[, C-D]` or `slides #/A-#/B`, with notes in parentheses (a note
 holding a page range fails: it would go unchecked); any other wording fails as SCOPE NOT

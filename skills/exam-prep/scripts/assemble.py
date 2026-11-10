@@ -16,8 +16,10 @@ the chassis:
     chassis's seven hues;
   - the source key, one last section after the notes' (sec-<last N + 1>, so it sits in the rail
     like any section): a table with one row per code the page cites, read from the hub's
-    MANIFEST.md (its Doc id, File, Scope and Notes columns, found by header name). A row gives
-    the code, the file's base name, and its Notes (its Scope when Notes is empty). Each
+    MANIFEST.md (its Doc id, File, Notes and optional By columns, found by header name). A row
+    gives the code, the file's base name, what the source is (its Notes, else the file's base
+    name, never its Scope) and, when any cited row has a By cell, who made it (a Made by column,
+    blank for a row without one); a table with no By column reads as before. Each
     a.slink, in a section, a step-through or the map, gets href="#src-<code>", where the code is
     its text's first word (D5 from `D5 p.23`, HW1 from `HW1 Q2c`), and a title holding its row's
     text. The row's id is src- and the code, each character other than an ASCII letter, digit or
@@ -99,9 +101,11 @@ def source_id(code):
 
 
 def manifest_key(path):
-    """{code: (file base name, what it is)} from MANIFEST.md's table, its columns found by header
-    name; what it is is the row's Notes, or its Scope when Notes is empty. ValueError when the
-    table has no Doc id or File column, or repeats a code."""
+    """{code: (file base name, what it is, who made it)} from MANIFEST.md's table, its columns
+    found by header name: what it is is the row's Notes, or the file's base name when Notes is
+    empty (a Scope such as `in, PDF pp.1-9` says nothing of what a source is); who made it is the
+    By cell (staff, classmate, textbook, student or free text), empty with no By column. ValueError
+    when the table has no Doc id or File column, or repeats a code."""
     rows, cols = {}, None
     with open(path, encoding="utf-8") as f:
         for line in f:
@@ -123,7 +127,8 @@ def manifest_key(path):
                 return cells[i].replace("`", "").strip() if i is not None and i < len(cells) else ""
             if code in rows:
                 raise ValueError(f"two rows for {code}")
-            rows[code] = (posixpath.basename(cell("file")), cell("notes") or cell("scope"))
+            base = posixpath.basename(cell("file"))
+            rows[code] = (base, cell("notes") or base, cell("by"))
     if cols is None:
         raise ValueError("has no table under a `| Doc id | File | ... |` header")
     return rows
@@ -131,8 +136,8 @@ def manifest_key(path):
 
 def key_text(code, row):
     """A key row's text, as a citation's title shows it."""
-    base, what = row
-    return f"{code}: {base}" + (f", {what}" if what else "")
+    base, what, by = row
+    return f"{code}: {base}" + (f", {what}" if what != base else "") + (f", by {by}" if by else "")
 
 
 class Citations(HTMLParser):
@@ -193,19 +198,22 @@ def link_citations(name, text, key, cited, problems):
 
 
 def source_key(n, key, cited):
-    """The source key: section n, one table row per cited code, in MANIFEST.md's order."""
+    """The source key: section n, one table row per cited code, in MANIFEST.md's order, with a
+    Made by column when any cited row has a By cell."""
+    shown = [(code, row) for code, row in key.items() if code in cited]
+    made_by = any(row[2] for _, row in shown)
     rows = []
-    for code, row in key.items():
-        if code in cited:
-            base, what = (html.escape(x) for x in row)
-            rows.append(f'      <tr id="{source_id(code)}"><td><code>{html.escape(code)}</code></td>'
-                        f"<td>{base}</td><td>{what}</td></tr>")
+    for code, row in shown:
+        base, what, by = (html.escape(x) for x in row)
+        rows.append(f'      <tr id="{source_id(code)}"><td><code>{html.escape(code)}</code></td>'
+                    f"<td>{base}</td><td>{what}</td>" + (f"<td>{by}</td>" if made_by else "") + "</tr>")
     return (f'<section class="note" id="sec-{n}">\n'
             f'  <h2><span class="n">§{n}</span> {KEY_TITLE}</h2>\n'
-            "  <p>Every citation on this page links to its row here: the source's code, its file "
-            "and what it is.</p>\n"
+            "  <p>Every citation on this page links to its row here: the source's code, its file"
+            + (", what it is and who made it" if made_by else " and what it is") + ".</p>\n"
             '  <div class="tbl-wrap"><table>\n'
-            "    <thead><tr><th>Code</th><th>File</th><th>What it is</th></tr></thead>\n"
+            "    <thead><tr><th>Code</th><th>File</th><th>What it is</th>"
+            + ("<th>Made by</th>" if made_by else "") + "</tr></thead>\n"
             "    <tbody>\n" + "\n".join(rows) + "\n    </tbody>\n  </table></div>\n</section>")
 
 

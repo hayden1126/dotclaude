@@ -82,6 +82,8 @@ this one section: a figure placed outside it shifts every later section's accent
   `<div class="callout"><div class="lab">Background</div> ... </div>`, the whole quote inside.
 - `**How it's tested:** ...`: `<p class="connects"><strong>How it's tested:</strong> ...</p>`.
 - `**Connects to:** ...`: `<p class="connects"><strong>Connects to:</strong> ...</p>`.
+- `**Depth:** ...`, the depth label that opens a subsection under its heading (S33):
+  `<p class="connects"><strong>Depth:</strong> ...</p>`, its citation or `(inferred: ...)` kept.
 - `**Conclusion:** ...` outside an example stays a `<p>` with `<strong>Conclusion:</strong>`.
 
 ## Links
