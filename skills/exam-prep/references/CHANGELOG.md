@@ -108,7 +108,9 @@ evidence ids.
     gate, and its `dispatched` line stands for a running writer until that writer is settled). One writer
     runs at a time, in the background with its transcript unopened, its whole reply the JSON block
     (part ids and file names only), spawned once everything uncommitted is committed, and a merge
-    with no report takes its `question` parts from the key checker's skipped list. Its
+    with no report takes its `question` parts from the key checker's skipped list. A leak hit
+    after a merge whose remedy edits an untaken mock or its key goes back to the gate's writer as
+    a `question` part, through a `Key question:` STATUS line that keeps the gate due. Its
     merge takes only the untaken keys, the values file and `mock_key.py`, and a conflict is
     aborted, never resolved in the chat; a part whose question would need rewording goes into the
     key checker's new `SKIP`, its key answer replaced by a `Skipped tonight:` line, and onto the

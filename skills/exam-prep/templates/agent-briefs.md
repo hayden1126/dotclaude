@@ -572,8 +572,10 @@ Role: `writer`, spawned with `isolation: "worktree"`, `run_in_background: true` 
 `Key recheck` on the Agent call, only from `08-practice` step 8.1's key gate: it opens the untaken
 mocks' keys, which the cram night's session never opens, since the student reads that session's
 chat (FB-159). The student is told not to open its transcript. The gate spawns one before a mock's
-attempt when the key checker fails that mock, or when STATUS gained a `Source added: <doc> <date>:
-done` or a `Reference changed:` line after the mock's `Key checked:` line; one writer covers every
+attempt when the key checker fails that mock, when STATUS holds a `Key question:` line (a leak hit
+after a recheck's merge, sent back as a `question` part), or when STATUS gained a `Source added:
+<doc> <date>: done` or a `Reference changed:` line after the mock's `Key checked:` line; one writer
+covers every
 such cause and every untaken mock, and never two run at once (both rewrite
 `practice/mock-values-key.md`). The attempt waits for its merge. The reference-change variant below
 serves a gate whose causes hold no new source.
@@ -616,6 +618,10 @@ so nothing you report may show a key: part ids only.
 - The parts: each part whose `Topic:` is a section a new source changed, and each part the key
   checker now fails. Check each one's answer against the new sources and the notes as they now
   stand.
+- {{EACH UNSTRUCK `Key question:` LINE'S PART: `<slug> <part id>`, ... | NONE: drop this line.}}:
+  the main session's leak check after the last recheck found each one's answer on a page the
+  student reads, and its remedy (fresh numbers, a reworded question) is no writer's. Report each
+  `question`, unchecked, and skip it as the next item says.
 - Fix as `08-practice` step 4 says: a computed answer is copied from `practice/mock-values-key.md`
   after `python3 -I _build/verify/mock_key.py` writes it, never worked by hand; a reasoned answer
   is cited from the notes. Leave the mock files as they are: a part whose question would need
