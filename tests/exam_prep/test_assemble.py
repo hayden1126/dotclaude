@@ -10,7 +10,9 @@ or with no step-through or outside a section, a name= attribute or an id with no
 step-through that isn't one <figure> with its id or is placed other than once, no map) writes nothing and leaves the last good page alone, while escaped markup in a
 code block is text and passes. The skill repo's synthetic sample hub, the source of the chassis's
 reference screenshots, is the template filled, links the skill's CHASSIS.md and assembles with
-every link resolved; with EXAM_PREP_PLAYWRIGHT set, its page also passes verify_page.mjs."""
+every link resolved; with EXAM_PREP_PLAYWRIGHT set, its page also passes verify_page.mjs, run as a
+build runs it, so with the long jump (the one run here or in test_verify_page that keeps it on by
+default)."""
 import contextlib
 import importlib.util
 import io
@@ -481,6 +483,10 @@ class AssembleTest(unittest.TestCase):
             self.assertIn("ALL CHECKS PASS", r.stdout)
             for mode in ("abc", "acb"):
                 self.assertIn(f"step-through #fig-2-walk ({mode}) ok: 2 frames, forward and back", r.stdout)
+            # No flag: the long jump runs by default, in Chromium at least.
+            self.assertIn("[long jump]", r.stdout)
+            self.assertIn("long jump chromium 1280px bottom->first ok: #sec-1", r.stdout)
+            self.assertNotIn("--no-long-jump", r.stdout)
 
     def test_no_chassis_is_a_usage_error(self):
         h = self.hub()

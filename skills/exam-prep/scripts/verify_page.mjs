@@ -2,6 +2,7 @@
 // headless WebKit for the long jump when Playwright's WebKit is installed.
 //
 //   node verify_page.mjs <page.html> <outdir> [--spy id,id,...] [--steps <steps.json>] [--views]
+//                        [--no-long-jump]
 //
 // Playwright comes from pw.mjs: $EXAM_PREP_PLAYWRIGHT, else an install it finds, else it says how
 // to install one and exits 2. Run it with `allowed_domains` cdnjs.cloudflare.com,
@@ -44,6 +45,7 @@
 // rail is one. Once the scroll settles (L18), the target's top sits between 0 and its own
 // scroll-margin-top, plus 24 px (where the page's end stops it short of that, where the end leaves
 // it). A missing WebKit is one WARN line, not a failure; a page with no rail (the mock page) skips it.
+// --no-long-jump skips it, with one line: the skill's own tests pass it, a build never does.
 // Screenshots of the viewport (never full page, L23) go to <outdir>: <width>-<scheme>-top.png, one
 // per spy target, one per step-through at its last frame, one per static figure (its id; one inside
 // a closed worked example is shot with it opened), the first worked example opened (-wex)
@@ -56,7 +58,7 @@ import { loadPlaywright, installed, launch } from './pw.mjs';
 
 function usage(msg) {
   console.error(`verify_page: ${msg}`);
-  console.error('usage: node verify_page.mjs <page.html> <outdir> [--spy id,id] [--steps <steps.json>] [--views]');
+  console.error('usage: node verify_page.mjs <page.html> <outdir> [--spy id,id] [--steps <steps.json>] [--views] [--no-long-jump]');
   process.exit(2);
 }
 
@@ -64,11 +66,13 @@ const args = process.argv.slice(2);
 let spyArg = null;
 let stepsArg = null;
 let viewsArg = false;
+let longJumpArg = true;
 const pos = [];
 for (let i = 0; i < args.length; i++) {
   if (args[i] === '--spy') spyArg = args[++i];
   else if (args[i] === '--steps') stepsArg = args[++i];
   else if (args[i] === '--views') viewsArg = true;
+  else if (args[i] === '--no-long-jump') longJumpArg = false;
   else pos.push(args[i]);
 }
 if (pos.length !== 2) usage('need <page.html> and <outdir>');
@@ -510,7 +514,8 @@ async function longJump(engine, b) {
   return true;
 }
 
-if (!mathjaxDown) {
+if (!longJumpArg) console.log('long jump skipped (--no-long-jump)');
+else if (!mathjaxDown) {
   console.log('[long jump]');
   if (!(await longJump('chromium', browser))) console.log('  long jump skipped: no rail entries (#toc a)');
   else if (!installed(webkit)) {

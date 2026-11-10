@@ -81,7 +81,8 @@ class PlaywrightProbeTest(unittest.TestCase):
         env = {"PATH": self.bin, "HOME": self.tmp}
         if env_dir is not None:
             env["EXAM_PREP_PLAYWRIGHT"] = env_dir
-        return subprocess.run([NODE, VERIFY_PAGE, page or self.page, os.path.join(self.tmp, "out")],
+        return subprocess.run([NODE, VERIFY_PAGE, page or self.page, os.path.join(self.tmp, "out"),
+                               "--no-long-jump"],
                               cwd=cwd or self.tmp, env=env, capture_output=True, text=True,
                               timeout=60)
 
@@ -151,7 +152,8 @@ class StepsFileTest(unittest.TestCase):
             steps = os.path.join(tmp, "steps.json")
             with open(steps, "w", encoding="utf-8") as f:
                 f.write(text)
-            r = subprocess.run([NODE, VERIFY_PAGE, page, os.path.join(tmp, "out"), "--steps", steps],
+            r = subprocess.run([NODE, VERIFY_PAGE, page, os.path.join(tmp, "out"), "--steps", steps,
+                                "--no-long-jump"],
                                env={"PATH": os.path.dirname(NODE), "HOME": tmp,
                                     "EXAM_PREP_PLAYWRIGHT": tmp},
                                capture_output=True, text=True, timeout=60)
@@ -195,13 +197,15 @@ class BrowserCatchesTest(unittest.TestCase):
     def tearDownClass(cls):
         shutil.rmtree(cls.tmp)
 
-    def fails(self, name, want, page=None, steps="same"):
-        r = self.verify(name, page, steps)
+    def fails(self, name, want, page=None, steps="same", long_jump=False):
+        r = self.verify(name, page, steps, long_jump)
         self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
         self.assertIn(want, r.stdout)
         return r.stdout
 
-    def verify(self, name, page=None, steps="same"):
+    def verify(self, name, page=None, steps="same", long_jump=False):
+        """verify_page.mjs on page; without long_jump it passes --no-long-jump, which saves eight
+        page loads a run (test_assemble's sample page run checks the default)."""
         page = self.page if page is None else page
         d = os.path.join(self.tmp, name)
         os.makedirs(d)
@@ -213,6 +217,8 @@ class BrowserCatchesTest(unittest.TestCase):
             with open(os.path.join(d, "steps.json"), "w", encoding="utf-8") as f:
                 json.dump(self.steps if steps == "same" else steps, f)
             args += ["--steps", os.path.join(d, "steps.json")]
+        if not long_jump:
+            args.append("--no-long-jump")
         return subprocess.run(args, capture_output=True, text=True, timeout=600)
 
     def edit(self, old, new):
@@ -334,7 +340,7 @@ class BrowserCatchesTest(unittest.TestCase):
         subs = "".join(f'\n  <h3 id="sec-3-part-{i}">3.{i} Part {i}</h3>\n  {para}' for i in range(1, 41))
         long = self.edit("    </main>", '<section class="note" id="sec-3">\n  <h2><span class="n">§3</span>'
                          f'Filler</h2>{subs}\n</section>\n    </main>')
-        r = self.verify("jumpok", long)
+        r = self.verify("jumpok", long, long_jump=True)
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         self.assertIn("long jump webkit 1280px top->last ok: #sec-3-part-40", r.stdout)
         self.assertIn("long jump webkit 1280px bottom->first ok: #sec-1", r.stdout)
@@ -350,7 +356,7 @@ class BrowserCatchesTest(unittest.TestCase):
                "    }\n")
         self.assertEqual(long.count(fixed), 1)
         out = self.fails("jumpold", "long jump webkit 1280px top->last: #sec-3-part-40 landed at top",
-                         page=long.replace(fixed, old))
+                         page=long.replace(fixed, old), long_jump=True)
         self.assertIn("long jump webkit 1280px bottom->first: #sec-1 landed at top", out)
 
     def test_overflow_inside_an_open_worked_example(self):
@@ -388,7 +394,8 @@ class ViewsTest(unittest.TestCase):
         os.makedirs(d)
         with open(os.path.join(d, "mock.html"), "w", encoding="utf-8") as f:
             f.write(page)
-        r = subprocess.run([NODE, VERIFY_PAGE, os.path.join(d, "mock.html"), os.path.join(d, "shots"), "--views"],
+        r = subprocess.run([NODE, VERIFY_PAGE, os.path.join(d, "mock.html"), os.path.join(d, "shots"), "--views",
+                            "--no-long-jump"],
                            capture_output=True, text=True, timeout=600)
         return r, os.path.join(d, "shots")
 
