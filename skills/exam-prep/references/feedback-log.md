@@ -170,7 +170,7 @@ naming the id that replaces it, if one does.
 | FB-140 | Space freed by a scope cut is reserved for the mock-derived items. Check other sections first, then ask. | w07 | B3.C4, B3.C5 |
 | FB-141 | Organize the sheet by task, and give the cram order a map of the sheet. | w07 | B3.C28 |
 | FB-142 | Text inside embedded SVG stays above the font floor. | w07, check_pdf.py | B3.C31, B4.G9 |
-| FB-143 | When the exam allows no sheet, offer the notes page's Review view instead: a Review / Full notes toggle over the notes themselves, showing the Must-know lists, the exam-day map and the worked examples and pitfalls the notes tag for it, copying nothing; its length in minutes of reading, asked at intake and again only when nothing is left to untag, which the build enforces. | w07, w00, w06, w08, w10, w11, SKILL, t:plan, t:chassis, t:convert, t:briefs, t:fidelity, assemble.py, verify_page.mjs | E1.C17, E1.C18, E1.C21, F1.C3, F1.C5, F1.C8 |
+| FB-143 | When the exam allows no sheet, offer the notes page's Review view instead: a Review / Full notes toggle over the notes themselves, showing the Must-know lists, the exam-day map and the worked examples and pitfalls the notes tag for it, copying nothing; its length in minutes of reading, asked at intake, and changed only when nothing is left to untag, which the build enforces. | w07, w00, w06, w08, w09, w10, w11, SKILL, t:plan, t:chassis, t:convert, t:briefs, t:fidelity, assemble.py, verify_page.mjs | E1.C17, E1.C18, E1.C21, F1.C3, F1.C5, F1.C8 |
 
 ## 08-practice
 
