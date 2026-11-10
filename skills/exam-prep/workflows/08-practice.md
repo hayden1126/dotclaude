@@ -145,8 +145,10 @@ as it stands until step 7.5 changes it, and once item 2 has written the first ke
    student opens it before the later mocks.
 4. Run it again: each mock's line says KEY OK, with how many parts it asserted and the rest
    listed as reasoned. It also checks that the key's parts are the mock's, with or without a
-   checker. At a mock's first KEY OK, add `Key checked: <slug> <date> at <sha>` to STATUS, the
-   sha from `git rev-parse --short HEAD`: step 8.1's key gate reads what STATUS gained after it.
+   checker. At a mock's first KEY OK in this step, add `Key checked: <slug> <date> at <sha>` to
+   STATUS, the sha from `git rev-parse --short HEAD`: step 8.1's key gate reads what STATUS gained
+   after it. Only this step adds the line, never step 8.1's run of this item: a line added there at
+   HEAD would empty the gate's range and skip its fallback (a mock with no line).
 5. `python3 -I <skill>/scripts/mock_leak.py <page> practice/*-key.md` on the notes
    (`_build/notes.html`), and with a sheet on the mock sheet (`cheatsheet/<exam-slug>-mock.html`, or its `.tex`): the
    student reads each before the mocks. A hit on a part whose answer comes from the instance's
@@ -346,9 +348,10 @@ merge, as that step says.
      they are (no report says what it checked), its `question` parts come from the run below (each
      mock's `KEY OK: ...; skipped: <ids>` line), and STATUS logs the report as lost. A recheck
      writer's worktree with no commit of its own is removed as `09-tutor` step 5.5.1 does.
-   - **Due or not.** Run step 4's item 4, `python3 -I _build/verify/mock_key.py` (part ids only).
-     A recheck is due when the mock's line isn't KEY OK, or when STATUS gained a finished source or
-     a reference change after its `Key checked: <slug> <date> at <sha>` line: `git log --oneline
+   - **Due or not.** Run step 4's item 4, `python3 -I _build/verify/mock_key.py` (part ids only),
+     which adds no `Key checked:` line here. A recheck is due when the mock's line isn't KEY OK,
+     or when STATUS gained a finished source or a reference change after its `Key checked: <slug>
+     <date> at <sha>` line: `git log --oneline
      <sha>..HEAD -G'Source added: .*: done|Reference changed:' -- STATUS.md` prints a commit. The
      order is git's, never the dates': a source added the day a mock was built is still after it.
      A mock with no `Key checked:` line (a hub built before the line existed) takes the sha of the
@@ -394,11 +397,11 @@ merge, as that step says.
      (`git diff --no-renames --name-status <hub branch>...<branch>`, file names only) merges, `git
      merge --no-edit <branch>`; with no commit of its own (nothing needed changing), nothing
      merges. Remove its worktree and branch as `09-tutor` step 5.5.3 does, unless the Agent tool
-     already did, and rewrite each untaken mock's line to `Key checked: <slug> <date> at <base>`: a
-     line committed after the base (a source finished while the writer ran) stays in the next
-     range. After a merge, what a change to
-     a key reruns (step 4's closing paragraph): step 4's items 4 and 5, step 6's item 2 and step
-     7's items 1 and 2, each with the untaken mocks' keys. Log in STATUS each mock's part ids and
+     already did, and rewrite each untaken mock's line to `Key checked: <slug> <date> at <base>`, or
+     add it where the mock has none (an older hub): a line committed after the base stays in the
+     next range. After a merge, what a change to a key reruns (step 4's closing paragraph): step
+     4's items 4 and 5, step 6's item 2 and step 7's items 1 and 2, each with the untaken mocks'
+     keys. Log in STATUS each mock's part ids and
      what the report says of each, commit, and run the gate again: it passes.
    - **Anything else** merges nothing and rewrites no `Key checked:` line, so the gate stays due.
      A conflict, or a merge git refuses: `git merge --abort` as `09-tutor` step 5.5.3 does, never

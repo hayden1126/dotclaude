@@ -98,9 +98,9 @@ evidence ids.
     A key gate before each attempt (`08-practice` step 8.1, never inside a build) spawns the writer
     when the key checker fails or STATUS gained a `Source added: ... done` or `Reference changed:`
     line after the mock's `Key checked: <slug> <date> at <sha>` line (git's order, not the dates),
-    and a merge rewrites that line to the writer's base (the head the session noted at the spawn,
-    or the report's sha, never the current HEAD), so a `/clear`, a lost report or a failed
-    merge leaves the check due with no state of its own; this replaced stored STATUS lines for a
+    and a merge rewrites that line (or adds it, on an older hub; only step 4 adds one otherwise)
+    to the writer's base (the head the session noted at the spawn, or the report's sha, never the
+    current HEAD), so a `/clear`, a lost report or a failed merge leaves the check due with no state of its own; this replaced stored STATUS lines for a
     pending and a running recheck, which review found could start a writer mid-build. One writer
     runs at a time, in the background with its transcript unopened, its whole reply the JSON block
     (part ids and file names only), spawned once everything uncommitted is committed, and a merge
