@@ -28,7 +28,7 @@ picks it up.
   addition goes where its step 8 says (Step 5.2); and the next-step line stays as it stands.
 - A build runs while STATUS has the line `Build running: <date>` (SKILL.md, hard rule 1): the
   unattended build session's, from its launch until its last stage removes it (`08-practice` step
-  7.4 puts `Stage 08 built: <exam-slug>, <date>` in its place), or a stage's run alone. It changes
+  7.5 puts `Stage 08 built: <exam-slug>, <date>` in its place), or a stage's run alone. It changes
   the notes, the sheets, `_build/verify/` and STATUS, and from `08-practice` step 2 its window shows
   mocks and answers. Any end of a build removes the line (hard rule 1). Read STATUS for the line
   before each part, quiz item and answer, so a tab open since before the build finds it. While it
@@ -100,7 +100,10 @@ post the next part until the student is done asking (A1.C20).
 Settle it before the first part:
 
 - A taken mock: its key, `practice/mock-<slug>-key.md`. An untaken mock is never walked through:
-  it is a timed rehearsal (`08-practice` step 8.1).
+  it is a timed rehearsal (`08-practice` step 8.1). Before grading a taken mock, read STATUS for
+  its `mock key: recheck <mock> parts on <topic> after the attempt` lines (`08-practice` step 8's
+  opening): check each of its parts on that topic against the notes and the new source first, fix
+  the key as `08-practice` step 4's rerun clause says, then strike the line.
 - A set whose official solutions are extracted (MANIFEST.md marks their file `Answers: yes`, with
   `solutions to <doc>` in its Notes): the `Solution [` line under each part's block in
   `_build/extract/`.

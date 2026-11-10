@@ -144,7 +144,9 @@ In this order, each item logged as it lands:
    `practice/<old-slug>/`: every `practice/mock-*.md` (the keys and `mock-values-key.md` among
    them), `practice/cram-order.md`, `_build/verify/mock_key.py`, `_build/mock-plan.md` and each
    `_build/mock-<slug>.html`; and into `cheatsheet/<old-slug>/`: every file of its sheets (`.html`,
-   `.pdf`, `.tex`, `.layout.json`) and `_build/sheet-outline.md`. Move STATUS's attempt, miss and
+   `.pdf`, `.tex`, `.layout.json`) and `_build/sheet-outline.md`, and, with no sheet allowed, the
+   condensed review page's root `_build/review/` as `cheatsheet/<old-slug>/review/` (`git mv` the
+   directory; `07-cheatsheet` builds the next exam's afresh). Move STATUS's attempt, miss and
    final-sheet lines into `practice/<old-slug>/attempts.md`. Then the listing shows none of them at
    the top level (`practice/tutor/` and `_build/verify/set_key.py` stay: they are the course's
    homework). Why: every rule that finds the current exam's mocks, keys and sheets reads a top-level
@@ -179,9 +181,9 @@ In this order, each item logged as it lands:
    the final-sheet items, a mock sheet logged as changed or to print again, a part logged for a
    recheck (item 1 moved the attempts). An `Unverified:` line stays: its material is still unchecked
    ("A source added unverified"). Keep the notes page's URL line (same URL from here on), and add
-   the finished exam's sheet and mock page URLs to the `Earlier exams:` line (start it when there is
-   none), as `<old exam>: <name> <URL>, ... (tag exam/<old-slug>)`. Set the next-step line to `11
-   step 6, launch the build for <exam> (_build/logs/reopen-<old-slug>.md)`.
+   the finished exam's sheet, review page and mock page URLs to the `Earlier exams:` line (start it
+   when there is none), as `<old exam>: <name> <URL>, ... (tag exam/<old-slug>)`. Set the
+   next-step line to `11 step 6, launch the build for <exam> (_build/logs/reopen-<old-slug>.md)`.
 4. **The approval line, last**, as `00-intake` step 7 item 3 says. Commit, staging the archive's
    moves and the files changed by name.
 
@@ -304,7 +306,9 @@ build is this build's end, not a stage's.
    audit limited to the change, then its step 4, its republish left to step 5; a LaTeX sheet in its
    `.tex`, which the student compiles); the cram order taking the material as a row in its last
    tier, then `08-practice` step 7's items 1 to 3 (the audit for the new row), item 2 with the
-   untaken mocks' keys while one is; an untaken mock isn't edited. The log marks each stage's end
+   untaken mocks' keys while one is, then its item 4 for the page: the map's cram copy rewritten
+   and `06-site` step 5 run again, after the page's own rebuild above, its compare as this step
+   says and its republish left to step 5; an untaken mock isn't edited. The log marks each stage's end
    once its commit is made (`02 done`), each product's (`page done`, `sheets done`, `cram order
    done`), and `step 4 done` after the last. With no mock untaken, a sheet's change is shown to the
    student before it is made (FB-137). While one is, every change to the notes or a sheet runs
@@ -320,7 +324,7 @@ build is this build's end, not a stage's.
 5. **Close**, each item logged as it lands. First, while a mock was untaken, the look-back, on a
    clean screen: the window's scrollback holds edits the compare caught, so log `clear asked`, hand
    off and commit, and end the reply with one line, `The change is checked: type /clear, then "go on
-   with the source added".`, as `08-practice` step 7.4 does; the fresh session finds this step as "A
+   with the source added".`, as `08-practice` step 7.5 does; the fresh session finds this step as "A
    stop" says, and any session that starts fresh at this step skips the clear. Then the student
    looks back; show them each sheet's change (FB-137) and each text logged `changed (how)`. A change
    they reject is reworded by them and made as step 4 makes one, logged `redo <what>`: they look
@@ -469,7 +473,7 @@ fresh session answers from STATUS, then runs step 7.5.
    lines in a commit of their own.
 6. **Report.** While a mock was untaken, the look-back first: the screen holds edits the compare
    caught, so hand off and commit, and end the reply with one line, `The change is checked: type
-   /clear, then "what was added?"`, as `08-practice` step 7.4 does; the fresh session answers from
+   /clear, then "what was added?"`, as `08-practice` step 7.5 does; the fresh session answers from
    STATUS, then runs `10-polish` step 7.5. The report: what went in and where, any rewording, the
    version, and that the material stays bannered, off every sheet, out of the mocks and the cram
    order's reading rows, and out of `09` until verified.

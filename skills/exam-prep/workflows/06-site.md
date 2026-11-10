@@ -70,14 +70,17 @@ heading, then one `<li>` per question shape: the shape in `<b>`, its section as 
 practice questions), and an `.edrill` line naming what to drill hardest. Every link uses a
 backbone id. A shape that tests only what a topic cut takes out (the backbone's Conventions cut
 lines) stays out of the map. Each section the map names carries its depth label (S33) beside its
-`xref`, as the notes state it.
+`xref`: the label's words alone (Know cold, Use, Recognize), in parentheses after the link, plain
+text, without the statement it rests on: `<a class="xref" href="#sec-2-walks">§2.2 Walks</a> (Use)`.
 
-Once `08-practice` step 7 has written the cram order, the map opens with it (K02): one `.eq`
+Once `08-practice` step 7 has written the cram order, the map opens with it (K02) and renders
+open, `<details class="examnav" open>`, so the cram order shows at the top of the page: one `.eq`
 group per tier before the question shapes, its `.eqh` the tier's name and minutes, one `<li>` per
 row (its one thing in `<b>`, its section as an `xref` to the section's anchor, its depth label),
 then the skip list and the Out of time line in an `.edrill` line. Its mock lines and `## Tonight`
 stay in `practice/cram-order.md` only. That file is the one source: the map's copy is rewritten
-from it each time it changes, never edited apart.
+from it each time it changes (`08-practice` step 7.4), never edited apart. Before the cram order
+exists the map stays closed, with no `open` attribute.
 
 ## Step 5: Assemble and check
 

@@ -100,7 +100,7 @@ names (00 runs 01's Ed pull; 02 starts 05's checker).
 | 04 | `workflows/04-write.md` | `notes/NN-<slug>.md`, wired | `linkcheck.py` is clean (plain-text notes: references checked by hand) |
 | 05 | `workflows/05-verify.md` | checker, reviews applied | self-test covers every official part (or nothing is computable), no `TODO-VERIFY` left |
 | 06 | `workflows/06-site.md` | the notes page, published | `verify_page.mjs` passes, URL in STATUS |
-| 07 | `workflows/07-cheatsheet.md` | sheet HTML and PDF (only if allowed) | `check_pdf.py` passes |
+| 07 | `workflows/07-cheatsheet.md` | sheet HTML and PDF (only if allowed); with no sheet allowed, the condensed review page when PLAN.md includes it | `check_pdf.py` passes; the review page: `verify_page.mjs` passes, URL in STATUS |
 | 08 | `workflows/08-practice.md` | mocks, quarantined keys, mock pages, the cram order | the key script asserts every computable value; the leak check passes |
 | 09 | `workflows/09-tutor.md` | walk-throughs, quizzes, notes patches, `_build/logs/tutor.md` | on demand |
 | 10 | `workflows/10-polish.md` | scan, report, apply on approval | on demand |
@@ -112,7 +112,7 @@ names (00 runs 01's Ed pull; 02 starts 05's checker).
 1. **Plan, then run unattended.** Intake asks everything up front; after the student approves
    PLAN.md, ask nothing and log judgment calls in STATUS (FB-001, FB-020). The build session
    (`00-intake` step 8) adds the STATUS line `Build running: <date>` before its first stage, and its
-   last stage removes it (`08-practice` step 7.4 puts `Stage 08 built` in its place); a build stage
+   last stage removes it (`08-practice` step 7.5 puts `Stage 08 built` in its place); a build stage
    run alone on request (07, 08, `11`'s source additions) and a `10-polish` pass add and remove
    their own. Any end of a build removes it: a last stage that is skipped or cut short, a stop at a
    stage's step 1, a stage that stops to wait for a notes patch. While the line stands, a `09-tutor`
@@ -155,7 +155,8 @@ names (00 runs 01's Ed pull; 02 starts 05's checker).
     `cp`: the skill's folder is a symlink outside the hub, and `cp`'s source read through it counts
     as a write target (L71).
 13. **Hub fixes flow back.** The skill's files change only through `12-retro`, so a bug found in a
-    hub that lives in a skill file (a template, the chassis, a script, a brief) is fixed in the hub,
+    hub that lives in a skill file (a template, the chassis, a script, a brief) is fixed in the hub's
+    copy, or, for a script or brief, worked around in the hub (a wrapper or flag under `_build/`),
     then logged in `_build/logs/skill-fixes.md` (what, where, the hub's diff) for the retro, and the
     session offers to relay the fix to the other open hubs that use that file (FB-014).
 

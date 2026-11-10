@@ -1,6 +1,6 @@
 # 10 Polish
 
-Baseline as of 2026-10-20; changes only via `12-retro`.
+Baseline as of 2026-11-10; changes only via `12-retro`.
 
 A pass over the verified notes for one kind of failure, or for a scope change that came after the
 build: scan, report, then apply exactly what the student approves (FB-170). It runs only when the
@@ -55,7 +55,7 @@ session and every reader search only `notes/`, `cheatsheet/`, `_build/frag/`, `_
 before the mocks), and never open `_build/verify/mock_key.py` or `_build/mock-plan.md`: a search
 over the hub root prints key lines, and the plan holds the mocks' questions. Each write to the
 pass's log or to STATUS is followed by `python3 -I <skill>/scripts/mock_leak.py <file> <the untaken
-mocks' keys>` until it prints LEAK OK, a hit reworded (`08-practice` step 7.4's check), and the
+mocks' keys>` until it prints LEAK OK, a hit reworded (`08-practice` step 7.5's check), and the
 student reads the report only once the log has passed. From step 5 to the end of step 6 the student
 looks away from this window, as `08-practice` step 4 asks: an edit shows its text before the leak
 compare clears it.
@@ -207,7 +207,9 @@ step 1 says.
    change, then its step 4. Near a full side, new wording is no longer than what it replaces
    (FB-137). A LaTeX sheet changes in its `.tex` only; the student compiles it (step 7.2). With a
    cram order, `08-practice` step 7's item 1, and while a mock is untaken its item 2 with the
-   untaken mocks' keys.
+   untaken mocks' keys. When the pass changed the cram order's tiers, rows or skip list (a cut
+   moved a row to the skip list, a row reworded), then its item 4: the map's cram copy rewritten
+   and `06-site` step 5 run again, its compare as item 5 says and its republish left to step 7.1.
 5. While a mock is untaken, "Changing the notes or a sheet" item 4: rerun the baseline's command and
    compare with the pass's baseline file (a `.tex` is read as its source). A new hit on a
    number, order or table answer is a leak: reword it, log the reword as the item's `changed
@@ -232,7 +234,7 @@ compare (that text passed the baseline), only step 5.4's rebuild and checks, the
 The look-back, while a mock is untaken, once the last compare has passed, on a clean screen: the
 window's scrollback holds edits the compare caught, so log `clear asked`, hand off and commit, and
 end the reply with one line, `The pass is checked: type /clear, then "go on with the polish pass".`,
-as `08-practice` step 7.4 does; the fresh session finds the look-back as "A pass that stops" says,
+as `08-practice` step 7.5 does; the fresh session finds the look-back as "A pass that stops" says,
 and any session that starts fresh there skips the clear. Then the student looks back; show them what
 changed on each sheet (FB-137) and each text reworded after a leak hit (step 5.5), and ask each held
 question and apply its answer as above. A change the student rejects there is reworded by them, and

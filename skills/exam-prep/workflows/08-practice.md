@@ -107,13 +107,13 @@ alone. Either way, steps 3.2 and 3.4 again.
 ## Step 4: The key
 
 The main session writes every key; no writer sees one. Its output shows answers from here to
-step 7.4, so nobody may watch it. First set STATUS's next-step line to `Stage 08 is writing the
+step 7.5, so nobody may watch it. First set STATUS's next-step line to `Stage 08 is writing the
 mock keys: don't look at the build window. When this line starts "08 step 8, the cram night", go
 to it, type /clear, then "start the cram night", before reading anything else.`: `00-intake`
 step 8 told the student to watch STATUS for it. This session asks them nothing (hard rule 1).
 The student reads STATUS on disk: from here every write to it, a handoff's too, keeps that line
-as it stands until step 7.4 changes it, and once item 2 has written the first key file runs step
-7.4's STATUS check at once. Then:
+as it stands until step 7.5 changes it, and once item 2 has written the first key file runs step
+7.5's STATUS check at once. Then:
 
 1. Copy `<skill>/templates/verify-mock-key.py` to `_build/verify/mock_key.py` and list the mock
    slugs in MOCKS. With a checker, add per instance an assert that it isn't degenerate (a tie the
@@ -240,12 +240,15 @@ Then:
    FB-105): every row's one thing against the section it links. A finding on a row is fixed in
    the cram order; one on the notes goes through "Changing the notes or a sheet". Then 1 and 2
    again.
-4. The cram order is published at the top of the notes page (K02): write its tiers into the
-   exam-day map as `06-site` step 4 says, then run "Changing the notes or a sheet" items 1 and 3 to
-   5 for the page (its compare against the keys, the rebuild and checks, the republish to the same
-   URL). Plain-text notes have no page: the cram order stays a file. Each later change to the cram
-   order (step 8.4, `11-next-exam`'s source added) rewrites the map's copy the same way. Hand off
-   and commit (Done when's list, up to here) as this
+4. **The page's copy** (K02). The cram order is published at the top of the notes page: rewrite
+   the map's cram copy from `practice/cram-order.md` as `06-site` step 4 says (the map then renders
+   open), then run "Changing the notes or a sheet" items 1 and 3 to 5 for the page (its compare
+   against the keys, the rebuild and checks, the republish to the same URL). Plain-text notes have
+   no page: the cram order stays a file. Every later change to the cram order's tiers, rows or skip
+   list reruns this item after items 1 and 2: step 8.4, `10-polish` step 5.4 and `11-next-exam`'s
+   "A source added to this exam" step 4 name it in their order. A change to a mock line alone
+   doesn't: the map holds none.
+5. Hand off and commit (Done when's list, up to here) as this
    stage's opening says, the next-step line kept as step 4 set it. The student acts on the new
    line, so it comes last, after the handoff's own STATUS edits and just before its commit: set
    the next-step line to `08 step 8, the cram night`, with the cram order's path, and replace the
@@ -258,17 +261,21 @@ Then:
 
 ## Step 8: The cram night
 
-The student types `/clear` when step 7.4's last line asks, before reading anything else on that
+The student types `/clear` when step 7.5's last line asks, before reading anything else on that
 screen, so nothing on it shows a key they haven't reached; this fresh session reads STATUS, commits
-what step 7.4 left uncommitted (an early `/clear` can cut its commit short; `git status` and `git
+what step 7.5 left uncommitted (an early `/clear` can cut its commit short; `git status` and `git
 diff --stat` only), opens the night (FB-158, FB-159), and then dispatches the patches the build held
 and offers the checks it held (`09-tutor` step 1's Patches and Waiting checks bullets). The opening:
 
 - First, on a course with Ed, offer a re-pull, `ed-pull pull` (`01-ingest`, "Ed Discussion"): staff
   answer late questions the night before. A new staff answer that bears on the exam goes through
   `11-next-exam`'s "A source added to this exam", its `Source added:` STATUS line and source log
-  included, and that path also checks each mock key part the answer touches, as step 4's rerun
-  clause says (while the mock is untaken, the part is logged for a recheck).
+  included. No key is opened to find the parts an answer touches. When the answer changes the
+  reference or a convention, the main session reruns the mock key checker as step 4's rerun clause
+  says (items 2 and 4), which rechecks every part it computes. For a part it can't compute, it
+  logs in STATUS `mock key: recheck <mock> parts on <topic> after the attempt`, one line per
+  untaken mock, `<topic>` the answer's topic as the notes name it (finding which parts it reaches
+  would mean opening the key); `09-tutor` reads that line when it grades that mock.
 - Then the links: the notes page's URL from STATUS, whose top now holds the cram order (step 7.4),
   each mock page's URL, and the cram order's path. One line defines a tier: a block of reading rows
   with a minute budget, ranked by points per minute, read in order until time runs out.
@@ -325,7 +332,7 @@ merge, as that step says.
    there (the next line is another mock's, or the list ends), they go in a new tier in that place,
    `## Tier <n>: Misses (<M> min)`, the tiers after it renumbered and the intro's tier count up by
    one. Then step 7's item 1 again, and while a mock is untaken item 2 with the untaken mocks'
-   keys; then the notes page's copy, as step 7.4 says.
+   keys; then step 7.4, the page's copy.
 5. Commit and hand off as this stage's opening says, then clear each `held: mock first` mark
    (`09-tutor` step 5.5.9), its fields kept, and dispatch the oldest pending patch (`09-tutor` step
    1's Patches bullet).
@@ -355,7 +362,7 @@ attempt, `practice/*-key.md`):
 4. Run item 1 again and compare the hit lines with the baseline's (count them, since every hit
    on the notes reads "(the page)" and a second copy of an answer adds one). A new hit on a
    number, order or table answer is a leak: reword the change and repeat from item 2. Judge and
-   log any other new hit as step 4.5 does. During the build (steps 2 to 7.4), commit a change
+   log any other new hit as step 4.5 does. During the build (steps 2 to 7.5), commit a change
    only once this item passes, and a session that must end first finishes it: a `09-tutor` tab
    running meanwhile reads the notes and the sheets as committed (its step 1).
 5. Republish what is published (`06-site` step 6; the mock sheet as `07-cheatsheet` publishes it).
@@ -379,7 +386,8 @@ prints LEAK OK with `--no-markers` against the keys taken after it; the audit's 
 applied; the mocks, keys, `practice/mock-values-key.md`, `_build/mock-plan.md`,
 `_build/verify/mock_key.py`, the mock pages and the cram order are committed, handed off, STATUS's
 next-step line starts `08 step 8, the cram night` and it records `Stage 08 built: <exam-slug>,
-<date>`, and step 7.4's last line asks for `/clear`. Then, on the cram night: STATUS LEAK OK
+<date>`, the notes page's exam-day map holds the cram order and renders open (step 7.4; plain-text
+notes: no page), and step 7.5's last line asks for `/clear`. Then, on the cram night: STATUS LEAK OK
 against the untaken mocks' keys after each write; before each attempt the changed mock sheet shown
 and reprinted (with LaTeX, its PDF checked first); after it, the attempt and its misses in STATUS,
 the final sheet (changed as "Changing the notes or a sheet" says while a mock is untaken), the cram

@@ -181,8 +181,11 @@ nothing on it is new teaching.
    converted by the "Convert" brief (`06-site` step 3) into `_build/review/_build/frag/`, an
    exam-day map fragment there too (`06-site` step 4), and a copy of `MANIFEST.md` in
    `_build/review/` when it cites a source. Then `python3 -I <skill>/scripts/assemble.py --root
-   _build/review`, and `06-site` step 5's checks on `_build/review/_build/notes.html`. Count its
-   printed pages (a print to PDF of the page) against the length.
+   _build/review`, and `06-site` step 5's checks on `_build/review/_build/notes.html`. It has no
+   step-throughs (a row that needs one links to its figure on the notes page, and its fragments
+   keep no FIG marker), so `verify_page.mjs` runs on it without `--steps`, its shots in
+   `_build/shots/review/` (gitignored). Count its printed pages (a print to PDF of the page)
+   against the length.
 4. **Audit** with fresh reviewers, as step 5 audits a sheet (FB-105): every row against the notes
    it links.
 5. **Publish** it privately, as `06-site` step 6 publishes the notes, its URL in STATUS, then
