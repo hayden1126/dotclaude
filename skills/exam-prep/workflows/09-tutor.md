@@ -258,7 +258,8 @@ At each set's end, its score in the reply and the log: verdicts right, and reaso
       there) gets the main session's untag first, as `07-cheatsheet`'s "Tag the review" says,
       lowest-ranked first, committed on the hub before any redispatch: a bare redispatch fails the
       same way. Once no `.rv` tag is left, the main session asks the student for new minutes on
-      PLAN.md's `Review view:` line instead, logs them in STATUS and commits both first.
+      PLAN.md's `Review view:` line instead (the student is here, so that section's opening has
+      them asked), logs them in STATUS and commits both first.
    2. `git diff --no-renames --name-status <hub branch>...<branch>` (three dots: the branch's own
       changes) lists only `M` lines (a patch adds and deletes no file) under `notes/`,
       `_build/frag/` and `cheatsheet/`, and `_build/notes.html`; with a page a changed

@@ -253,9 +253,9 @@ Then:
    build and opens the map (`06-site` step 4), so the page needs no edit of its own. Run "Changing
    the notes or a sheet" items 1 and 3 to 5 for the notes page (its compare against the keys, the
    rebuild and checks, the republish to the same URL; a rebuild over the Review view's minutes is
-   untagged as item 3 says, or with no `.rv` tag left, new minutes: this build, unattended, sets
-   them and logs it in STATUS for the student to confirm, as `07-cheatsheet`'s "Tag the review"
-   opening says, and a later run with the student present asks them). Plain-text notes have no
+   untagged as item 3 says, or with no `.rv` tag left, new minutes as `07-cheatsheet`'s "Tag the
+   review" opening says: set and logged for the student to confirm in this build, which is
+   unattended, and asked after step 8.4, with the student present). Plain-text notes have no
    page: the cram order stays a file. This item runs on its own: after items 1 to 3 here, after step 8.4, and
    after items 1 and 2 for any other later change to the cram order's tiers, rows or skip list. A
    change to the cram order inside "Changing the notes or a sheet" (a row that quotes the changed
@@ -475,8 +475,10 @@ The products, each one the hub has:
      view). `assemble.py` holds the Review view to PLAN.md's minutes (the cram block left out):
      over them, the main session untags as `07-cheatsheet`'s "Tag the review" says, lowest-ranked
      first, and rebuilds, before anything else, a redispatch included; once no `.rv` tag is left,
-     it asks the student for new minutes on PLAN.md's `Review view:` line and logs them in STATUS,
-     as that section's opening says. `assemble.py` renders the
+     new minutes on PLAN.md's `Review view:` line, logged in STATUS: asked of the student, or set
+     and logged for them to confirm when they can't be asked (this stage's build, unattended; a
+     pass or source path while a mock is untaken, `held for the look-back`), as that section's
+     opening says. `assemble.py` renders the
      map's cram block from `practice/cram-order.md` as item 2 left it, so this one rebuild carries
      a change to the cram order's tiers, rows or skip list too, with or without a notes change, and
      step 7.4 never runs inside this list. Plain-text notes: the touched references checked by eye (`04-write` step 6),

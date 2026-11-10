@@ -74,9 +74,11 @@ evidence ids.
     its minutes at 150 words a minute, the map's cram block left out of the count (a reading list
     into the notes, not review text), and refuses a misplaced tag; a rebuild over the minutes is
     untagged, lowest-ranked first, before anything else (`07`, `08`, `09`), or, with no `.rv` tag
-    left, given new minutes: asked of the student, or during an unattended build set and logged as
-    a judgment call for the student to confirm (`07`'s opening, `08` step 7.4, `assemble.py`'s
-    message); a section whose `Not
+    left, given new minutes: asked of the student, or, when the student can't be asked (an
+    unattended build, or a pass or source path while a mock is untaken, its confirm `held for the
+    look-back`), set and logged as a judgment call for the student to confirm, by one rule in
+    `07`'s opening that `08` item 3 and step 7.4, `09`, `10`, `11` and `assemble.py`'s message
+    point to; a section whose `Not
     on <exam>` or `Unverified` banner comes before its first `h3` is left out of the view whole,
     and a load or hash change to a hidden target switches to Full notes; CONVERT and `fidelity.py` carry
     the marker; `verify_page.mjs` checks and shoots both views; `11-next-exam` asks the minutes on a

@@ -207,7 +207,9 @@ step 1 says.
    that commit leaves none.
 4. Rebuild and check each product the pass touched, as that section's item 3 lists them (the notes
    page with its Review view and the map's cram block, each sheet, the cram order), the touched
-   sections' screenshots seen; its republish waits for step 7.1.
+   sections' screenshots seen; its republish waits for step 7.1. A rebuild over the Review view's
+   minutes with no `.rv` tag left gets new minutes as `07-cheatsheet`'s "Tag the review" opening
+   says: asked, or while a mock is untaken set and logged `held for the look-back`.
 5. That section's item 4: the questions check when the pass changed the notes,
    and while a mock is untaken the leak compare with the pass's baseline file, never a new
    baseline (a `.tex` is read as its source). A questions hit is reworded with fresh numbers and

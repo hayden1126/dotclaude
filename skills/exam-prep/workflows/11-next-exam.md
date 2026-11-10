@@ -319,7 +319,10 @@ build is this build's end, not a stage's.
    the cram order taking the material as a row in its last tier, then the notes page's rebuild,
    which renders the row into the map and checks its id (`assemble.py`), then the row's audit as
    `08-practice` step 7's item 3 says and step 7's items 1 and 2, rebuilding again when the audit
-   changes a row (08's "Changing the notes or a sheet" item 3, whose ids come from the page); an
+   changes a row (08's "Changing the notes or a sheet" item 3, whose ids come from the page); a
+   rebuild over the Review view's minutes with no `.rv` tag left, new minutes set and logged as
+   `07-cheatsheet`'s "Tag the review" opening says (this path asks nothing; while a mock is
+   untaken, `held for the look-back`); an
    untaken mock isn't edited (`08-practice` step 8.1's key gate rechecks its keys against this
    source before the next attempt, from step 5's `done` line). The log marks each stage's end once
    its commit is made (`02 done`), each product's (`page done`, `sheets done`, `cram order done`),
@@ -342,7 +345,8 @@ build is this build's end, not a stage's.
    off and commit, and end the reply with one line, `The change is checked: type /clear, then "go on
    with the source added".`, as `08-practice` step 7.5 does; the fresh session finds this step as "A
    stop" says, and any session that starts fresh at this step skips the clear. Then the student
-   looks back; show them each sheet's change (FB-137) and each text logged `changed (how)`. A change
+   looks back; show them each sheet's change (FB-137) and each text logged `changed (how)`, and ask
+   each confirm logged `held for the look-back` (the Review view's minutes). A change
    they reject is reworded by them and made as step 4 makes one, logged `redo <what>`: they look
    away again, and once its compare passes and it is committed, a new `clear asked` round comes
    before they see it; or it is taken out (no new compare, only `10-polish` step 5.4's rebuild and
@@ -494,7 +498,8 @@ fresh session answers from STATUS, then runs step 7.5.
 6. **Report.** While a mock was untaken, the look-back first: the screen holds edits the compare
    caught, so hand off and commit, and end the reply with one line, `The change is checked: type
    /clear, then "what was added?"`, as `08-practice` step 7.5 does; the fresh session answers from
-   STATUS, then runs `10-polish` step 7.5. The report: what went in and where, any rewording, the
+   STATUS, asks each confirm logged `held for the look-back` (the Review view's minutes, set as
+   `07-cheatsheet`'s "Tag the review" opening says), then runs `10-polish` step 7.5. The report: what went in and where, any rewording, the
    version, and that the material stays bannered, off every sheet, out of the mocks and the cram
    order's reading rows, and out of `09` until verified.
 

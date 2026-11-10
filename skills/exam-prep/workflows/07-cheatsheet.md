@@ -167,17 +167,21 @@ When the exam allows no sheet, the student still needs a recall layer shorter th
 whose Review view shows each section's Must-know list, the exam-day map and the blocks the notes
 tag `.rv`, and hides the rest. It copies nothing: this stage only tags worked examples and pitfalls
 the verified notes already hold. Its budget is PLAN.md's `- Review view: <N> minutes of reading`
-line, asked at intake, and again only when nothing is left to untag (below). `assemble.py` counts
+line, asked at intake, and changed only when nothing is left to untag (below). `assemble.py` counts
 the view's words at 150 a minute (`READING_RATE`, an unmeasured estimate for dense study notes) and
 fails the build when they take more than N minutes, printing both numbers. The map's cram block (`08-practice` step 7) is left out of the
 count: it is a reading list into the notes, not review text. Any later rebuild can still fail on
 the minutes (a patch that lengthens a tagged block, a new Must-know line); the remedy is item 4's:
 untag from the last ranked subsection up, before anything else. Once no `.rv` tag is left (the
-Must-know lists, the headings and the map count untagged), untagging can't help: the main session
-asks the student for new minutes on PLAN.md's `Review view:` line and logs them in STATUS. During
-an unattended build, which asks nothing (hard rule 1), the build sets the minutes the view now
+Must-know lists, the headings and the map count untagged), untagging can't help: PLAN.md's `Review
+view:` line gets new minutes, logged in STATUS. This is the one rule for who sets them, and every
+other site points here. When the student can't be asked, the session sets the minutes the view now
 takes, rounded up, and logs that in STATUS as a judgment call for the student to confirm or change.
-"A build" here means an unattended one: a `10-polish` pass, with the student present, asks.
+The student can't be asked during an unattended build (hard rule 1: a build stage, either
+`11-next-exam` source path among them), nor in a `10-polish` pass while a mock is untaken. In a pass
+or a source path while a mock is untaken, the student looks away, so the confirm is logged `held for
+the look-back` and asked there (as `10-polish` step 6 holds a question). Otherwise (a pass once every
+mock is taken, a `09-tutor` patch's merge, `08-practice` step 8.4) the main session asks the student.
 
 1. **Rank the subsections.** Before the cram order exists, by the backbone's How it's tested
    weights; once it exists (`08-practice` step 7), in its rows' order. A subsection under a `Not on
@@ -196,8 +200,8 @@ takes, rounded up, and logs that in STATUS as a judgment call for the student to
    `06-site` step 3's `fidelity.py`, which compares the marker like an id.
 4. **Assemble and check**, `06-site` step 5, all of it. `assemble.py` enforces the budget: over
    it, untag from the last ranked subsection up and rerun from item 3; once no `.rv` tag is left,
-   new minutes on PLAN.md's `Review view:` line, asked of the student, or during an unattended
-   build set and logged, as this section's opening says, and rerun. `verify_page.mjs` checks and
+   new minutes on PLAN.md's `Review view:` line, asked or set and logged as this section's opening
+   says, and rerun. `verify_page.mjs` checks and
    shoots both views; look at the `-review` screenshots too. Since no text changes, `05-verify`
    step 5's questions check needs no extra pages (FB-191), and there is no audit of copied text.
 5. **Republish** the notes page to its same URL, as `06-site` step 6 says, its version bumped on

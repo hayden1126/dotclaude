@@ -784,7 +784,7 @@ class AssembleTest(unittest.TestCase):
         self.assertRefused(self.cram_hub(plan=plan, sec1=untagged, cram=None),
                            "over PLAN.md's 2: no rv tag is left to untag, so the main session asks the "
                            "student for new minutes on PLAN.md's `- Review view:` line and logs them in "
-                           "STATUS, or, during an unattended build, sets them and logs it")
+                           "STATUS, or, when the student can't be asked, sets them and logs it")
 
     def banner_sec1(self, label, must="x"):
         """SEC1_MK with a label banner before its first h3, and its Must-know list holding must."""
