@@ -302,8 +302,13 @@ and offers the checks it held (`09-tutor` step 1's Patches and Waiting checks bu
   - The Agent call carries `isolation: "worktree"` and `run_in_background: true`, and the session
     tells the student not to open the writer's transcript: its Read and Edit calls show key text,
     which a foreground subagent would print in this window.
-  - Before the spawn, the `dispatched` line is committed (a background writer's branch is known
-    only from its completion notice, as with `09-tutor`'s `dispatched <date>`); step 8.1 reads
+  - Before the spawn, commit everything uncommitted, the `dispatched` line with it, as `09-tutor`
+    step 5.4 does: a reference change and step 4's rerun leave the reference and
+    `practice/mock-values-key.md` changed, and the writer's worktree starts from the hub's last
+    commit, so it would start stale, and its merge would refuse over the dirty file, leaving
+    `git merge --abort` nothing to abort. The line is committed because a background writer's
+    branch is known only from its completion notice, as with `09-tutor`'s `dispatched <date>`;
+    step 8.1 reads
     both lines, and the merge (or the removal below) strikes the `dispatched` one. In a fresh
     session, an unstruck `dispatched` line whose writer `delegation-ledger watch` no longer shows
     is settled as `09-tutor`'s patch log settles one: its worktree's branch merged as below, or
