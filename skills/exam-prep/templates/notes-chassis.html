@@ -170,6 +170,8 @@
   .rvlede{display:none}
   :root[data-notesview="review"] .rvlede{display:block}
   :root[data-notesview="review"] .rvhide{display:none!important}
+  /* display math sitting loose in a section is typeset after the script marks the rest */
+  :root[data-notesview="review"] section.note>mjx-container{display:none!important}
   /* sections, and their rail entries, take the cram order: flex lets CSS order move them */
   :root[data-notesview="review"] .wrap,:root[data-notesview="review"] .toc{display:flex;flex-direction:column}
   :root[data-notesview="review"] .wrap>*{min-width:0}
