@@ -206,6 +206,18 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     later (one in the second the previous holder released). A long wait can starve to its
     timeout. Fix shape: a ticket queue (a waiter writes a ticket, and only the oldest live ticket
     may take the lock; a fresh caller queues behind it). Not picked yet; a lane after Nov 16.
+  - **A shell redirect overwrites a file with no guard** (seen 2026-11-11, a lane session in
+    another repo): the plan said a helper didn't exist (a research subagent's "found no existing
+    ... helper", never checked by path), and the session then created that path with
+    `cat > <path> <<'EOF'` inside a Bash call, replacing a tracked file other modules import. The
+    overwrite guard and Claude Code's read-before-write check cover the Write tool only, and auto
+    mode's own instructions push small file changes to heredocs. Caught by `git diff --stat` 30 s
+    later; restored from HEAD on Hayden's OK. Fix shape (lead's pick): extend the overwrite guard
+    to Bash, a deny-once on a `>` redirect onto an existing file the session never read (not
+    `>>`, `/dev/null` or temp dirs), with tests; a Python `open(p, 'w')` stays uncovered.
+    Alternatives: zsh `noclobber` in Claude's shell (unverified that the shell snapshot carries
+    options; breaks legit overwrites), or a planning rule to check a new file's path is free. Not
+    picked yet; a lane after Nov 16, Hayden's call.
   - **`lane sync-main` refuses on empty untracked dirs** (seen 2026-11-10, #183's chain): it
     listed 18 dirs that hold no file (`.claude/.cc-writes` pairs Claude Code leaves in any dir a
     session ran from, old empty skill subdirs, a `.tmp`), which `git status` never shows. The lead
@@ -481,16 +493,19 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
 
 ## Notes for next session
 - **Next (lead, main checkout):**
-  - Start a new `/interview` with Hayden in this tab: more things he wants to add (approved by
-    Hayden 2026-11-08: "as the lead session we go through another interview with some more things
-    I want to add"). Ask him the topic first. It gets its own VISION.md, outside the public repo
-    (ask where); the tray interview has ended (`~/scratch/session-panel/VISION.md`, built after
-    the hackathon, the Backlog's Tray item).
+  - All six lanes are parked (`lane ls`); no lane session runs. Two calls wait on Hayden:
+    reopen demo-av (`lane open demo-av`) before Nov 12 to finish PR 4 (#180; its record's Next:
+    full suite, reinstall on his OK, invideo test, fresh Shodo demo, ready and merge), or leave it
+    for after Nov 15; and reopen exam-prep for its round 2 retro after his 11-12 exam (its PR
+    waits for Nov 16 unless he extends the early-merge exception). The live demo-video and
+    demo-first-scope are main's copies until demo-av reinstalls. The model-routing `/interview`
+    stays paused (`~/scratch/model-router/VISION.md`); only Hayden resumes it. A
+    teammate's Claude Code kit (private) is ready and sent: see memory [[teammate-claude-kit]].
   0. Live lanes: `lane ls`; state in their records (2026-11-08: practices and demo-av kept open,
      verify-app parked until practices merges; unpark it then to merge main and rerun its trial; at that merge, after demo-av PR 4, resolve the `skills/` row in README and add `captions.mjs: "// "` to the RECORDERS dict in `tests/setup/test_license_notices.py`, per demo-av 2026-11-08). #178 merged and is installed from main; lanes hackathon,
      merge-record, env-names, license, mocks and speed closed 2026-11-07. Hayden's leftover asks from lane deny-rules
      (an overlay paste plus a setup rerun, probe leftovers, local tool cleanups): its closed
-     record. Demo-av PR 4 merges and installs by Nov 11, else after Nov 15; nothing else before Nov 16. Install freeze Nov 12 through Nov 15. A chain that
+     record. Demo-av PR 4 merges and installs by Nov 11, else after Nov 15; nothing else before Nov 16 except exam-prep (Hayden's exception, 2026-11-10). Install freeze Nov 12 through Nov 15. A chain that
      stops before its "main moved" step still tells the lanes, and arms a wake on the blocker
      (`skills/lanes/SKILL.md`). Demo-av PR 4 (demo content planning, captions, `demo-video` no longer manual-only):
      captions drop out if not reviewed clean by midday Nov 10; Hayden let captions change
