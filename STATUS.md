@@ -206,6 +206,14 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     later (one in the second the previous holder released). A long wait can starve to its
     timeout. Fix shape: a ticket queue (a waiter writes a ticket, and only the oldest live ticket
     may take the lock; a fresh caller queues behind it). Not picked yet; a lane after Nov 16.
+  - **Links in tmux panes don't open** (Hayden, 2026-11-11): tmux 3.7c drops OSC 8 hyperlinks
+    unless the outer terminal has the `hyperlinks` feature, and Windows Terminal isn't
+    auto-detected (`tmux list-clients -F '#{client_termfeatures}'` showed none). The lead set
+    `terminal-features ',xterm-256color:hyperlinks'` live on HAYPC's server (gone at the next
+    server start); a reattach picks it up. With `mouse on`, tmux also takes the click, so Windows
+    Terminal needs Shift held to bypass mouse mode (Ctrl+Shift+click; untested). Fix: one line
+    beside the `progressbar` one in `tmux/claude.conf`, once Hayden confirms the reattach works;
+    rides the next PR after Nov 16.
   - **A shell redirect overwrites a file with no guard** (seen 2026-11-11, a lane session in
     another repo): the plan said a helper didn't exist (a research subagent's "found no existing
     ... helper", never checked by path), and the session then created that path with
