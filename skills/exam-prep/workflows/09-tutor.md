@@ -1,6 +1,6 @@
 # 09 Tutor
 
-Baseline as of 2026-11-10; changes only via `12-retro`.
+Baseline as of 2026-11-12; changes only via `12-retro`.
 
 The student studies with the hub: walks through a set one part at a time, takes a true-or-false
 quiz, or asks about the material. The main session tutors and only answers; every change to the
@@ -124,7 +124,7 @@ Settle it before the first part:
   Step 6 does), and once mocks exist `08-practice` step 4's rerun clause for a changed reference
   follows (items 2 and 4; on the cram night a changed part of an untaken mock is left to the key
   recheck writer, as it says, its `Reference changed:` STATUS line committed with the reference
-  change, so `08-practice` step 8.1's key gate rechecks it before the next attempt): it isn't graded
+  change, so `08-practice` step 8.1's key gate (FB-159) rechecks it before the next attempt): it isn't graded
   until its `value()` replaces the call, and the other parts go first. A set whose official
   solutions give final answers only gets values here too when the student's partial work needs its
   intermediate values.
@@ -208,23 +208,43 @@ At each set's end, its score in the reply and the log: verdicts right, and reaso
 ## Step 5: Questions and patches
 
 1. Answer a definition or yes/no question from what you know first, in the course's words; then
-   check the notes and say if they differ. Answer first (FB-164). A fact question gets a direct
-   answer and a tiny sanity case ("3 bits give 0 to 7"); the answer text is short and exam-ready,
-   in the course's words. In chat, write symbols as Unicode or plain text, never LaTeX delimiters,
-   and never coin a label the course doesn't use (FB-192). "Be even clearer" gets a clearer
-   version. A number or trace in an answer comes from the checker
-   (`_build/verify/examples.out.md`, or the reference run on the example), never by hand.
+   check the notes and say if they differ. Answer first (FB-164). Short by default: bold-labelled
+   bullets, one or two sentences each, only those the question needs, in this order: **Rule**,
+   **Why**, **Steps**, **Example** (cut to its numbers: a tiny sanity case, "3 bits give 0 to 7"),
+   **Trap**, **Answer form** (what a full-mark answer writes down). The full derivation only when
+   the student asks for it; "be even clearer" gets a clearer version, still short. Define each
+   symbol and term at its first use in the answer, even one an earlier answer defined. When one
+   letter means two things across the course's topics, name the senses apart every time ("n
+   items", "n steps"), never the bare letter. In chat, write symbols as Unicode or plain text
+   (x², a₁, ≤), never LaTeX delimiters and never HTML tags (no `<sub>` or `<sup>`), and never coin
+   a label the course doesn't use (FB-192). A number or trace in an answer comes from the checker
+   (`_build/verify/examples.out.md`, or the reference run on the example), never by hand. With a
+   sheet (`07-cheatsheet` built one), an answer about a fact ends with where the fact is on the
+   sheet the student will bring (the final sheet once `08-practice` step 8.3 has built it, else
+   the mock sheet, or the one sheet), as its index gives it (`07-cheatsheet` step 3, FB-144): the block,
+   its side and column (`Sums, side 1, column B`), or `not on the sheet`. The sheet's HTML is read
+   under `cheatsheet/` (during a build as committed, Step 1); a fact not on it that the student
+   would need cold is a gap for item 2's sheet line.
 2. Then search `notes/` for the point. When the notes don't say it where the student was reading, or
-   say it unclearly there, offer the patch: the exact sentence (one short sentence at the point of
-   confusion; the student's own insight is often the best one, A3.C16), the subsection, the line it
-   follows or replaces, and for the sheet a one-line form when one fits (FB-166). When the notes
-   already say it elsewhere, point there instead. While a mock is untaken, a sheet line goes where
+   say it unclearly there, the gap goes at once into the log's `## Pending patches`, a line marked
+   `proposed` (Step 7 commits it): the exact sentence (one short sentence at the point of
+   confusion; the student's own insight is often the best one, A3.C16), the subsection, the text it
+   follows or replaces, quoted, and for the sheet a one-line form when one fits (FB-166). Don't offer
+   it yet: every five questions, and before the session ends or a mock attempt starts, offer every
+   `proposed` line together as one notes patch, in one message, so the student weighs one patch,
+   not one per question. Each place in that offer, and every pointer to the notes in an answer, is
+   the published page's subsection by its number and title, linked `<notes URL>#<id>` (plain-text
+   notes: the section named as text), never a source file or a line number: the student reads the
+   page (A3.C2, FB-160). When the notes already say it elsewhere, point there instead, the same way. While a
+   mock is untaken, a sheet line goes where
    `08-practice` step 8 puts one: into the final sheet once its step 8.3 has built it, and until
    then into STATUS as a final-sheet item for 8.3 (bookkeeping, no writer). Otherwise it goes on the
    sheet `07-cheatsheet` built last; with no sheet yet the notes patch alone carries it, since 07
    picks from the notes.
-3. On the student's yes, dispatch it at once (FB-169: the draft first, applied when told, never
-   left for later). When it can't go yet (the hub isn't free, "One open patch" below, or an older
+3. On the student's yes, to the offer or to the lines they pick, the approved lines become one
+   pending line, unmarked, its text each approved sentence with its place, and each `proposed`
+   line is struck through, `in the <date> patch` or `declined`. Dispatch it at once (FB-169: the
+   draft first, applied when told, never left for later). When it can't go yet (the hub isn't free, "One open patch" below, or an older
    pending line waits, which goes first), log it under `## Pending patches` (the approved text,
    where it goes, the date) for Step 1; while any line is `held: mock first` (Step 5.5.9), it is
    logged with that mark too. Text the student rewords is shown again before it goes.
@@ -349,6 +369,7 @@ student's drop of a dispatched line (below), stays until its RESTORE follow-up g
 
 | Mark | Open | Where it goes on |
 |---|---|---|
+| `proposed` | no | a gap not yet offered: offered with the other `proposed` lines every five questions (Step 5.2); on the student's yes, joined into one unmarked line (Step 5.3); else struck through `declined` |
 | none | no (a line whose change is in HEAD keeps its mark) | dispatched when the hub is free (Step 5.4) |
 | `held: <why>` | while its change is in HEAD | a mark still naming a branch: its worktree and branch removed first (Step 5.5.1). On the student's go: an open one, Step 5.4 with its fields at once (its own dispatch); else Step 5.4 when the hub is free, or the mark cleared, its fields kept, to wait in order. Or dropped (below) |
 | `dispatched <date>` | yes | in a fresh session, once `delegation-ledger watch` (the delegation skill) shows no live writer for it: with a `drop` field, Step 5.5's drop; else its worktree's branch with a commit of its own, Step 5.5.2; none, or no worktree (the Agent tool removes one that changed nothing), Step 5.5.1 |
@@ -399,7 +420,8 @@ already attempted in full gets `yes, attempted` in the new row at once (Step 7).
   reasoning instead, and its scores close it. The section ends `Next: <part>`. The log ends with
   three sections, kept last: `## Patterns` (Step 5.6), `## Pending patches` (Step 5.3) and `##
   Waiting checks` (Step 6, and a MANIFEST.md cell held during the build: the set and what waits),
-  each line dated. A pending line's marks are Step 5's "One open patch" table; a waiting line is
+  each line dated, a `proposed` line written as the question exposes its gap, so a session that
+  ends early loses none. A pending line's marks are Step 5's "One open patch" table; a waiting line is
   struck through once it runs. The log names parts and what went wrong, never a part's answer (hard
   rule 4); a pending line keeps its approved text exactly.
 - STATUS keeps one line, `Tutor: <set> <walk-through or quiz>, next <part>; <N> patches pending

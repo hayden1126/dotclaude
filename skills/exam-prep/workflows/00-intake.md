@@ -1,6 +1,6 @@
 # 00 Intake
 
-Baseline as of 2026-11-10; changes only via `12-retro`.
+Baseline as of 2026-11-12; changes only via `12-retro`.
 
 Intake turns "prepare me for this exam" into an approved `PLAN.md` and a hub that a fresh session
 can execute without asking anything. It is the only stage that talks to the student before the
@@ -28,8 +28,9 @@ directory, and a sandboxed session commits only to a repo inside its own root. S
 - **Every case:** `<root>` must be a git repo of its own (`git init` there when
   `git -C <root> rev-parse --show-toplevel` doesn't print `<root>`), and its `.gitignore` gets
   these lines before any source lands, keeping any lines already there: `sources/`,
-  `_build/pages/`, `_build/text/`, `_build/slices/`, `_build/media/`, `_build/shots/`,
-  `node_modules/`, `_build/package*.json`, `__pycache__/` (FB-011).
+  `_build/pages/`, `_build/text/`, `_build/slices/`, `_build/media/`, `_build/img/`,
+  `_build/shots/`, `node_modules/`, `_build/package*.json`, `_build/videos/`, `__pycache__/`
+  (FB-011).
 - **New course, no hub yet.** Name it a short subject word plus the course number, all lower case
   (`widgets1001`). With the hq skill: `hq-new <name> code --git` (one bare command), fill its
   `REGISTRY.md` summary as the hq skill says, then
@@ -86,8 +87,9 @@ question text, and list the option it supports first.
 | 1 | **Scope authority.** Does the graded work (homework, a practice exam, a review sheet) mirror the exam, and which of it? | Mirrors it, naming which (a practice exam, the review sheet, every homework): scope follows it, mocks clone its questions with fresh numbers. / Doesn't: cover the full scope, mock shapes go beyond the review. / Unsure, or no answer: treat as doesn't. | Settles everything after it (FB-021). |
 | 2 | **Which files belong to this exam?** Show the proposed split by file name: this exam, reserved for a later exam, out. Ask for the exact last in-scope slide and whether its number is the PDF page or the printed slide number. Ask which files hold answers (official solutions, a past exam's key), which of those sets the student has already attempted, and which question sets with no solutions file they have attempted (each one's MANIFEST.md Answers cell reads `no, attempted YYYY-MM-DD`). | The proposed split (first). / Other: the student corrects it. | Later material is copied raw and never opened (FB-023); slide and page numbers differ (FB-024, L04). |
 | 3 | **Missing sources.** Only when a source type the exam covers (homework, solutions, recitations, the last lectures) isn't on disk. | I'll add them now. / They arrive during the build. / Proceed without. / Not examined. | "Add them now": stop, wait for the file, re-list, and ask question 2 for it (FB-029). "During the build": a `pending` MANIFEST row that records its planned scope now, last in-scope slide included, since nothing is asked after approval. |
-| 4 | **Exam rules** not found on disk: date and time, length, cheat sheet allowed (its size only when it is), calculator, open or closed book, question types. | Pre-filled from the details file or Ed, else open. | Fixes the deliverables (FB-026). |
-| 5 | **Cheat-sheet preferences, or the Review view.** No sheet allowed: offer the notes page's Review view instead, a toggle that shows the notes' Must-know lists and their tagged worked examples and pitfalls (`07-cheatsheet`, "Tag the review", FB-143), and, on a yes, how many minutes of reading it may take, asked here, and changed only when nothing is left to untag (`07-cheatsheet`'s "Tag the review" opening); none of the sheet questions below is asked. Only when a sheet is allowed and the profile lacks them: font floor in points, color or grayscale print, engine (HTML the session builds and Chromium prints, or LaTeX the student writes and the session checks), and their full name in each form they write it (given and family name in either order, with initials) and their student id, which the sheet check keeps off the sheet (FB-132); a lone name part only when it isn't an ordinary word. | Default: a 6 pt floor, colors that still read in grayscale, HTML printed by Chromium. Save the answers to the profile; the name and id go there only, never in PLAN.md, and only as the student gave them. No sheet: the Review view (first), with its minutes; or none. PLAN.md's `Review view:` line records the answer: `<N> minutes of reading`, `none: a sheet is allowed` or `none: the student declined it`. | Asked once per student, not per exam (FB-131); the Review view per exam, its minutes asked at intake, and changed only when nothing is left to untag (FB-143). |
+| 4 | **Exam rules** not found on disk: date and time, length, room (where it is split, the student's by last name), what to bring and what is banned, cheat sheet allowed (its size only when it is, and whether it carries a name and id), calculator, open or closed book, question types. | Pre-filled from the details file or Ed, else open. | Fixes the deliverables (FB-026, FB-158). |
+| 5 | **Cheat-sheet preferences, or the Review view.** No sheet allowed: offer the notes page's Review view instead, a toggle that shows the notes' Must-know lists, every subsection's concise box and their tagged worked examples and pitfalls (`07-cheatsheet`, "Tag the review", FB-143), and, on a yes, how many minutes of reading it may take (the lists and boxes, untagged, count first), asked here, and changed only when nothing is left to untag (`07-cheatsheet`'s "Tag the review" opening); none of the sheet questions below is asked. Only when a sheet is allowed and the profile lacks them: font floor in points, color or grayscale print, engine (HTML the session builds and Chromium prints, or LaTeX the student writes and the session checks), and their full name in each form they write it (given and family name in either order, with initials) and their student id, which the sheet check keeps off the sheet (FB-132); a lone name part only when it isn't an ordinary word. | Default: a 6 pt floor, colors that still read in grayscale, HTML printed by Chromium. Save the answers to the profile; the name and id go there only, never in PLAN.md, and only as the student gave them. No sheet: the Review view (first), with its minutes; or none. PLAN.md's `Review view:` line records the answer: `<N> minutes of reading`, `none: a sheet is allowed` or `none: the student declined it`. | Asked once per student, not per exam (FB-131); the Review view per exam, its minutes asked at intake, and changed only when nothing is left to untag (FB-143). |
+| 6 | **Watch list.** Build a page of explainer videos per idea of the course, best first, with a notes row where no video is good (`08-practice`, "Watch list", FB-194)? Ask for any video links the student already uses: they are ranked with the rest. | Yes, listed first when the course has its lectures on video or its topics are well covered online. / No, listed first otherwise. The student decides. PLAN.md's `Watch list:` line records the answer: `yes`, `yes, with the student's links: <URL>, ...` or `no`. | It costs a wave of searching agents in stage 08, so the student decides it with the rest, up front (FB-020). |
 
 If the student narrows scope ("only topic X, go deep"), check the narrowed scope against the
 sources before committing to it, and say what the check found (FB-021).
@@ -102,10 +104,11 @@ student can change it while reviewing:
   with its key in a separate file and a three-view mock page (FB-153), and a cram order offered the
   night before (FB-157).
 - Depth weighted by how the exam tests: procedures get depth, definitions stay brief (FB-064).
-- Figures where prose can't carry a mechanism, plus two or three step-throughs for the most-drilled
-  procedures.
+- Figures, diagram first (STYLE S11): a drawn figure where prose can't carry a mechanism, and a
+  step-through fed by the checker for every trace of a drilled procedure.
 - The reader may have skipped the lectures: assume no prior exposure (FB-030).
-- Ship priority if time runs short: notes page, then cheat sheet, then mock (FB-004).
+- Ship priority if time runs short: notes page, then cheat sheet, then mock (FB-004), then the
+  watch list when question 6 asked for one.
 - Publishing: private artifacts only. A deploy to the student's own site waits for an explicit go
   after review (FB-114).
 - Walk-throughs, quizzes and questions (`09-tutor`) run on request, during the build too, within
@@ -126,7 +129,11 @@ the plan:
   exam-format statement quoted with its source (the only basis for any claim about what the exam
   will ask, FB-012), the logistics, and the repo rules. A quote that also states scope stays
   verbatim, as evidence: MANIFEST's rows remain the one statement of scope. In the own-conventions
-  case it sits in `<root>`, under the hub's own `CLAUDE.md`.
+  case it sits in `<root>`, under the hub's own `CLAUDE.md`. Its Tools line records the Playwright
+  package directory the browser checks need (`06-site` step 5.3, L22), found once now so no later
+  session hunts for it: `EXAM_PREP_PLAYWRIGHT` when the environment sets it, else
+  `<npm root -g>/playwright` when `ls` finds its `package.json` there; with neither, `none:
+  _build/node_modules/ holds it`, and `06-site` installs it there.
 - **`PLAN.md`** from `<skill>/templates/PLAN.md.tmpl`, still reading `Approved: not yet`. Every
   answer goes in its Decisions block with its source: the student, an Ed thread number, the details
   file, or (default), except question 5's name and id, which only the profile holds. Its Checker line needs the question documents' text: read them
@@ -195,7 +202,10 @@ student the prompt in a code block and ask them to start a fresh session in `<ro
 
 Then tell the student, before they leave the build to run: once it reaches stage 08 (the mock
 exams), don't look at the build session's window, since it writes the mocks' answer keys; follow
-its progress in `STATUS.md` instead, whose next-step line then says so. When that line starts
+its progress in `STATUS.md` instead, whose next-step line then says so. To open a file or folder for
+them (STATUS.md, a printed sheet's PDF), on WSL run `explorer.exe "$(wslpath -w <path>)"` with the
+sandbox off, since it starts a Windows program; it exits 1 even when the window opens, so that
+status is no failure (L76). When that line starts
 `08 step 8, the cram night`, go to the build window, type `/clear` and then "start the cram
 night", before reading anything else on screen.
 

@@ -135,6 +135,49 @@ class NamedPaths(unittest.TestCase):
                          ["templates/PLAN.md.tmpl", "workflows/01-ingest.md"])
 
 
+WATCH = os.path.join(SKILL, "templates", "WATCH.md")
+W_RULE = re.compile(r"^- \*\*(?:~~)?W(\d+)\.", re.M)
+# A W id cited as a watch-list rule; `[W1 §2.1]` and `W1 (all)` are a document's citations.
+W_CITE = re.compile(r"\bW(\d+)\b(?! §| \(all\))")
+
+
+def watch_ids():
+    with open(WATCH, encoding="utf-8") as f:
+        return [int(n) for n in W_RULE.findall(f.read())]
+
+
+class WatchRules(unittest.TestCase):
+    def test_ids_run_from_w1_without_a_gap(self):
+        ids = watch_ids()
+        self.assertTrue(ids, "WATCH.md defines its rules as `- **W<n>. Title.**` bullets")
+        self.assertEqual(ids, list(range(1, len(ids) + 1)))
+
+    def test_every_cited_w_id_is_defined(self):
+        known = set(watch_ids())
+        unknown = []
+        for rel in (os.path.join("templates", "WATCH.md"),
+                    os.path.join("workflows", "08-practice.md"),
+                    os.path.join("workflows", "00-intake.md")):
+            with open(os.path.join(SKILL, rel), encoding="utf-8") as f:
+                unknown += [f"{rel}: W{n}" for n in W_CITE.findall(f.read())
+                            if int(n) not in known]
+        self.assertEqual(unknown, [])
+
+    def test_the_watch_list_step_and_its_plan_line(self):
+        with open(os.path.join(SKILL, "workflows", "08-practice.md"), encoding="utf-8") as f:
+            practice = f.read()
+        self.assertIn("\n## Watch list\n", practice)
+        self.assertIn("`Watch list: yes`", practice)
+        with open(os.path.join(SKILL, "workflows", "00-intake.md"), encoding="utf-8") as f:
+            self.assertIn("**Watch list.**", f.read())
+        with open(os.path.join(SKILL, "templates", "PLAN.md.tmpl"), encoding="utf-8") as f:
+            self.assertRegex(f.read(), r"(?m)^- Watch list: ")
+
+    def test_the_cite_pattern(self):
+        self.assertEqual(W_CITE.findall("(W12), W3 to W5; `[W1 §2.1]`, `W1 (all)`"),
+                         ["12", "3", "5"])
+
+
 class Privacy(unittest.TestCase):
     def test_no_denylisted_string(self):
         if not os.path.exists(DENYLIST):

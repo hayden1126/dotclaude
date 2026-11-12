@@ -1,6 +1,6 @@
 # 04 Write
 
-Baseline as of 2026-11-10; changes only via `12-retro`.
+Baseline as of 2026-11-12; changes only via `12-retro`.
 
 Writing turns the extracts into the topic notes, `notes/NN-<slug>.md`, one file per backbone
 section. The notes are the source of truth: the page, the cheat sheet and the mock all derive from
@@ -15,7 +15,12 @@ link id (FB-054); a wiring pass then joins the files single-threaded (FB-091).
   computable there is no such file: writers build the examples from their cited sources, and
   `05-verify`'s reviewers check every value against them.
 - `_build/STYLE.md`, the hub's copy of the skill's `templates/STYLE.md`, exists. Writers follow
-  all of it; S14 to S32 are the wording rules a cold reader needs (FB-030, FB-072 to FB-089).
+  all of it; S14 to S32 are the wording rules a cold reader needs (FB-030, FB-072 to FB-089), and
+  S33 (each subsection's depth label) and S34 (the concise box that opens it) are the two each
+  subsection carries before its text.
+- The backbone holds its figure shortlist (`03-backbone` step 5: in the build, logged in STATUS
+  for the student's later review; run alone, shown to them), and each section carries its
+  `Diagram-taught` line.
 
 ## Step 2: Plan the writers
 
@@ -60,6 +65,21 @@ lines). What every writer is held to, beyond STYLE:
   inferred with the reason; where the statement sorts them, the Must-know list's last two items
   are its `Written from memory:` and `Provided on the exam:` lines, list items like the rest (as
   paragraphs after the list, the Review view would hide them).
+- **The concise box** (S34, FB-094). Each subsection but the Must-know list opens, after its Depth line,
+  with a `> **In short:**` box of labelled bullets (Rule, Why, Steps, Example, Trap, Answer form:
+  only those that apply, in that order). Concise cuts words, never a step, a condition or the tiny
+  example (S18); every symbol in the box is defined there; the full explanation follows and says
+  everything the box does.
+- **Diagram first** (S11, FB-115). A section the backbone marks `Diagram-taught: yes` leads with its
+  figure, right after the first subsection's box, and its words annotate the figure. Each figure
+  on the section's Figures line gets a marker on its own line where it belongs, with no `<` or `>`
+  in its text: `<!-- FIG fig-N-slug: <what it shows, its data> -->` for a figure to be drawn (a
+  static one, or a step-through the main session generates), and `<!-- FIG fig-N-slug: slide image
+  of <code> <place>: <what the picture shows> -->` (such as `slide image of D5 p.23: ...`) for a
+  slide-image figure, which `CONVERT.md` turns into an `img` with its citation in the caption.
+- **No rule ids** (S16, FB-095). The student's text never carries a skill rule id, such as (S12) or
+  (FB-123): the build refuses an FB id, and a C id right after `CHASSIS` or `rule`, and only warns
+  on a bare S, L or K id, since a course writes a state (S1) or a lecture (L3) the same way.
 
 ## Step 4: Check what came back
 
@@ -73,7 +93,19 @@ The main session runs these, since delegated agents can't run scripts (L07):
    hit against `_build/extract/`: a label the course's own sources use (T1 for a transaction in a
    database course) is the course's term and stays (S25); rename only labels the notes invented.
 4. `grep -n "$(printf '\342\200\224')" notes/*.md` for em dashes (S10): fix every hit.
-5. A missing or thin section goes back to its writer (SendMessage to its id) with what is missing.
+5. Each slide-image marker (`grep -n 'FIG fig-[^:]*: slide image of' notes/*.md`): the main
+   session crops that region of the cited page image (`_build/pages/<doc>/p-NNN.png`) into
+   `_build/img/<fig-id>.png` (or `.jpg`, `.webp`; 1 MB at most), the file name the marker's id,
+   for the converter to place (`CONVERT.md`'s slide-image figure). Before the first crop, add the
+   line `_build/img/` to `.gitignore` when it lacks it (a hub made before round 2, whose other
+   `_build/` files are tracked), as `08-practice`'s "Watch list" step 1 does for `_build/videos/`:
+   a crop is a render of course material (hard rule 5). This holds wherever this step runs,
+   `11-next-exam`'s "A source added to this exam" among them.
+6. Each section the backbone marks `Diagram-taught: yes` holds a FIG marker for every figure on
+   its Figures line, the first right after the first subsection's concise box; each subsection but
+   the Must-know list opens with its box (`grep -c '^> \*\*In short:\*\*' notes/*.md` against the
+   subsection count).
+7. A missing or thin section goes back to its writer (SendMessage to its id) with what is missing.
 
 ## Step 5: The wiring pass
 

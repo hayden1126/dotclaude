@@ -18,14 +18,21 @@ a number the backbone's section headings or tables define. A parenthetical after
 Every `### [<doc> <locator>]` block in _build/extract/*.md must fall inside some row: a page
 block by its pages, a slide by its index, a question part by its question and part (a whole
 question covers every part; a stem, or a block naming the question with no part, falls under any
-row of its question; a deeper part, `Q3b.1` or `Q3aii`, falls under its letter, and a part of two
+row of its question; a deeper part, `Q3b.1`, `Q3aii` or its dotted form `Q3a.ii`, falls under its
+letter, and a part of two
 or more of i, v and x, `Q3ii`, is a roman part, not `i` and a sub-part). A block with any
 other locator (`### [C1 main.py]`, or `Q3C`, which isn't a part) is mapped only by its doc's
 `(all)` row.
 
+The figure floor (STYLE S11): each `## §N` section of the backbone carries a `- Diagram-taught:
+yes|no` line beside its `- Figures:` line, and a section marked `yes` (its slides teach it through
+diagrams) must name at least one `fig-` id on its Figures line. Once any section carries the line,
+every section must. A backbone with none at all was written before the rule: it passes, with one
+WARN line on stderr naming 10-polish's figure pass, which adds the lines.
+
 Exit 1 when a block is unmapped, a row's cell doesn't parse, a target isn't a subsection, a line
-looks like a block header but isn't one, or the extracts hold no blocks (or a file holds none);
-0 otherwise. Stdlib only."""
+looks like a block header but isn't one, the extracts hold no blocks (or a file holds none), or a
+section breaks the figure floor; 0 otherwise. Stdlib only."""
 import argparse
 import os
 import re
@@ -33,7 +40,7 @@ import sys
 
 BLOCK = re.compile(r"^###\s+\[(?P<doc>[A-Za-z0-9_.-]+)\s+(?:p\.(?P<page>\d+)(?:-(?P<end>\d+))?"
                    r"|#/(?P<h>\d+)(?:/(?P<v>\d+))?"
-                   r"|Q(?P<q>\d+)(?:(?P<roman>[ivx]{2,})(?=[\] ])|(?P<letter>[a-z])(?:\.\d+|[ivx]+|\d+)?"
+                   r"|Q(?P<q>\d+)(?:(?P<roman>[ivx]{2,})(?=[\] ])|(?P<letter>[a-z])(?:\.\d+|\.?[ivx]+|\d+)?"
                    r"|\.(?P<sub>\d+)(?:[a-z]|\.\d+)?)?(?P<stem> stem)?"
                    r"|(?P<other>[^\]]+))\]")
 # A line that looks like a block header but isn't one: a wrong heading level, or an h3 with no
@@ -53,6 +60,14 @@ SECTION = re.compile(r"^## §(\d+)\b|^\|\s*(\d+(?:\.\d+)+)\s*\|", re.M)
 TARGET = re.compile(r"\d+(?:\.\d+)*")
 SEPARATOR = re.compile(r"\|[\s:|-]+\|?")
 EN_DASH = chr(0x2013)
+SECTION_HEAD = re.compile(r"^## §(\d+)\b.*$", re.M)
+DIAGRAM_TAUGHT = re.compile(r"^\s*-\s*Diagram-taught:\s*(.*)$")
+FIGURES = re.compile(r"^\s*-\s*Figures:(.*)$")
+FIG_ID = re.compile(r"`fig-[\w-]+`")
+# A backbone with no Diagram-taught line anywhere predates the rule; it passes with this warning.
+PRE_S11 = ("no section carries a `Diagram-taught: yes|no` line: a backbone written before the "
+           "figure floor (STYLE S11), so no section is held to it; a 10-polish figure pass adds the "
+           "lines and the figures")
 
 
 def span(a, b):
@@ -178,6 +193,48 @@ def matrix(backbone):
     return out, bad
 
 
+def figure_floor(backbone):
+    """([problems], [warnings]) for the figure floor: each `## §N` section's `- Diagram-taught:`
+    line and, when it says yes, a `fig-` id on its `- Figures:` line (a Figures line may wrap onto
+    indented lines)."""
+    heads = list(SECTION_HEAD.finditer(backbone))
+    found, bad = {}, []
+    for i, head in enumerate(heads):
+        end = heads[i + 1].start() if i + 1 < len(heads) else len(backbone)
+        body = re.split(r"^## ", backbone[head.end():end], maxsplit=1, flags=re.M)[0]
+        lines = body.splitlines()
+        taught, figures = [], ""
+        for n, line in enumerate(lines):
+            m = DIAGRAM_TAUGHT.match(line)
+            if m:
+                taught.append(m.group(1).strip())
+            m = FIGURES.match(line)
+            if m:
+                figures = m.group(1)
+                for more in lines[n + 1:]:
+                    if not more.startswith((" ", "\t")) or not more.strip():
+                        break
+                    figures += " " + more.strip()
+        found[head.group(1)] = (taught, figures)
+    if not any(taught for taught, _ in found.values()):
+        return [], [PRE_S11] if found else []
+    for num, (taught, figures) in found.items():
+        if not taught:
+            bad.append(f"§{num}: no `Diagram-taught: yes|no` line, which the backbone's other "
+                       "sections carry (03-backbone step 5)")
+            continue
+        if len(taught) > 1:
+            bad.append(f"§{num}: {len(taught)} Diagram-taught lines; a section has one")
+            continue
+        word = re.match(r"(yes|no)\b", taught[0])
+        if not word:
+            bad.append(f"§{num}: `Diagram-taught: {taught[0]}` is neither yes nor no")
+        elif word.group(1) == "yes" and not FIG_ID.search(figures):
+            bad.append(f"§{num}: Diagram-taught: yes, but its Figures line names no `fig-` id: a "
+                       "section its slides teach through diagrams leads with a figure (STYLE S11)")
+    return bad, []
+
+
 def covered(row, m):
     """Whether a matrix row covers one block (a BLOCK match)."""
     if row is None:
@@ -205,7 +262,10 @@ def covered(row, m):
 
 def unmapped(root):
     with open(os.path.join(root, "_build", "backbone.md"), encoding="utf-8") as f:
-        rows, bad = matrix(f.read())
+        backbone = f.read()
+    rows, bad = matrix(backbone)
+    floor, warnings = figure_floor(backbone)
+    bad += floor
     total, missing = 0, []
     d = os.path.join(root, "_build", "extract")
     for name in sorted(os.listdir(d)) if os.path.isdir(d) else []:
@@ -226,7 +286,7 @@ def unmapped(root):
                 missing.append(f"{m.group(0)[4:].strip()} ({name})")
         if not found:
             bad.append(f"NO BLOCKS in {name} (a header that isn't `### [<doc> <locator>]`?)")
-    return total, missing, bad
+    return total, missing, bad, warnings
 
 
 def main(argv=None):
@@ -236,7 +296,9 @@ def main(argv=None):
     if not os.path.exists(os.path.join(args.root, "_build", "backbone.md")):
         print("coverage_check: no _build/backbone.md here", file=sys.stderr)
         return 2
-    total, missing, bad = unmapped(args.root)
+    total, missing, bad, warnings = unmapped(args.root)
+    for w in warnings:
+        print(f"coverage_check: WARN: {w}", file=sys.stderr)
     print(f"{total} extract blocks; {len(missing)} unmapped")
     for m in missing:
         print(f"  UNMAPPED {m}")

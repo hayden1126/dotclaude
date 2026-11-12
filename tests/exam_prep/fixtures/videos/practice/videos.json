@@ -1,0 +1,137 @@
+{
+  "exam": "Midterm 1",
+  "course": "GRF101",
+  "notes_url": "https://example.invalid/notes",
+  "lectures": {"lec-3": "Lecture 3: counting and graphs"},
+  "topics": [
+    {
+      "key": "counting",
+      "name": "Counting",
+      "section": "§1",
+      "intro": [
+        "How many things there are, without listing them.",
+        "Comes before graphs: counting edges reuses the range sum.",
+        "Rows build from one range sum to the three rules."
+      ],
+      "ideas": [
+        {
+          "idea": "Sums of a range",
+          "notes": ["sec-1-sums"],
+          "picks": [
+            {
+              "kind": "video",
+              "title": "Staircase sums, drawn (sample)",
+              "channel": "Sample Channel A",
+              "video_id": "fakeVid0001",
+              "start": 95,
+              "end": 560,
+              "length": "8 min",
+              "visuals": "Two staircases fitted into a rectangle.",
+              "why": "Shows the pairing trick as a picture before any algebra.",
+              "flags": ["quiet audio"],
+              "thread": "Starts the topic: what a range sum is; sets up the closed form the lecture uses.",
+              "differs": ["Writes the sum with i from 0, where the notes start at 1."],
+              "tested": "Compute a range sum in closed form and show the pairing.",
+              "also": {"lead": "From a cut video on the same trick:", "items": ["An odd count leaves one middle term."]}
+            },
+            {
+              "kind": "segment",
+              "title": "Lecture 3, the range sum",
+              "channel": "Course lecture",
+              "video_id": "LECTURE3aaa",
+              "lecture": "lec-3",
+              "chapter": "Range sums",
+              "start": 1500,
+              "end": 1800,
+              "length": "5 min",
+              "why": ["The course's own notation.", "Ends on the exam-style question."],
+              "thread": "Picks up the pairing from row 1 in the course's notation; sets up the rules.",
+              "differs": [],
+              "tested": "Same as row 1, in the course's notation."
+            },
+            {
+              "kind": "yours",
+              "title": "A friend's whiteboard take (sample)",
+              "channel": "Sample Channel B",
+              "video_id": "yoursVid001",
+              "length": "3 min",
+              "why": "Short, and the board stays readable.",
+              "thread": "A second pass on the same picture, faster.",
+              "differs": ["Calls the closed form a formula without deriving it."],
+              "tested": "Recognize the closed form on sight."
+            }
+          ]
+        },
+        {
+          "idea": "Three counting rules",
+          "notes": ["sec-1-rules"],
+          "picks": [
+            {
+              "kind": "notes",
+              "thread": "No video separates the three rules the way the notes do.",
+              "differs": [],
+              "tested": "Name the rule, then count.",
+              "explain": [
+                {"label": "Rule", "text": "Sum for either-or, product for one-then-another, subtract the overlap."},
+                {"label": "Trap", "text": "Counting the overlap twice."},
+                {"label": "Answer form", "text": "The rule named, then the count."}
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "key": "graphs",
+      "name": "Graphs",
+      "section": "§2",
+      "intro": [
+        "Nodes joined by edges.",
+        "Differs from counting: here the object is the structure, not the number."
+      ],
+      "ideas": [
+        {
+          "idea": "Nodes and edges",
+          "notes": ["sec-2-basics"],
+          "picks": [
+            {
+              "kind": "segment",
+              "title": "Lecture 3, nodes and edges",
+              "channel": "Course lecture",
+              "video_id": "LECTURE3aaa",
+              "lecture": "lec-3",
+              "chapter": "Graph basics",
+              "start": 300,
+              "end": 720,
+              "length": "7 min",
+              "why": "The lecture's definitions, word for word.",
+              "thread": "Starts the topic with the definitions.",
+              "differs": ["Draws edges as arrows before saying the graph is directed."],
+              "tested": "Define a graph and count its edges."
+            }
+          ]
+        },
+        {
+          "idea": "Walks",
+          "notes": ["sec-2-walks"],
+          "picks": [
+            {
+              "kind": "video",
+              "title": "Walking a graph, step by step (sample)",
+              "channel": "Sample Channel A",
+              "video_id": "fakeVid0002",
+              "start": 3725,
+              "end": 4200,
+              "length": "8 min",
+              "why": "Traces each walk one edge at a time.",
+              "flags": ["fast pace", "different symbols"],
+              "thread": "Builds on the edges from the row before.",
+              "differs": ["Uses a dot for a node where the notes use a circle."],
+              "tested": "Trace a walk and give its length."
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

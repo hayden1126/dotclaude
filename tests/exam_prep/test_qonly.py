@@ -1,0 +1,200 @@
+"""skills/exam-prep/scripts/qonly.py and extract_check.py's question-only checks (hard rule 4).
+
+A synthetic homework extract holds two question parts, each with its official solution under it,
+one solution running on past its marker line into a fenced block, and a page block of the
+answers file. Pinned: the copy keeps both questions, their data and their fields verbatim and
+holds no solution line or answers-file block; a past exam with its key in the same file keeps
+its question pages and drops its key page; a rerun is a no-op and a copy whose extract no longer
+holds answers is removed; extract_check.py fails a copy with a solution line (naming file and
+line), a missing copy and a stale one, and passes the copy qonly.py wrote."""
+import contextlib
+import importlib.util
+import io
+import os
+import tempfile
+import unittest
+
+REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+SCRIPTS = os.path.join(REPO, "skills", "exam-prep", "scripts")
+
+
+def load(name):
+    spec = importlib.util.spec_from_file_location(name, os.path.join(SCRIPTS, f"{name}.py"))
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+extract_check = load("extract_check")
+
+MANIFEST = """| Doc id | File | Pages | Scope | Answers | Rendered | Notes |
+|---|---|---|---|---|---|---|
+| HW1 | `sources/hw1.pdf` | 2 | in | no | yes | Homework 1 |
+| HW1S | `sources/hw1s.pdf` | 2 | in | yes | yes | official solutions to HW1 |
+"""
+PE_ROW = "| PE1 | `sources/pe1.pdf` | 3 | in | yes | yes | practice exam; solutions to PE1 |\n"
+
+Q1 = """### [HW1 Q1a] Shortest path
+Pages: [HW1 p.1]
+"Find a shortest path from s to t" in the graph with edges s-a 3, a-t 4, s-t 9. (5 points)
+\\[ d(v) = \\min_u d(u) + w(u, v) \\]
+**Shape:** compute
+**Conventions:** ties break alphabetically
+"""
+Q2 = """### [HW1 Q1b] Prove it
+Pages: [HW1 p.2]
+"Prove that no shorter path exists." (5 points)
+**Shape:** prove
+**Conventions:** none
+"""
+HEAD = """# HW1 Homework 1, pp.1-2 (extract)
+Sources: HW1 2, HW1S 2. Every page image was viewed.
+### [HW1 p.1] Homework 1
+"Show your work."
+"""
+HW = (HEAD + Q1 + "Solution [HW1S p.1]: the path s, a, t, of length 7.\n```\n# the working\n"
+      "s a t\n```\nSeven, since 3 + 4 < 9.\n" + Q2 + "- Solution [HW1S p.2]: by exchange.\n"
+      "### [HW1S p.2] Solutions, continued\n(image only: the answer table)\n"
+      "Coverage: pp.1-2; 4 blocks; 1 image only; 0 flagged unreadable.\n")
+PE = """### [PE1 p.1] Practice exam
+"Time: 50 minutes."
+### [PE1 Q1] Trace
+Pages: [PE1 p.1-2]
+"Trace a breadth-first search from s."
+**Solution:** s, a, b
+### [PE1 p.3] Key
+"Q1: s, a, b"
+"""
+
+
+class QOnly(unittest.TestCase):
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.root = tmp.name
+        self.write("MANIFEST.md", MANIFEST)
+        self.write("_build/extract/hw1.md", HW)
+        self.write("_build/extract/d1.md", "### [HW1 p.2] a page\n\"no answer here\"\n")
+        for doc in ("HW1", "HW1S"):
+            for page in (1, 2):
+                self.write(f"_build/pages/{doc}/p-{page:03d}.png", "")
+
+    def write(self, rel, text):
+        path = os.path.join(self.root, rel)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(text)
+
+    def read(self, rel):
+        with open(os.path.join(self.root, rel), encoding="utf-8") as f:
+            return f.read()
+
+    def qonly(self):
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            code = load("qonly").main(["--root", self.root])
+        self.assertEqual(code, 0, out.getvalue())
+        return out.getvalue()
+
+    def check(self):
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            code = extract_check.main(["--root", self.root])
+        return code, out.getvalue()
+
+    def test_the_copy_keeps_the_questions_and_drops_every_solution(self):
+        self.qonly()
+        copy = self.read("_build/q-only/hw1.md")
+        first, _, body = copy.partition("\n")
+        self.assertTrue(first.startswith("Question-only copy of _build/extract/hw1.md (sha256 "),
+                        first)
+        self.assertIn(Q1, body)
+        self.assertIn(Q2, body)
+        self.assertTrue(body.startswith(HEAD), body)
+        self.assertTrue(body.endswith("Coverage: pp.1-2; 4 blocks; 1 image only; 0 flagged "
+                                      "unreadable.\n"), body)
+        for answer in ("Solution", "length 7", "the working", "3 + 4 < 9", "by exchange",
+                       "[HW1S p.2]", "answer table"):
+            self.assertNotIn(answer, body)
+        self.assertFalse(os.path.exists(os.path.join(self.root, "_build", "q-only", "d1.md")))
+
+    def test_a_key_in_the_same_file_keeps_its_question_pages(self):
+        self.write("MANIFEST.md", MANIFEST + PE_ROW)
+        self.write("_build/extract/pe1.md", PE)
+        self.qonly()
+        body = self.read("_build/q-only/pe1.md").partition("\n")[2]
+        self.assertEqual(body, '### [PE1 p.1] Practice exam\n"Time: 50 minutes."\n'
+                               '### [PE1 Q1] Trace\nPages: [PE1 p.1-2]\n'
+                               '"Trace a breadth-first search from s."\n')
+
+    def test_a_rerun_changes_nothing_and_a_copy_with_no_answers_left_goes(self):
+        self.qonly()
+        before = self.read("_build/q-only/hw1.md")
+        self.assertIn("hw1.md: unchanged", self.qonly())
+        self.assertEqual(self.read("_build/q-only/hw1.md"), before)
+        self.write("_build/extract/hw1.md", HEAD + Q1 + Q2)
+        self.assertIn("removed _build/q-only/hw1.md", self.qonly())
+        self.assertFalse(os.path.exists(os.path.join(self.root, "_build", "q-only", "hw1.md")))
+
+    def test_extract_check_passes_the_copy_qonly_wrote(self):
+        self.qonly()
+        code, out = self.check()
+        self.assertEqual(code, 0, out)
+        self.assertIn("HW1S: 2 pages in scope, 2 rendered, 2 with a block", out)
+
+    def test_extract_check_fails_a_missing_copy(self):
+        code, out = self.check()
+        self.assertEqual(code, 1, out)
+        self.assertIn("_build/extract/hw1.md: holds answers, NO QUESTION-ONLY COPY "
+                      "_build/q-only/hw1.md", out)
+        self.assertNotIn("d1.md", out)
+
+    def test_extract_check_fails_a_stale_copy(self):
+        self.qonly()
+        self.write("_build/extract/hw1.md", HW.replace("s-t 9", "s-t 8"))
+        code, out = self.check()
+        self.assertEqual(code, 1, out)
+        self.assertIn("_build/q-only/hw1.md:1: STALE", out)
+
+    def test_extract_check_fails_a_copy_holding_a_solution_line(self):
+        self.qonly()
+        copy = self.read("_build/q-only/hw1.md")
+        planted = copy.replace("**Conventions:** none\n",
+                               "**Conventions:** none\nSolution [HW1S p.2]: by exchange.\n")
+        self.write("_build/q-only/hw1.md", planted)
+        line = planted.splitlines().index("Solution [HW1S p.2]: by exchange.") + 1
+        code, out = self.check()
+        self.assertEqual(code, 1, out)
+        self.assertIn(f"_build/q-only/hw1.md:{line}: ANSWER IN A QUESTION-ONLY COPY", out)
+        # A copy that isn't qonly.py's (no first line) is read from its first line.
+        self.write("_build/q-only/extra.md", "### [HW1 Q9] x\n**Solution:** 3\n")
+        code, out = self.check()
+        self.assertIn("_build/q-only/extra.md:2: ANSWER IN A QUESTION-ONLY COPY", out)
+
+    def test_a_solution_comment_in_a_fence_is_code_not_a_marker(self):
+        # A question's code may hold a `# solution` comment: the marker search skips fenced lines,
+        # as the block split does, so the rest of the question stays.
+        text = (HEAD + Q2.replace("**Shape:** prove\n",
+                                  "```python\ndef f(x):\n    # solution\n    return x\n```\n"
+                                  "**Shape:** prove\n")
+                + "~~~\nSolution: not a marker either\n~~~\n")
+        body, removed, answers_doc = load("qonly").strip(text, {})
+        self.assertEqual((body, removed, answers_doc), (text, [], False))
+        # Outside the fence the same block's marker still cuts.
+        body, removed, _ = load("qonly").strip(text + "**Solution:** by exchange\n", {})
+        self.assertEqual(body, text)
+        self.assertEqual(len(removed), 1)
+
+    def test_the_marker(self):
+        solution = load("qonly").SOLUTION
+        for line in ("Solution [HW1S p.1]: 7", "- Solution [HW1S Q1]: 7", "**Solution:** 7",
+                     "**Solution**: 7", "#### Solution", "> Official solution: 7",
+                     "  * solutions [X p.2]"):
+            self.assertTrue(solution.match(line), line)
+        for line in ("### [HW1 Q1a] Solution concepts", "Solutions to recurrences are unique.",
+                     "The solution is unique.", "Pages: [HW1 p.1]"):
+            self.assertFalse(solution.match(line), line)
+
+
+if __name__ == "__main__":
+    unittest.main()

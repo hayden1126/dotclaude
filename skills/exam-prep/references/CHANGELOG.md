@@ -1,6 +1,6 @@
 # Changelog
 
-Baseline as of 2026-11-10; changes only via `12-retro`.
+Baseline as of 2026-11-12; changes only via `12-retro`.
 
 One entry per round, oldest first, each written by that round's retro. A hub's copies of the
 templates carry the `Baseline as of` date they were copied at; `11-next-exam` compares it with the
@@ -98,3 +98,97 @@ evidence ids.
     (E1.C5, E1.C6, D1.C22).
 - **Retired:** none.
 - **Backlog:** K02, K67, K68 `trying (round 2)`; K70 to K75 `open`.
+
+## Round 2 (2026-11-12)
+
+- **Files:** `SKILL.md`, `references/CHANGELOG.md`, `references/backlog.md`,
+  `references/feedback-log.md`, `references/lessons.md`, `templates/CHASSIS.md`,
+  `templates/CONVERT.md`, `templates/PLAN.md.tmpl`, `templates/STYLE.md`,
+  `templates/agent-briefs.md`, `templates/backbone.md.tmpl`, `templates/cram-order.md.tmpl`,
+  `templates/hub-CLAUDE.md.tmpl`, `templates/mock-page.html`, `templates/notes-chassis.html`,
+  `workflows/00-intake.md`, `workflows/02-extract.md`, `workflows/03-backbone.md`,
+  `workflows/04-write.md`, `workflows/05-verify.md`, `workflows/06-site.md`,
+  `workflows/07-cheatsheet.md`, `workflows/08-practice.md`, `workflows/09-tutor.md`,
+  `workflows/10-polish.md`, `workflows/11-next-exam.md` and `workflows/12-retro.md`, each baseline
+  2026-11-12; `templates/WATCH.md` and `templates/videos-addon.html`, new, baseline 2026-11-12;
+  `templates/chassis-shots/`, regenerated, with new `-pin` and `-review-pin` shots and two new
+  figure shots (`-fig-1-slide`, `-fig-2-triangle`) at each width;
+  `scripts/qonly.py`, `scripts/videos.py` and `scripts/verify_videos.mjs`, new, and
+  `scripts/assemble.py`, `scripts/coverage_check.py`, `scripts/cram_check.py`,
+  `scripts/extract_check.py`, `scripts/mockpage.py` and `scripts/verify_page.mjs`, which carry no
+  date.
+- **Changes:**
+  - FB-124 and L26: the theme chrome, CHASSIS C2 (themed scrollbars, an opaque page track), C3
+    (a fixed theme icon with no words) and C4 (full screen where granted, the F and T keys), on
+    the notes page and the mock page, judged inside a light-scheme parent frame; `verify_page.mjs`
+    checks it on both (I3.C9, I3.G10, I2.C32, J1.C5, J1.C6, J1.C7, J1.C9, J1.C10, J1.G6).
+  - FB-111: every section's own dark-mode highlight band, set by `assemble.py` (J1.C11, I3.C9).
+  - FB-015: a check new to the skill passes an existing hub's form with a warning naming the pass
+    that upgrades it: a cram order with no depth labels or a backbone with no `Diagram-taught`
+    lines builds with a WARN; separately, citation codes now match their MANIFEST.md row in any
+    case, silently (I3.C8, I3.G8, J1.G5, I1 (section 2)).
+  - FB-056: question-only copies of the extracts with solutions (`qonly.py`, `02-extract` step
+    3.4, checked by `extract_check.py`), read by every answer-blind brief (I3.C18, I3.G9, I2.G10).
+  - FB-193: each cram row names its needs, and the cram order gets a Read already line, which
+    `cram_check.py` checks (J.O, I1.C15, I1.C18).
+  - FB-194: the watch list: `templates/WATCH.md`'s rules W1 to W39, `videos.py`,
+    `verify_videos.mjs`, `08-practice`'s "Watch list", intake question 6 (and the reopen's
+    question 7), PLAN.md's line and three briefs; the rankers search and judge in two parts and
+    the main session fetches between them (L07, L02); run alone it waits while a `Build running`
+    or `Polish:` line stands (hard rule 1); L72 to L75 are its tool lessons, which W36 to W39 cite
+    (I.O, I1.C5, I1.C6, I1.C7,
+    I1.C9, I1.C13, I1.C14, I1.C15, I1.C16, I1.C17, I1.C18, I1.C25, I1.C26, I3.C2, I3.C3, I1.G4,
+    I1.G5, I1.G6, I1.G7, I3.G7).
+  - FB-144, FB-145, FB-146: the sheet's index, its figure pass with every axis labelled, and its
+    prune list; FB-141 drops the cram order's map of the sheet, which the index replaces (I.O,
+    I1.C21, I1.C22, I1.C23, I3.C5).
+  - FB-164, FB-192: tutor answers short by default in labelled bullets, symbols defined at first
+    use, an overloaded letter named apart, no LaTeX delimiters or HTML tags in chat (J1.C4, I1.C10,
+    I1.C24, I1.C25, I1.C27, I1.C28, I2.C13, I2.C14, I3.C3).
+  - FB-166, FB-160: a gap goes to the tutor log at once as a `proposed` line, offered with the
+    others as one patch every five questions; a pointer names the page's section, never a file
+    line (I1 (section 2)).
+  - FB-195: a declined mock, `08-practice` step 8 and `07-cheatsheet`'s final sheet (I1.C2, I3.C1).
+  - FB-158: the cram night names the one sheet to print, and the cram order's Tonight section is
+    the exam-morning card; intake question 4 asks the room and what is banned, and so does the
+    reopen's (I1.C1, I1.C29, I3.C24).
+  - FB-182: the graded previous exam read once into a shape file at a reopen (the one `out` row
+    PLAN.md's Sources line lets a session open), and the tutor log's Patterns labelled one-exam
+    evidence (I3.C13, I3.C17, I3.C26, I2.C26, I2.C27, I3.C14, I3.C15, I3.C16).
+  - FB-071: section reviewers check the notes' wording against the answer files (I3.C20).
+  - FB-159: a staff post that states only the exam's format is no source added (I3.C11).
+  - FB-118 and L30: STATUS records each artifact's owner and sharing state; a URL that can't be
+    updated gets a new private artifact, and the old one is marked stale (I3.C6, I2.C29, I2.C32,
+    I2.G1, I2.G2, I3.G5).
+  - FB-095: `assemble.py` refuses tool-call markup, a feedback-log id and a CHASSIS id right after
+    `CHASSIS` or `rule` in the notes, and only warns on a bare STYLE, lesson or backlog id, which a
+    course writes for its own things; STYLE S16 says so (J1 (section 2)).
+  - FB-094 and FB-075: STYLE S34, the concise box (CONVERT's box, CHASSIS C6, the Review view
+    shows each box untagged and counts it toward its minutes, `07-cheatsheet` setting measured
+    minutes when the boxes alone pass them, intake question 5 and FB-143 saying so, `10-polish`'s
+    box pass, the briefs), and S18 reworded "Concise, never
+    compressed" (I1.C10, I3.C3, J1.C4, I2.C13, I2.C14, I2.C15, I1.C24).
+  - FB-062, FB-115 and FB-125: STYLE S11 widened to diagram first, `03-backbone` step 5's sweep
+    and `Diagram-taught` lines (its shortlist logged in STATUS in the build and shown to the
+    student only when run alone, offered at `08-practice` step 8's opening), intake's and
+    PLAN.md's Figures default (a step-through for every drilled trace), `coverage_check.py`'s
+    figure floor, CONVERT's slide-image figure (its crops in `_build/img/`, gitignored as renders
+    under hard rule 5, FB-011, the line added to an older hub's `.gitignore` before the first crop
+    at `04-write` step 4.5, a file already tracked under a line `11-next-exam` step 5.2 adds taken
+    out of the index, and a stopped source's crops deleted with its renders), `10-polish`'s
+    figure pass, and CHASSIS C5, a linked figure pinned in a panel (F.O, J1.C12, I1.C19, I1.C21,
+    I1.C22, I3.C5, F1.C4).
+  - FB-061: `coverage_check.py` reads a dotted sub-part (J1.G4).
+  - L22: intake records the Playwright path on the hub CLAUDE.md's Tools line (I1.G3, I2.G12,
+    I3.G3).
+  - L76: on WSL a file opens for the student with `explorer.exe` and `wslpath -w`, sandbox off,
+    its exit status 1 normal (I1.C3, I1.G12, I2.C21, I2.G6).
+  - The chassis: the column gets room at its foot so the last subsection reaches the spy line,
+    and the closed drawer drops its shadow (part of K61).
+  - SKILL.md: the watch list in the stage map, `_build/q-only/`, `_build/img/`, `_build/watch/`
+    and `_build/videos/` in the hub layout, and the question-only copies in hard rule 4.
+- **Retired:** none.
+- **Backlog:** K26, K52, K70 and K75 `kept (round 2)`; K02, K67 and K68 `trying (round 3)` (no hub
+  had them this round); K29 and K61 stay `open`, each partly covered (CHASSIS C3, the drawer's
+  shadow); K77 to K83 new and `open` (I1.C20, I3.C4, I1.C19, J1.C12, I1.C11, I3.C7, I3.C25,
+  I2.C25, I2.C1, I2.C11, round 1 review, r8-2).

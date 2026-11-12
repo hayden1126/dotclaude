@@ -16,12 +16,22 @@ row, an empty citation or one with its own href, a MANIFEST it can't read, or no
 cites, is refused. With a practice/cram-order.md, the map gets its cram block (an .ecram of tiers,
 rows with #id links and depth labels, the Skip and Out of time lines; no mock line, no Tonight)
 and opens; with none, the map stays closed; a cram order failing cram_check (an unknown id among
-them), a row with no depth label or Markdown the map can't render, a hand-written cram block or an
-open attribute in examnav.html is refused. PLAN.md's `- Review view: <N> minutes of reading` keeps
+them), a row with no depth label while others have one or Markdown the map can't render, a
+hand-written cram block or an open attribute in examnav.html is refused; a cram order with no label
+on any row (written before S33) builds bare, with one WARN naming 10-polish. A citation finds its
+row in any case (`Ed` the row ED) and links with the row's spelling. A writer's leftovers in a
+fragment (tool-call markup, a rule id such as (FB-123) in prose) are refused by fragment and
+line, a bare (S33), (L07) or (K02) warns once each and builds; code, math and a bare (C1) pass. PLAN.md's `- Review view: <N> minutes of reading` keeps
 the toggle, `none` or no line strips it and refuses class rv; rv anywhere but a worked example or
 a Pitfall directly in its section, rv in a section whose Not on or Unverified banner comes before
 its first h3, an unreadable line, and a view over its minutes are refused; the map's cram block
 and a section such a banner takes out are left out of the minutes.
+A concise box builds and joins the Review view; one before the first h3, after other text, twice
+in a subsection, nested, not one list of labelled items, or with a label unknown, repeated or out
+of order is refused, as is class rv on it. A slide-image figure has its img/ file embedded as a
+data URI; one with no citation in its caption, no alt text, a drawing beside it, a data: or other
+src, or a file missing, over IMG_MAX or of the wrong type is refused, and so is an image outside a
+section. The chassis has the pinned figure panel (C5): a dialog, an aria-hidden preview.
 The skill repo's synthetic sample hub, the source of the chassis's
 reference screenshots, is the template filled, links the skill's CHASSIS.md and assembles with
 every link resolved; with EXAM_PREP_PLAYWRIGHT set, its page also passes verify_page.mjs, run as a
@@ -185,8 +195,8 @@ class AssembleTest(unittest.TestCase):
         self.assertIn(".wrap section.note:nth-of-type(2){--sec-accent:#277a4d", page)
         self.assertIn(".wrap section.note:nth-of-type(3){", page)  # the source key
         self.assertNotIn("nth-of-type(4)", page)
-        self.assertIn(':root[data-theme="dark"] .wrap section.note:nth-of-type(1){--sec-accent:#4cbbda}',
-                      page)
+        self.assertIn(':root[data-theme="dark"] .wrap section.note:nth-of-type(1){--sec-accent:#4cbbda;'
+                      '--sec-accent-hl:color-mix(in srgb,#4cbbda 26%,transparent)}', page)
         size = os.path.getsize(os.path.join(h.root, "_build", "notes.html"))
         self.assertIn(f"({size:,} bytes)", out)  # bytes, not characters: the page holds a §
 
@@ -268,6 +278,22 @@ class AssembleTest(unittest.TestCase):
         h.write("_build/frag/step-fig-2-walk.html", STEP.replace("</figure>", '<p><a class="slink">Q1 p.1</a></p></figure>'))
         self.assertRefused(h, "frag/step-fig-2-walk.html: citation `Q1 p.1` names Q1")
 
+    def test_a_citation_code_matches_its_row_in_any_case(self):
+        # Notes write a forum citation `Ed #12`; MANIFEST's row is ED. The link and the key's row
+        # take the row's spelling, so they meet.
+        h = self.in_sec1('<p>Asked on the forum <a class="slink">Ed #12</a>.</p>')
+        h.write("MANIFEST.md", MANIFEST + "| ED | `sources/forum/posts.md` | n/a | in | no | n/a | Forum posts |\n")
+        rc, out = h.run()
+        self.assertEqual(rc, 0, out)
+        page = h.page()
+        self.assertIn('<a class="slink" href="#src-ED" title="ED: posts.md, Forum posts">Ed #12</a>', page)
+        self.assertIn('<tr id="src-ED"><td><code>ED</code></td>', page)
+        self.assertNotIn("src-Ed", page)
+        # Two rows one case apart are one code twice.
+        h = self.hub()
+        h.write("MANIFEST.md", MANIFEST + "| ED | `a.md` | n/a | in | no | n/a | |\n| Ed | `b.md` | n/a | in | no | n/a | |\n")
+        self.assertRefused(h, "MANIFEST.md: two rows for Ed (and ED: a citation's code matches a row in any case)")
+
     def test_a_citation_with_no_text_or_an_href_of_its_own_refused(self):
         self.assertRefused(self.in_sec1('<p><a class="slink"> </a></p>'), "an empty citation")
         self.assertRefused(self.in_sec1('<p><a class="slink" href="#sec-1">D1 p.2</a></p>'),
@@ -315,6 +341,67 @@ class AssembleTest(unittest.TestCase):
         self.assertIn("nth-of-type(9){--sec-accent:#277a4d", css)
         self.assertEqual(css.count('[data-theme="dark"] .wrap'), 9)
         self.assertEqual(css.count(':root:not([data-theme="light"])'), 9)
+
+    def test_every_dark_section_rule_sets_its_own_highlight(self):
+        # A dark rule with no --sec-accent-hl kept the light band, which all but vanishes on dark.
+        css = assemble.accents(8)
+        dark = [ln for ln in css.splitlines() if '[data-theme="dark"]' in ln or ':root:not([data-theme="light"])' in ln]
+        self.assertEqual(len(dark), 16)
+        for ln in dark:
+            self.assertIn("--sec-accent-hl:", ln)
+        # Derived from the hue's own dark accent where the table gives none; kept where it does.
+        self.assertIn("nth-of-type(1){--sec-accent:#4cbbda;--sec-accent-hl:color-mix(in srgb,#4cbbda 26%,transparent)}", css)
+        self.assertIn("nth-of-type(2){--sec-accent:#5fc088;--sec-accent-hl:rgba(95,192,136,.20)}", css)
+
+    def built_page(self):
+        h = self.hub()
+        rc, out = h.run()
+        self.assertEqual(rc, 0, out)
+        return h.page()
+
+    def test_the_page_themes_its_scrollbars_with_an_opaque_track(self):
+        # C2: a transparent page track shows white inside a light-scheme parent frame.
+        page = self.built_page()
+        css = re.sub(r"/\*.*?\*/", "", page.split("</style>")[0], flags=re.S)
+        self.assertEqual(len(re.findall(r"--scroll-thumb:#[0-9a-f]{6}", css)), 3, "one per theme block")
+        root = re.search(r"(?m)^\s*:root\{(scrollbar-color:[^}]*)\}", css)
+        self.assertTrue(root, "no :root{scrollbar-color:...} rule")
+        self.assertIn("scrollbar-color:var(--scroll-thumb) var(--bg)", root.group(1))
+        self.assertIn("background:var(--bg)", root.group(1))
+        self.assertIn(".rail{scrollbar-color:var(--scroll-thumb) transparent}", css)
+
+    def test_the_theme_toggle_is_a_fixed_icon_with_no_words(self):
+        # C3: no worded button at the rail's foot; a fixed icon top right on desktop, the top bar's
+        # icon on phones, and a right gutter so text never runs under it.
+        page = self.built_page()
+        rail = re.search(r'<aside class="rail".*?</aside>', page, re.S).group(0)
+        self.assertNotIn("<button class=\"themebtn", rail)
+        self.assertNotIn("Toggle theme</button>", page)
+        for bid in ("themeBtn", "themeBtn2"):
+            m = re.search(rf'<button ([^>]*\bid="{bid}"[^>]*)>(.*?)</button>', page, re.S)
+            self.assertTrue(m, bid)
+            self.assertEqual(re.sub(r"<[^>]*>", "", m.group(2)).strip(), "", f"{bid} has words")
+            self.assertIn("<svg", m.group(2))
+            for attr in ('aria-label="', 'title="Toggle theme (T)"', 'aria-keyshortcuts="t"'):
+                self.assertIn(attr, m.group(1), bid)
+        self.assertRegex(page, r'class="themebtn themefab" id="themeBtn2"')
+        self.assertIn(".themefab{position:fixed;top:.75rem;right:.75rem", page)
+        phone = re.search(r"@media \(max-width:900px\)\{(.*?)\n  \}", page, re.S).group(1)
+        self.assertIn(".themefab{display:none}", phone)
+        self.assertIn("@media (min-width:901px){.content{padding-right:4rem}}", page)
+
+    def test_full_screen_starts_hidden_and_the_keys_are_guarded(self):
+        # C4: shown only where the frame grants it; F and T never with a modifier or while typing.
+        page = self.built_page()
+        for bid in ("fsBtn", "fsBtn2"):
+            m = re.search(rf'<button ([^>]*\bid="{bid}"[^>]*)>', page)
+            self.assertTrue(m, bid)
+            for attr in (" hidden", 'aria-pressed="false"', 'aria-keyshortcuts="f"', 'title="Full screen (F)"'):
+                self.assertIn(attr, m.group(1), bid)
+        self.assertIn("document.fullscreenEnabled||document.webkitFullscreenEnabled", page)
+        self.assertIn("addEventListener('fullscreenchange',fsSync)", page)
+        self.assertIn("if(e.ctrlKey||e.metaKey||e.altKey||e.repeat) return;", page)
+        self.assertIn("t.isContentEditable||/^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName)", page)
 
     def assertRefused(self, h, needle):
         rc, out = h.run()
@@ -488,6 +575,64 @@ class AssembleTest(unittest.TestCase):
     def test_todo_verify_refused(self):
         self.assertRefused(self.in_sec1("<p>TODO-VERIFY: the sum of 3 to 7</p>"),
                            "frag/sec1.html: a TODO-VERIFY is left")
+
+    def test_writer_leftovers_refused_naming_the_fragment_and_line(self):
+        # SEC1's </section> is line 6, so what in_sec1 adds sits on line 6.
+        tool = "antml" + ":"
+        for extra, needle in (
+                ("<p>x</invoke></p>", "tool-call markup </invoke>"),
+                ('<p><invoke name="w">x</p>', "tool-call markup <invoke>"),
+                ("<p>x</content></p>", "tool-call markup </content>"),
+                ('<p><parameter name="w">x</p>', "tool-call markup <parameter>"),
+                ("<p>x</parameter></p>", "tool-call markup </parameter>"),
+                (f"<p><{tool}invoke>x</p>", f"tool-call markup <{tool}invoke>"),
+                ("<p>x &lt;/invoke&gt; y</p>", "tool-call markup </invoke>"),
+                ('<p>x &lt;parameter name="w"&gt; y</p>', "tool-call markup <parameter"),
+                (f"<p>x &lt;/{tool}parameter&gt;</p>", f"tool-call markup </{tool}p"),
+                ("<p>Linked, as asked (FB-123).</p>", "a skill rule id (FB-123)"),
+                ("<p>Themed, per CHASSIS (C4).</p>", "a skill rule id CHASSIS (C4)"),
+                ("<p>Per rule (C2), a fixed icon.</p>", "a skill rule id rule (C2)")):
+            with self.subTest(extra=extra):
+                self.assertRefused(self.in_sec1(extra), f"frag/sec1.html:6: {needle}")
+        h = self.hub()
+        h.write("_build/frag/examnav.html", NAV.replace("</p></div>", "</p>\n<p>Read first (FB-7).</p></div>"))
+        self.assertRefused(h, "frag/examnav.html:3: a skill rule id (FB-7)")
+        h = self.hub()
+        h.write("_build/frag/step-fig-2-walk.html", STEP.replace("</figure>", "<p>x</invoke></p></figure>"))
+        self.assertRefused(h, "frag/step-fig-2-walk.html:2: tool-call markup </invoke>")
+
+    def test_a_bare_s_l_or_k_id_warns_and_builds(self):
+        # A course writes a state (S1), an inductor (L1) or a lecture (L3) so: one WARN per hit,
+        # naming fragment and line, and the page is written.
+        for extra, needle in (("<p>Know it cold (S33).</p>", "(S33)"),
+                              ("<p>One idea per block (L07).</p>", "(L07)"),
+                              ("<p>Opens on load (K02).</p>", "(K02)")):
+            with self.subTest(extra=extra):
+                h = self.in_sec1(extra)
+                rc, out = h.run()
+                self.assertEqual(rc, 0, out)
+                self.assertIsNotNone(h.page())
+                warns = [line for line in out.splitlines() if line.startswith("WARN:")]
+                self.assertEqual(len(warns), 1, out)
+                self.assertIn(f"WARN: frag/sec1.html:6: a skill rule id {needle}, if a writer agent left it", warns[0])
+        h = self.hub()
+        h.write("_build/frag/examnav.html", NAV.replace("</p></div>", "</p>\n<p>Read (S7), then (L3).</p></div>"))
+        rc, out = h.run()
+        self.assertEqual(rc, 0, out)
+        warns = [line for line in out.splitlines() if line.startswith("WARN:")]
+        self.assertEqual(len(warns), 2, out)
+        self.assertIn("WARN: frag/examnav.html:3: a skill rule id (S7)", warns[0])
+        self.assertIn("WARN: frag/examnav.html:3: a skill rule id (L3)", warns[1])
+
+    def test_code_math_and_circuit_labels_are_no_leftovers(self):
+        # A course can write (C1) for a capacitor or a case, and anything at all in code or math.
+        h = self.in_sec1('<p>The capacitor (C1) charges, case (C2) holds, \\(f(S1) = g(L2)\\) and</p>\n'
+                         '<p>\\[ (K02) + (FB-1) \\] and <code>(S33) &lt;/invoke&gt;</code>, as cited '
+                         '(<a class="slink">D1 p.2</a>).</p>\n'
+                         '<pre><code>(L07) &lt;parameter name="x"&gt; (FB-123)</code></pre>')
+        rc, out = h.run()
+        self.assertEqual(rc, 0, out)
+        self.assertNotIn("WARN", out)
 
     def test_tables_nest_strictly(self):
         # A browser moves text or a tag directly inside a table or a row out in front of the
@@ -724,6 +869,48 @@ class AssembleTest(unittest.TestCase):
         self.assertRefused(self.cram_hub(CRAM.replace("Know cold: Widgets nest", "Widgets nest")),
                            "practice/cram-order.md:15: no depth label")
 
+    def test_a_cram_rows_needs_show_after_it_as_links(self):
+        # K52: row 2 needs row 1's section; the map shows it after the row, linked, and the
+        # Read already line stays out of the map.
+        h = self.cram_hub(CRAM.replace("Widgets nest.", "Widgets nest. needs: [§2.1](https://notes.example.com/w#sec-2-more)")
+                          .replace("\n\n## Tier 1:", "\n\n**Read already:** nothing.\n\n## Tier 1:"))
+        rc, out = h.run()
+        self.assertEqual(rc, 0, out)
+        page = h.page()
+        self.assertIn('<li><b>Widgets nest</b> → <a class="xref" href="#sec-1-basics">§1.1 Basics</a> (Know cold) · '
+                      'needs <a class="xref" href="#sec-2-more">§2.1</a></li>', page)
+        self.assertIn('<a class="xref" href="#sec-2-more">§2.1 More</a> (Use)</li>', page)
+        self.assertNotIn("Read already", page)
+
+    def test_a_cram_row_whose_need_comes_later_fails_the_build(self):
+        self.assertRefused(self.cram_hub(CRAM.replace(
+            "`x<y`.", "`x<y`. needs: [§1.1](https://notes.example.com/w#sec-1-basics)")),
+            "practice/cram-order.md:9: needs §1.1 (#sec-1-basics), which no earlier row reads")
+
+    def test_a_cram_order_written_before_s33_builds_without_labels_and_warns_once(self):
+        # No row carries a depth label: the hub predates S33, and a rebuild mid-exam must not be
+        # refused for it. The map shows the rows bare and one WARN names the pass that adds them.
+        pre = CRAM.replace("(10 min): Use: ", "(10 min): ").replace("(5 min): Know cold: ", "(5 min): ")
+        h = self.cram_hub(pre)
+        rc, out = h.run()
+        self.assertEqual(rc, 0, out)
+        warns = [line for line in out.splitlines() if "WARN" in line]
+        self.assertEqual(len(warns), 1, out)
+        self.assertIn("WARN: practice/cram-order.md: no row carries an S33 depth label", warns[0])
+        self.assertIn("10-polish", warns[0])
+        page = h.page()
+        self.assertIn('<li><b>Widgets nest</b> → <a class="xref" href="#sec-1-basics">§1.1 Basics</a></li>', page)
+        self.assertIn('<a class="xref" href="#sec-2-more">§2.1 More</a></li>', page)
+        # A labelled order builds with no WARN.
+        rc, out = self.cram_hub().run()
+        self.assertEqual(rc, 0, out)
+        self.assertNotIn("WARN", out)
+
+    def test_a_half_labelled_cram_order_still_needs_every_label(self):
+        h = self.cram_hub(CRAM.replace("(5 min): Know cold: ", "(5 min): "))
+        self.assertRefused(h, "practice/cram-order.md:15: no depth label")
+        self.assertNotIn("WARN", h.run()[1])
+
     def test_a_hand_written_cram_block_in_the_map_refused(self):
         for nav, needle in (
                 (NAV.replace("</div></details>", '<div class="egrid"><div class="eq"><div class="eqh">Tier 1: '
@@ -751,7 +938,7 @@ class AssembleTest(unittest.TestCase):
                 rc, out = h.run()
                 self.assertEqual(rc, 0, out)
                 self.assertEqual('class="viewtog"' in h.page(), kept)
-                self.assertEqual("Review view: only the worked examples" in h.page(), kept)
+                self.assertEqual("Review view: only each subsection's concise box" in h.page(), kept)
                 self.assertNotIn("REVIEW TOGGLE", h.page())
 
     def test_rv_with_no_review_view_refused(self):
@@ -848,6 +1035,163 @@ class AssembleTest(unittest.TestCase):
     def test_reading_words_counts_math_by_its_symbols(self):
         self.assertEqual(assemble.reading_words(r"Sum \(\frac{n(n+1)}{2}\) now"), 6)
         self.assertEqual(assemble.reading_words(r"\[ x \le 10 \] - a"), 3)
+
+    # ---- the concise box, the slide-image figure and the pinned figure panel (C5, C6) ----
+
+    BOX = ('<div class="concise"><ul>\n<li><strong>Rule:</strong> widgets nest \\(n\\) deep.</li>\n'
+           '<li><strong>Trap:</strong> a gadget is no widget.</li>\n</ul></div>\n')
+
+    def boxed(self, box=None, after='<h3 id="sec-1-basics">1.1 Basics</h3>\n'):
+        return SEC1.replace(after, after + "  " + (self.BOX if box is None else box), 1)
+
+    def test_a_concise_box_builds_and_joins_the_review_view(self):
+        depth = '<p class="connects"><strong>Depth:</strong> Use <a class="slink">D1 p.2</a>.</p>\n'
+        for sec1 in (self.boxed(), self.boxed(depth + self.BOX)):
+            h = self.cram_hub(plan="- Review view: 5 minutes of reading\n", sec1=sec1, cram=None)
+            rc, out = h.run()
+            self.assertEqual(rc, 0, out)
+            self.assertIn('<div class="concise"><ul>', h.page())
+        section = assemble.Tree(self.boxed()).root["kids"][0]
+        shown = [e["tag"] + "." + e["attrs"].get("class", "") for e in assemble.review_parts(section)]
+        self.assertEqual(shown, ["h2.", "h3.", "div.concise"])
+
+    def test_a_concise_box_out_of_form_refused(self):
+        li = '<li><strong>{}:</strong> x.</li>'
+        bad = [
+            (SEC1.replace('<h3 id="sec-1-basics">', self.BOX + '<h3 id="sec-1-basics">'),
+             "a concise box before the section's first h3"),
+            (self.boxed(after='<div class="callout def"><div class="lab">Definition</div><p>x</p></div>\n'),
+             "a concise box after other text under sec-1-basics"),
+            (self.boxed(self.BOX + self.BOX), "a concise box twice under sec-1-basics"),
+            (self.boxed('<div class="callout key concise"><div class="lab">Key rule</div></div>\n'),
+             "that isn't one <ul> of labelled items"),
+            (self.boxed('<div class="concise"><ul>' + li.format("Rule") + '</ul><p>x</p></div>\n'),
+             "that isn't one <ul> of labelled items"),
+            (self.boxed('<div class="concise"><ul><li>Rule: x</li></ul></div>\n'),
+             "an item that doesn't open with <strong>Label:</strong>"),
+            (self.boxed('<div class="concise"><ul>' + li.format("Idea") + '</ul></div>\n'),
+             "an item that doesn't open with <strong>Label:</strong>"),
+            (self.boxed('<div class="concise"><ul>' + li.format("Trap") + li.format("Rule") + '</ul></div>\n'),
+             "labelled Trap, Rule: each label at most once, in the order Rule, Why, Steps"),
+            (self.boxed('<div class="concise"><ul>' + li.format("Why") + li.format("Why") + '</ul></div>\n'),
+             "labelled Why, Why"),
+            (self.boxed('<div class="concise"><ul></ul></div>\n'), "with no items"),
+            (self.boxed('<ul><li><div class="concise"><ul>' + li.format("Rule") + '</ul></div></li></ul>\n'),
+             "a concise box inside <li>"),
+            (self.boxed('<p class="concise">x</p>\n'), 'a concise box on <p>'),
+            (self.boxed(self.BOX.replace('class="concise"', 'class="concise rv"')), 'class rv on <div class="concise rv">'),
+        ]
+        for sec1, needle in bad:
+            with self.subTest(needle=needle):
+                h = self.cram_hub(plan="- Review view: 5 minutes of reading\n", sec1=sec1, cram=None)
+                self.assertRefused(h, needle)
+
+    PNG = (b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08\x02\x00\x00\x00\x90wS"
+           b"\xde\x00\x00\x00\x0cIDATx\x9cc\xf8\xff\xff?\x00\x05\xfe\x02\xfe\r\xefF\xb8\x00\x00\x00\x00IEND\xaeB`\x82")
+    SLIDE = ('<figure id="fig-1-board"><img src="img/fig-1-board.png" alt="A widget board, two rows of parts">\n'
+             '<figcaption>Fig 1.1. The board as the slide shows it <a class="slink">D1 p.2</a>.</figcaption></figure>\n')
+
+    def slide_hub(self, fig=None, data=PNG, name="fig-1-board.png"):
+        sec1 = SEC1.replace("</section>", (self.SLIDE if fig is None else fig) + "</section>")
+        h = self.hub(sections={1: sec1, 2: SEC2})
+        os.makedirs(os.path.join(h.root, "_build", "img"))
+        if data is not None:
+            with open(os.path.join(h.root, "_build", "img", name), "wb") as f:
+                f.write(data)
+        return h
+
+    def test_a_slide_image_figure_is_embedded_in_the_page(self):
+        h = self.slide_hub()
+        rc, out = h.run()
+        self.assertEqual(rc, 0, out)
+        page = h.page()
+        self.assertIn('<img src="data:image/png;base64,' + __import__("base64").b64encode(self.PNG).decode(), page)
+        self.assertNotIn('src="img/', page)
+        self.assertIn('href="#src-D1"', page.split('id="fig-1-board"')[1])
+
+    def test_a_slide_image_src_in_any_spelling_is_embedded(self):
+        # A browser takes SRC=, a bare value and blanks around the =; each was once left as a
+        # relative link, a broken image on the artifact host.
+        b64 = __import__("base64").b64encode(self.PNG).decode()
+        for spelling in ('SRC="img/fig-1-board.png"', "src=img/fig-1-board.png", 'src = "img/fig-1-board.png"',
+                         "Src='img/fig-1-board.png'"):
+            with self.subTest(spelling=spelling):
+                h = self.slide_hub(fig=self.SLIDE.replace('src="img/fig-1-board.png"', spelling))
+                rc, out = h.run()
+                self.assertEqual(rc, 0, out)
+                page = h.page()
+                self.assertIn('"data:image/png;base64,' + b64 + '"', page)
+                self.assertNotIn("img/fig-1-board.png", page)
+
+    def test_embed_images_reads_every_src_spelling(self):
+        h = self.slide_hub()
+        problems = []
+        text = assemble.embed_images("x", '<img SRC="img/fig-1-board.png" alt="a"><img src=img/fig-1-board.png alt=a>',
+                                     os.path.join(h.root, "_build", "img"), problems)
+        self.assertEqual(problems, [])
+        self.assertNotIn("img/", text)
+        self.assertEqual(text.count("data:image/png;base64,"), 2)
+
+    def test_an_img_src_left_after_embedding_refused(self):
+        # A character reference the parser decodes to img/... that the substitution can't read.
+        h = self.slide_hub(fig=self.SLIDE.replace('src="img/fig-1-board.png"', 'src="img/fig-1-board&#46;png"'))
+        self.assertRefused(h, "an <img> src 'img/fig-1-board.png' wasn't embedded")
+
+    def test_a_slide_image_figure_out_of_form_refused(self):
+        fig = self.SLIDE
+        cases = [
+            (dict(fig=fig.replace(' <a class="slink">D1 p.2</a>', "")),
+             "#fig-1-board, a slide-image figure, has no source citation in its caption"),
+            (dict(fig=fig.replace('<figcaption>', '<p><a class="slink">D1 p.2</a></p><figcaption>')
+                  .replace(' <a class="slink">D1 p.2</a>.</figcaption>', '.</figcaption>')),
+             "has no source citation in its caption"),
+            (dict(fig=fig.replace('alt="A widget board, two rows of parts"', 'alt=" "')), "#fig-1-board's <img> has no alt text"),
+            (dict(fig=fig.replace(' alt="A widget board, two rows of parts"', '')), "#fig-1-board's <img> has no alt text"),
+            (dict(fig='<p><img src="img/fig-1-board.png" alt="x"></p>\n'), "an <img> outside a <figure id=\"fig-...\">"),
+            (dict(fig=fig.replace('<figcaption>', '<svg viewBox="0 0 1 1"></svg><figcaption>')),
+             "#fig-1-board holds more than its one <img>"),
+            (dict(fig=fig.replace('img/fig-1-board.png', 'data:image/png;base64,AAAA')),
+             "#fig-1-board's <img> src isn't img/<name>.png"),
+            (dict(fig=fig.replace('img/fig-1-board.png', 'img/../notes.png')), "links that aren't #id"),
+            (dict(data=None), "img/fig-1-board.png isn't in _build/img/"),
+            (dict(data=b"GIF89a" + b"\0" * 20), "img/fig-1-board.png isn't the image/png its name says"),
+            (dict(data=self.PNG + b"\0" * assemble.IMG_MAX), "img/fig-1-board.png is over 1,000,000 bytes"),
+        ]
+        for kw, needle in cases:
+            with self.subTest(needle=needle):
+                self.assertRefused(self.slide_hub(**kw), needle)
+
+    def test_an_image_outside_a_section_refused(self):
+        h = self.slide_hub()
+        h.write("_build/frag/examnav.html", NAV.replace("</div></details>", self.SLIDE + "</div></details>"))
+        self.assertRefused(h, "frag/examnav.html: an <img>, which only a section's slide-image figure holds")
+
+    def test_the_chassis_escape_closes_the_drawer_alone_and_the_tail_reads_the_foot_padding(self):
+        page = read(CHASSIS)
+        # The drawer's Escape runs first and marks the key handled; the pinned panel's skips it.
+        drawer = page.index("rail.classList.contains('open')){e.preventDefault();closeNav();}")
+        panel = page.index("e.key==='Escape'&&!e.defaultPrevented&&!panel.hidden")
+        self.assertLess(drawer, panel)
+        # fitTail takes the tail out of .wrap's computed foot padding, whose bare part is 8rem in
+        # both: the CSS rule and the script's constant move together.
+        self.assertIn(".wrap{max-width:var(--maxw);margin:0 auto;padding-block:3rem calc(8rem + var(--tail,0px))}", page)
+        self.assertIn("body.figpinned .wrap{padding-bottom:max(50vh,calc(8rem + var(--tail,0px)))}", page)
+        self.assertIn("(parseFloat(getComputedStyle(main).paddingBottom)||0)-8*rem)", page)
+
+    def test_the_chassis_pins_a_figure_in_an_accessible_panel(self):
+        page = read(CHASSIS)
+        panel = re.search(r'<div class="figpin figpanel"[^>]*>', page).group(0)
+        for attr in ('role="dialog"', 'aria-label="Pinned figure"', 'tabindex="-1"', "hidden"):
+            self.assertIn(attr, panel)
+        self.assertRegex(page, r'<div class="figpin figpeek"[^>]*aria-hidden="true"[^>]*hidden>')
+        self.assertIn(".figpin[hidden]{display:none}", page)
+        # A plain click only, in capture so the Review view's switch sees it handled.
+        self.assertIn("e.button!==0||e.ctrlKey||e.metaKey||e.shiftKey||e.altKey", page)
+        self.assertIn("},true);", page)
+        self.assertIn("if(!reviewOn||e.defaultPrevented) return;", page)
+        self.assertIn("e.pointerType!=='mouse'", page)
+        phone = re.search(r"@media \(max-width:900px\)\{(.*?)\n  \}", page, re.S).group(1)
+        self.assertIn("max-height:45dvh", phone)
 
     def test_no_chassis_is_a_usage_error(self):
         h = self.hub()

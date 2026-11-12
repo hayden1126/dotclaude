@@ -4,7 +4,11 @@ A synthetic backbone and extracts: page ranges with gaps, build-frame runs that 
 inside a row, question numbers (parts and stems fall under their question), reveal slides by
 horizontal index, `(all)` rows, and a block with a locator of its own. The row grammar is strict:
 a stray digit in a note maps nothing, a cell that doesn't parse fails, a target must be
-`skip (why)` or a subsection the backbone defines, and no blocks at all fails."""
+`skip (why)` or a subsection the backbone defines, and no blocks at all fails.
+
+The figure floor (STYLE S11): a section marked `Diagram-taught: yes` names a figure on its Figures
+line; once one section carries the line every section must; a backbone with none (written before
+the rule) passes with one WARN naming 10-polish's figure pass."""
 import contextlib
 import importlib.util
 import io
@@ -56,8 +60,8 @@ class Coverage(unittest.TestCase):
             f.write(text)
 
     def run_check(self):
-        out = io.StringIO()
-        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(io.StringIO()):
+        out, self.err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(self.err):
             code = coverage_check.main(["--root", self.root])
         return code, out.getvalue()
 
@@ -69,6 +73,17 @@ class Coverage(unittest.TestCase):
         code, out = self.run_check()
         self.assertEqual(code, 0, out)
         self.assertIn("13 extract blocks; 0 unmapped", out)
+
+    def test_a_dotted_roman_sub_part_is_its_undotted_form(self):
+        # `Q4a.i` is `Q4ai` written with a dot: both fall under the row for Q4a.
+        self.extract("hw.md", "### [HW1 Q4ai] i\n### [HW1 Q4a.i] i dotted\n### [HW1 Q4c.iii] iii\n"
+                              "### [HW1 Q3a.ii] no row\n")
+        code, out = self.run_check()
+        self.assertEqual(code, 1, out)
+        self.assertIn("4 extract blocks; 1 unmapped", out)
+        self.assertIn("UNMAPPED [HW1 Q3a.ii] (hw.md)", out)
+        m = coverage_check.BLOCK.match("### [HW1 Q4a.i] x")
+        self.assertEqual((m.group("q"), m.group("letter"), m.group("other")), ("4", "a", None))
 
     def test_gaps_are_unmapped(self):
         self.extract("D1.md", "### [D1 p.7] Gap\n### [D1 p.5-8] Run past the row\n")
@@ -188,6 +203,120 @@ class Coverage(unittest.TestCase):
         code, out = self.run_check()
         self.assertEqual(code, 1)
         self.assertIn("NO BLOCKS in drift.md", out)
+
+
+# Three sections, each with its Figures and Diagram-taught lines; the matrix maps one block.
+FLOOR = """# Backbone
+
+## §1 Pipelines (`sec-1`, file `notes/01-pipelines.md`, full)
+
+| § | Title | id | Sources | Practice | How it's tested |
+|---|---|---|---|---|---|
+| 1.1 | Stages | `sec-1-stages` | D1 pp.2-6 | | trace |
+
+- Figures: `fig-1-stages` Fig 1.1 (static: a widget passing stage to stage)
+  [D1 p.4].
+- Diagram-taught: yes (D1 pp.3-6 teach it through stage diagrams)
+
+## §2 Counts (`sec-2`, file `notes/02-counts.md`, concise)
+
+| § | Title | id | Sources | Practice | How it's tested |
+|---|---|---|---|---|---|
+| 2.1 | Sizes | `sec-2-sizes` | D1 pp.7-8 | | count |
+
+- Figures: none.
+- Diagram-taught: no
+
+## §3 Shapes (`sec-3`, file `notes/03-shapes.md`, full)
+
+| § | Title | id | Sources | Practice | How it's tested |
+|---|---|---|---|---|---|
+| 3.1 | Layout | `sec-3-layout` | D1 p.9 | | draw |
+
+- Figures:
+  `fig-3-layout` Fig 3.1 (slide image: a dense schematic) [D1 p.9].
+- Diagram-taught: yes
+
+## Figure shortlist
+
+| id | Section | Kind | Why a figure | Source |
+|---|---|---|---|---|
+| `fig-1-stages` | 1.1 | static | a widget moves stage to stage | D1 p.4 |
+
+## Coverage matrix
+
+| Source block range | → | Subsection |
+|---|---|---|
+| D1 pp.1-9 | | 1.1 |
+"""
+
+
+class FigureFloor(unittest.TestCase):
+    extract, run_check = Coverage.extract, Coverage.run_check
+
+    def setUp(self):
+        Coverage.setUp(self)
+        self.extract("D1.md", "### [D1 p.2] x\n")
+
+    def backbone(self, text):
+        with open(os.path.join(self.root, "_build", "backbone.md"), "w") as f:
+            f.write(text)
+
+    def test_a_diagram_taught_section_with_a_figure_passes(self):
+        self.backbone(FLOOR)
+        code, out = self.run_check()
+        self.assertEqual(code, 0, out)
+        self.assertEqual(self.err.getvalue(), "")
+
+    def test_a_diagram_taught_section_with_no_figure_fails_naming_it(self):
+        self.backbone(FLOOR.replace("- Figures: `fig-1-stages` Fig 1.1 (static: a widget passing stage "
+                                    "to stage)\n  [D1 p.4].", "- Figures: none."))
+        code, out = self.run_check()
+        self.assertEqual(code, 1, out)
+        self.assertIn("§1: Diagram-taught: yes, but its Figures line names no `fig-` id", out)
+        self.assertNotIn("§2:", out)
+        self.assertNotIn("§3:", out)
+        # A Figures line missing altogether is no figure either.
+        self.backbone(FLOOR.replace("- Figures:\n  `fig-3-layout` Fig 3.1 (slide image: a dense "
+                                    "schematic) [D1 p.9].\n", ""))
+        code, out = self.run_check()
+        self.assertEqual(code, 1, out)
+        self.assertIn("§3: Diagram-taught: yes, but its Figures line names no `fig-` id", out)
+
+    def test_a_backbone_with_no_diagram_taught_line_warns_and_passes(self):
+        self.backbone(FLOOR.replace("- Diagram-taught: yes (D1 pp.3-6 teach it through stage "
+                                    "diagrams)\n", "").replace("- Diagram-taught: no\n", "")
+                      .replace("- Diagram-taught: yes\n", "")
+                      .replace("- Figures: `fig-1-stages`", "- Figures: none, was `fig-1-stages`"))
+        code, out = self.run_check()
+        self.assertEqual(code, 0, out)
+        warns = self.err.getvalue().splitlines()
+        self.assertEqual(len(warns), 1, warns)
+        self.assertIn("coverage_check: WARN: no section carries a `Diagram-taught: yes|no` line",
+                      warns[0])
+        self.assertIn("10-polish figure pass", warns[0])
+
+    def test_a_section_without_the_line_fails_when_others_carry_it(self):
+        self.backbone(FLOOR.replace("- Diagram-taught: no\n", ""))
+        code, out = self.run_check()
+        self.assertEqual(code, 1, out)
+        self.assertIn("§2: no `Diagram-taught: yes|no` line, which the backbone's other sections "
+                      "carry", out)
+        self.assertNotIn("§1:", out)
+        self.assertEqual(self.err.getvalue(), "")
+
+    def test_a_value_other_than_yes_or_no_fails(self):
+        self.backbone(FLOOR.replace("- Diagram-taught: no\n", "- Diagram-taught: maybe\n"))
+        code, out = self.run_check()
+        self.assertEqual(code, 1, out)
+        self.assertIn("§2: `Diagram-taught: maybe` is neither yes nor no", out)
+
+    def test_the_templates_sections_carry_the_line(self):
+        with open(os.path.join(REPO, "skills", "exam-prep", "templates", "backbone.md.tmpl"),
+                  encoding="utf-8") as f:
+            text = f.read()
+        self.assertIn("- Diagram-taught: {{yes | no}}", text)
+        self.assertIn("- Figures:", text)
 
 
 if __name__ == "__main__":

@@ -1,6 +1,6 @@
 # 03 Backbone
 
-Baseline as of 2026-11-10; changes only via `12-retro`.
+Baseline as of 2026-11-12; changes only via `12-retro`.
 
 The backbone turns source-ordered extracts into the notes' plan: concept order, every section
 number, title and link id, the conventions, the figures, how each part is tested, and a coverage
@@ -48,13 +48,38 @@ sheets use wins over the slides' and over a hub's own conventions (FB-089).
 
 ## Step 5: Shortlist the figures
 
-Look from both directions: the notes' mechanisms that prose can't carry, and the slides' own
-diagrams (FB-062). Each row of the shortlist says why prose isn't enough. Pick two or three
-step-throughs for the most-drilled procedures, fed later by the checker's data. The shortlist
-lives in the backbone's Figure shortlist table, and STATUS points there; each figure is also on
-its section's Figures line. Every backticked id in the backbone is in the registry
-`linkcheck.py` checks, so a figure dropped later loses both its shortlist row and its Figures
-line.
+Diagrams are often faster to learn from than words, and notes with too few get set aside for the
+slides; notes that carry every slide diagram bury the ones that teach. So the figures come from a
+sweep, then a cut (STYLE S11).
+
+1. **The mechanism sweep.** Section by section, list every candidate in the backbone's Mechanism
+   sweep table, one row each: every mechanism whose parts pass data (a pipeline whose stages hand
+   values on), every construction whose count or shape matters, every comparison of two
+   structures, and every trace of a drilled procedure; the slides' own diagrams for the section are candidates too
+   (FB-062). Each row is kept or cut, with a short reason: a redundant, decorative or out-of-scope
+   slide diagram is cut freely, since the slides' diagrams are candidates, not a quota.
+2. **Diagram-taught.** Mark each section `Diagram-taught: yes` when its slides teach it through
+   diagrams (cite them), else `no`, on the line beside its Figures line. A `yes` section keeps at
+   least one figure and leads with it.
+3. **The shortlist.** Every kept row becomes a row of the Figure shortlist, saying why prose isn't
+   enough, and its kind: `static` (drawn as SVG), `step-through` (each trace of a drilled
+   procedure, fed later by the checker's data, FB-117) or `slide image` (a slide's own picture,
+   cropped, only for a reference picture too costly to redraw: a component photo, a dense
+   schematic; a mechanism is always redrawn). The shortlist lives in the backbone's Figure
+   shortlist table, and STATUS points there; each figure is also on its section's Figures line.
+   Every backticked id in the backbone is in the registry `linkcheck.py` checks, so a figure
+   dropped later loses both its shortlist row and its Figures line.
+4. **The student's adds and cuts.** In the build, which asks nothing (hard rule 1), the
+   figures are built from the shortlist as it stands: write the shortlist and its cut rows, one
+   line each, to `_build/logs/figures.md`, and add `Figure shortlist: <N> kept, <M> cut, for the
+   student to review (_build/logs/figures.md)` to STATUS as a judgment call (hard rule 10).
+   `08-practice` step 8's opening offers it, and the student's adds and cuts go in by a
+   `10-polish` figure pass. Run alone on request with the student present, show the shortlist and
+   the cut rows, one line each, before any figure is built (FB-062), and apply what they add or
+   cut.
+
+`coverage_check.py` (step 8) fails a `Diagram-taught: yes` section whose Figures line names no
+figure.
 
 ## Step 6: Map how it's tested
 
@@ -89,6 +114,7 @@ but isn't one.
 
 ## Done when
 
-`coverage_check.py` exits 0; every id is in the registry; every practice question part has its
-How it's tested row; `examples.py` exits 0, or PLAN.md's Checker line says nothing in the course
+`coverage_check.py` exits 0 (every block mapped, every diagram-taught section with its figure);
+every id is in the registry; every section has its Diagram-taught line and the backbone holds the
+figure shortlist (logged in STATUS in the build, shown to the student when run alone); every practice question part has its How it's tested row; `examples.py` exits 0, or PLAN.md's Checker line says nothing in the course
 is computable; and the backbone is committed.

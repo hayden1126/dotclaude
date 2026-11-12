@@ -23,7 +23,8 @@ the chassis:
     blank for a row without one); a table with no By column reads as before. Each
     a.slink, in a section, a step-through or the map, gets href="#src-<code>", where the code is
     its text's first word (D5 from `D5 p.23`, HW1 from `HW1 Q2c`), and a title holding its row's
-    text. The row's id is src- and the code, each character other than an ASCII letter, digit or
+    text. A code matches its row whatever its case (`Ed #12` finds the row ED), and the link and the
+    key use the row's own spelling, so the two always meet. The row's id is src- and the code, each character other than an ASCII letter, digit or
     hyphen written as _<hex>_ (HW1.S is src-HW1_2e_S): one token, and distinct codes stay
     distinct. A code with a space can't be cited, since a citation's first word is its code. A
     page that cites nothing gets no key and needs no MANIFEST.md.
@@ -43,11 +44,25 @@ outside code (all of a fragment's text read as one string, and the sections agai
 step-throughs in place, since MathJax and a browser join text across tags this parser keeps
 apart), or a TODO-VERIFY left from 05-verify; when a citation names a code MANIFEST.md has no row for
 (naming the code and the fragment), a citation is empty or has an href of its own, MANIFEST.md
-is missing or its table has no Doc id or File column or repeats a code, or the key's own text
-fails the fragment checks; when a FIG marker holds a < or >, sits inside a
+is missing or its table has no Doc id or File column or repeats a code (in any case), or the key's
+own text fails the fragment checks; when a section, the map or a step-through holds what a writer
+agent left behind (FB-095, naming the fragment and its line): tool-call markup, as a tag or as text, or a
+skill rule id in parentheses in the student's text, `(FB-123)` or `(C4)` right after CHASSIS or
+rule (a bare `(C1)` is a capacitor or a case as often as a rule), code and math exempt; a bare
+`(S12)`, `(L07)` or `(K02)` only warns (one WARN line each, fragment and line), since a course
+writes a state, an inductor or a lecture that way; when a FIG marker holds a < or >, sits inside a
 tag, an attribute or code or outside a section (in the exam-day map or a step-through), is left
 with no step-through, or a step-through file isn't one <figure id="<fig-id>"> or isn't placed
 exactly once.
+
+A concise box (CONVERT.md) is a div.concise directly in its section, opening its subsection (right
+after the h3, or after its Depth line), one a subsection, holding one <ul> whose items each open
+with <strong>Label:</strong>, the labels from BOX_LABELS, each once and in that order; anything
+else is refused. A slide-image figure is a <figure id="fig-..."> holding one <img> and no SVG, its
+alt text said and its figcaption holding a source citation; its src is img/<name>.png, .jpg or
+.webp, a file in _build/img/ that the page embeds as a data URI, refused when missing, over IMG_MAX
+bytes, or not the type its name says. An <img> anywhere else (outside a section's figure, in the
+map or a step-through) or with any other src is refused.
 
 The Review view (CHASSIS.md): the hub root's PLAN.md line `- Review view: <N> minutes of reading`
 keeps the page's Review / Full notes toggle (the chassis's `<!-- REVIEW TOGGLE -->` blocks), and
@@ -65,9 +80,14 @@ The cram block (K02): when practice/cram-order.md exists, it must pass cram_chec
 assembled page's ids, and its tiers, rows, Skip line and Out of time line are rendered into a
 div.ecram at the start of the map's .ebody on every build, the map opened (`open`); its links
 become `#id`. Inline Markdown in those lines is escaped, with **bold**, `code`, \\( math \\) and
-[text](URL#id) rendered; anything else is refused. The hand-written map may hold no cram block (an
+[text](URL#id) rendered; anything else is refused. A cram order written before S33, no row with a
+depth label, renders its rows without one and prints one WARN line naming 10-polish (cram_check.py's
+PRE_S33, FB-015); one with some rows labelled needs them all. A row's needs list (FB-193), split off by
+cram_check.py's own parser, shows after the row as `· needs §x.y` links; the Read already line stays
+out of the map. The hand-written map may hold no cram block (an
 .ecram, a `Tier N:` group, a Skip or Out of time line) and no open attribute. Stdlib only."""
 import argparse
+import base64
 import html
 import os
 import posixpath
@@ -110,6 +130,14 @@ URL_ATTRS = {"href", "src", "xlink:href", "action", "formaction", "srcset", "pos
              "background", "ping"}
 SAFE_URL = re.compile(r"(#|https?://|mailto:)", re.I)
 HOOK = re.compile(r"fs-[\w-]+")
+# A slide-image figure's <img src>: a file in the hub's _build/img/, which the page embeds as a data
+# URI (the one relative link a fragment holds), and the bytes each type must start with.
+IMG_SRC = re.compile(r"img/[\w-]+\.(png|jpe?g|webp)")
+IMG_TYPES = {"png": ("image/png", b"\x89PNG\r\n\x1a\n"), "jpg": ("image/jpeg", b"\xff\xd8\xff"),
+             "jpeg": ("image/jpeg", b"\xff\xd8\xff"), "webp": ("image/webp", b"RIFF")}
+IMG_MAX = 1_000_000  # bytes a slide image may take: a crop, not a deck
+# The concise box's labels (CONVERT.md), each at most once and in this order.
+BOX_LABELS = ("Rule", "Why", "Steps", "Example", "Trap", "Answer form")
 FIG_COMMENT = re.compile(r"\s*FIG\s+fig-[\w-]+\b[^<>]*")
 # MathJax's html extension, autoloaded, turns these into links, styles, classes and ids that the
 # tag walk never sees; MathJax leaves code and pre alone.
@@ -128,6 +156,18 @@ CRAM_ROW = re.compile(r"^\d+\. \[(§[\d.]+ [^\]]+)\]\([^)\s#]*#([^)\s]+)\) \(\d+
 # What one cram-order line may hold besides text: math, code, bold and notes links.
 INLINE = re.compile(r"\\\((.*?)\\\)|`([^`]+)`|\*\*(.+?)\*\*|\[([^\]]+)\]\(([^)\s]*)\)")
 UNRENDERED = re.compile(r"[*`\[\]\\]|(?<!\w)_|_(?!\w)|<[A-Za-z/!?]")
+# What a writer agent leaves behind in a fragment, by line: its tool-call markup, as a tag or as
+# text, and a skill rule id in parentheses (STYLE's S, the feedback log's FB, the lessons' L, the
+# backlog's K, CHASSIS's C). Markup, FB and C are refused; a bare (C1) is as often a capacitor, a
+# case or a condition as a rule, so C counts only right after CHASSIS or rule. A bare S, L or K id
+# only warns (RULE_ID_WARN): a course writes a state (S1), an inductor (L1) or a lecture (L3) so,
+# and a wrong refusal mid-exam costs more than a stray id left on the page.
+TOOL_PREFIX = "antml" + ":"
+TOOL_TAGS = {"invoke", "parameter", "content"}
+TOOL_TEXT = re.compile(r"</invoke>|<invoke\s|</content>|<parameter\s|</parameter>|</?" + TOOL_PREFIX + r"\w")
+RULE_ID = re.compile(r"\(FB-\d+\)|\b(?:CHASSIS|[Rr]ule)\s*\(C\d+\)")
+RULE_ID_WARN = re.compile(r"\((?:S|L|K)\d+\)")
+MATH = re.compile(r"\\\(.*?\\\)|\\\[.*?\\\]", re.S)
 TREE_VOID = {"br", "wbr", "img", "hr", "col", "input", "meta", "link", "source", "area", "base",
              "embed", "track", "param"}
 
@@ -165,8 +205,10 @@ def manifest_key(path):
             def cell(name):
                 i = cols.get(name)
                 return cells[i].replace("`", "").strip() if i is not None and i < len(cells) else ""
-            if code in rows:
-                raise ValueError(f"two rows for {code}")
+            twin = next((c for c in rows if c.casefold() == code.casefold()), None)
+            if twin is not None:
+                raise ValueError(f"two rows for {code}" + (f" (and {twin}: a citation's code matches "
+                                                           "a row in any case)" if twin != code else ""))
             base = posixpath.basename(cell("file"))
             rows[code] = (base, cell("notes").split(";", 1)[0].strip(), cell("by"))
     if cols is None:
@@ -205,6 +247,7 @@ def link_citations(name, text, key, cited, problems):
     """text with each a.slink given href="#src-<code>" and its key row's text as a title; the
     codes it cites are added to cited (a dict kept in order). key is MANIFEST.md's rows, or None
     when it is missing (one problem says so, not one per citation)."""
+    rows = {c.casefold(): c for c in key} if key is not None else {}
     p = Citations()
     try:
         p.feed(text)
@@ -224,6 +267,8 @@ def link_citations(name, text, key, cited, problems):
             problems.append(f"{name}: citation `{label}` has an href of its own (assemble.py links "
                             "each to the source key)")
             continue
+        # The row's spelling, so `Ed #12` links to the row ED: the key's ids use it too.
+        code = rows.get(code.casefold(), code)
         cited.setdefault(code, None)
         if key is not None and code not in key:
             problems.append(f"{name}: citation `{label}` names {code}, which has no row in MANIFEST.md")
@@ -261,7 +306,8 @@ def source_key(n, key, cited):
 
 
 # The chassis's seven section hues: (light accent, light highlight, dark accent, dark highlight
-# or None to keep the light one, whose wash already works on dark).
+# or None for the dark accent at DARK_HL_MIX). Every dark rule sets its own highlight (FB-111): one that
+# kept the light band let the bold-term highlight all but vanish on the dark background.
 HUES = [
     ("#0b6e8f", "rgba(11,110,143,.17)", "#4cbbda", None),
     ("#277a4d", "rgba(47,143,91,.19)", "#5fc088", "rgba(95,192,136,.20)"),
@@ -271,6 +317,7 @@ HUES = [
     ("#a93574", "rgba(178,58,122,.17)", "#e67aad", None),
     ("#3a49a8", "rgba(63,81,181,.18)", "#8f99ee", None),
 ]
+DARK_HL_MIX = "color-mix(in srgb,{} 26%,transparent)"
 
 
 def accents(n):
@@ -281,7 +328,7 @@ def accents(n):
     for k in range(1, n + 1):
         la, lh, da, dh = HUES[(k - 1) % len(HUES)]
         light.append(f"  {sel.format(k)}{{--sec-accent:{la};--sec-accent-hl:{lh}}}")
-        dark.append(f"{sel.format(k)}{{--sec-accent:{da}" + (f";--sec-accent-hl:{dh}" if dh else "") + "}")
+        dark.append(f"{sel.format(k)}{{--sec-accent:{da};--sec-accent-hl:{dh or DARK_HL_MIX.format(da)}}}")
     media = ["  @media (prefers-color-scheme:dark){"]
     media += [f'    :root:not([data-theme="light"]) {d}' for d in dark] + ["  }"]
     forced = [f'  :root[data-theme="dark"] {d}' for d in dark]
@@ -313,6 +360,7 @@ class Fragment(HTMLParser):
         super().__init__(convert_charrefs=True)
         self.tags, self.attrs, self.urls, self.classes, self.bare = set(), set(), [], set(), []
         self.markup, self.code, self.text, self.figs, self.table = [], [], [], 0, []
+        self.images = []  # each <img>'s src
 
     def handle_comment(self, data):
         if FIG_COMMENT.fullmatch(data):
@@ -372,6 +420,8 @@ class Fragment(HTMLParser):
             self.code.append(tag)
         if tag in FORBIDDEN_TAGS:
             self.tags.add(tag)
+        if tag == "img":
+            self.images.append(dict(attrs).get("src") or "")
         for name, value in attrs:
             value = value or ""
             # A name (an <img name=currentScript>) or a bare-word id shadows a property of the
@@ -380,10 +430,69 @@ class Fragment(HTMLParser):
                 self.attrs.add(name)
             elif name == "id" and "-" not in value:
                 self.bare.append(value)
-            elif name in URL_ATTRS and not SAFE_URL.match(value.strip()):
+            elif name in URL_ATTRS and not SAFE_URL.match(value.strip()) \
+                    and not (tag == "img" and name == "src" and IMG_SRC.fullmatch(value)):
                 self.urls.append(f'{name}="{value}"')
             elif name == "class":
                 self.classes.update(value.split())
+
+
+class Leftovers(HTMLParser):
+    """Tool-call tags anywhere, and the text outside code as (line, text) runs."""
+
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.tags, self.runs, self.code = [], [], 0
+
+    def tool(self, tag, raw):
+        if tag in TOOL_TAGS or tag.startswith(TOOL_PREFIX):
+            self.tags.append((self.getpos()[0], raw))
+
+    def handle_starttag(self, tag, attrs):
+        self.tool(tag, f"<{tag}>")
+        if tag in ("code", "pre"):
+            self.code += 1
+
+    def handle_endtag(self, tag):
+        self.tool(tag, f"</{tag}>")
+        if tag in ("code", "pre") and self.code:
+            self.code -= 1
+
+    def handle_data(self, data):
+        if not self.code:
+            self.runs.append((self.getpos()[0], data))
+
+
+def leftovers(name, text, problems, warnings=None):
+    """Append what a writer agent left in one fragment (TOOL_TAGS, TOOL_TEXT, RULE_ID) to problems,
+    and each bare S, L or K id (RULE_ID_WARN) to warnings when it is a list, by line; text in code
+    or in \\( \\) or \\[ \\] math is exempt, and a rule id is read within one run of text, so a
+    citation in parentheses, `(<a class="slink">L3</a>)`, is no rule id."""
+    p = Leftovers()
+    try:
+        p.feed(text)
+        p.close()
+    except (AssertionError, NotImplementedError):
+        return  # its own check has refused it
+    found = [(line, f"tool-call markup {raw}") for line, raw in p.tags]
+    # One string, its runs apart by a NUL no pattern crosses, so math split by a tag is still math.
+    joined, starts = "", []
+    for line, data in p.runs:
+        starts.append((len(joined), line, data))
+        joined += data + "\0"
+    joined = MATH.sub(lambda m: re.sub(r"[^\n\0]", " ", m.group(0)), joined)
+    maybe = []
+    for pattern, what, into in ((TOOL_TEXT, "tool-call markup", found), (RULE_ID, "a skill rule id", found),
+                                (RULE_ID_WARN, "a skill rule id", maybe)):
+        for m in pattern.finditer(joined):
+            at, line, data = max((s for s in starts if s[0] <= m.start()), key=lambda s: s[0])
+            into.append((line + data.count("\n", 0, m.start() - at), f"{what} {m.group(0).strip()}"))
+    for line, what in sorted(found):
+        problems.append(f"{name}:{line}: {what} left by a writer agent: take it out "
+                        "of the notes and rebuild")
+    if warnings is not None:
+        warnings += [f"{name}:{line}: {what}, if a writer agent left it (a state, an inductor or a "
+                     "lecture written so is fine): take it out of the notes" for line, what in maybe]
 
 
 def tex_macros(text):
@@ -394,9 +503,10 @@ def tex_macros(text):
     return TEX_HTML.findall("".join(f.text))
 
 
-def check_fragment(name, text, allowed, problems, hooks=False, markers=True):
+def check_fragment(name, text, allowed, problems, hooks=False, markers=True, images=False):
     """Append what CONVERT.md forbids in one fragment to problems; markers=False for one where a
-    FIG marker is never placed (the exam-day map, a step-through)."""
+    FIG marker is never placed (the exam-day map, a step-through); images=True for a section, the
+    one fragment whose slide-image figures get their <img> embedded."""
     f = Fragment()
     try:
         f.feed(text)
@@ -433,6 +543,8 @@ def check_fragment(name, text, allowed, problems, hooks=False, markers=True):
         problems.append(f"{name}: classes outside CHASSIS.md's component table: {', '.join(unknown)}")
     if "TODO-VERIFY" in text:
         problems.append(f"{name}: a TODO-VERIFY is left (05-verify isn't done)")
+    if f.images and not images:
+        problems.append(f"{name}: an <img>, which only a section's slide-image figure holds (CONVERT.md)")
 
 
 class Tree(HTMLParser):
@@ -532,9 +644,134 @@ def rv_problems(name, tree):
     return out
 
 
+def box_problems(name, tree):
+    """Where a concise box (div.concise) or a slide-image figure breaks CONVERT.md's form: a box
+    sits directly in its section and opens its subsection (after its h3, with at most the Depth line
+    before it), one a subsection, and holds one <ul> and nothing else, each item opening with
+    <strong>Label:</strong>, the label from BOX_LABELS, each once and in that order. An <img> is
+    the one image of a <figure id="fig-..."> holding no SVG, with alt text, and the figure's
+    figcaption holds a source citation (a.slink)."""
+    out = []
+    for e in elements(tree.root):
+        if "concise" in classes_of(e):
+            out += box_form(name, e)
+        if e["tag"] == "img":
+            out += image_form(name, e)
+    return out
+
+
+def box_form(name, e):
+    where = f"{name}: a concise box"
+    parent = e["parent"]
+    if e["tag"] != "div":
+        return [f"{where} on <{e['tag']}>: it is a <div class=\"concise\"> (CONVERT.md)"]
+    if not (parent["tag"] == "section" and "note" in classes_of(parent)):
+        return [f"{where} inside <{parent['tag']}>: it sits directly in its section, under its h3"]
+    sibs = [k for k in parent["kids"] if isinstance(k, dict)]
+    at = next(i for i, k in enumerate(sibs) if k is e)  # by identity: == on these dicts recurses
+    h3 = next((i for i in range(at - 1, -1, -1) if sibs[i]["tag"] == "h3"), None)
+    if h3 is None:
+        return [f"{where} before the section's first h3: a box opens a subsection"]
+    before, h3 = sibs[h3 + 1:at], sibs[h3]
+    head = h3["attrs"].get("id", "its h3")
+    if any("concise" in classes_of(k) for k in before):
+        return [f"{where} twice under {head}: one box a subsection"]
+    if any(not (k["tag"] == "p" and "connects" in classes_of(k) and text_of(k).strip().startswith("Depth:"))
+           for k in before):
+        return [f"{where} after other text under {head}: it opens its subsection, right after the h3 "
+                "(and its Depth line)"]
+    kids = [k for k in e["kids"] if isinstance(k, dict) or k.strip()]
+    if len(kids) != 1 or not isinstance(kids[0], dict) or kids[0]["tag"] != "ul":
+        return [f"{where} under {head} that isn't one <ul> of labelled items"]
+    labels = []
+    for li in kids[0]["kids"]:
+        if isinstance(li, str):
+            if li.strip():
+                return [f"{where} under {head} with text outside its items"]
+            continue
+        first = next((k for k in li["kids"] if isinstance(k, dict) or k.strip()), None)
+        lab = " ".join(text_of(first).split()) \
+            if li["tag"] == "li" and isinstance(first, dict) and first["tag"] == "strong" else ""
+        m = re.fullmatch(r"(.+):", lab)
+        if not m or m.group(1) not in BOX_LABELS:
+            return [f"{where} under {head} with an item that doesn't open with <strong>Label:</strong>, the "
+                    f"label one of {', '.join(BOX_LABELS)}: {(lab or text_of(li).strip())[:40]!r}"]
+        labels.append(m.group(1))
+    if not labels:
+        return [f"{where} under {head} with no items"]
+    if len(set(labels)) != len(labels) or labels != sorted(labels, key=BOX_LABELS.index):
+        return [f"{where} under {head} labelled {', '.join(labels)}: each label at most once, in the order "
+                f"{', '.join(BOX_LABELS)}"]
+    return []
+
+
+def image_form(name, e):
+    fig = e["parent"]
+    if fig["tag"] != "figure" or not fig["attrs"].get("id", "").startswith("fig-"):
+        return [f"{name}: an <img> outside a <figure id=\"fig-...\">, directly: an image is a slide-image "
+                "figure (CONVERT.md)"]
+    fid, out = fig["attrs"]["id"], []
+    if not IMG_SRC.fullmatch(e["attrs"].get("src", "")):
+        out.append(f"{name}: #{fid}'s <img> src isn't img/<name>.png, .jpg or .webp (a file in _build/img/, "
+                   f"which the page embeds): {e['attrs'].get('src', '')[:40]!r}")
+    inside = list(elements(fig))
+    if sum(k["tag"] == "img" for k in inside) != 1 or any(k["tag"] == "svg" for k in inside):
+        out.append(f"{name}: #{fid} holds more than its one <img>: a slide-image figure is one image")
+    if not " ".join(e["attrs"].get("alt", "").split()):
+        out.append(f"{name}: #{fid}'s <img> has no alt text (say what the slide shows)")
+    caps = [k for k in fig["kids"] if isinstance(k, dict) and k["tag"] == "figcaption"]
+    if not caps or not any(k["tag"] == "a" and "slink" in classes_of(k) for k in elements(caps[0])):
+        out.append(f"{name}: #{fid}, a slide-image figure, has no source citation in its caption "
+                   "(<a class=\"slink\">D5 p.23</a>, CONVERT.md)")
+    return out
+
+
+# An <img>'s src attribute in any spelling a browser takes: any case, blanks around the =, the
+# value quoted either way or bare.
+IMG_SRC_ATTR = re.compile(r"""(<img\b(?:[^>]*?\s)?src\s*=\s*)(?:"([^"]*)"|'([^']*)'|([^\s"'=<>`]+))""", re.I)
+
+
+def embed_images(name, text, imgdir, problems):
+    """text with each <img src="img/<file>"> holding its file from imgdir as a data URI. An img/
+    src the fragment parser still sees afterwards (written in a form the substitution missed, a
+    character reference say) is refused: on the artifact host a relative src is a broken image."""
+    failed = set()
+
+    def one(m):
+        rel = next(g for g in m.group(2, 3, 4) if g is not None)
+        if not IMG_SRC.fullmatch(rel):
+            return m.group(0)  # image_form refused it
+        failed.add(rel)
+        mime, magic = IMG_TYPES[rel.rsplit(".", 1)[1].lower()]
+        try:
+            with open(os.path.join(imgdir, rel[len("img/"):]), "rb") as f:
+                data = f.read(IMG_MAX + 1)
+        except OSError:
+            problems.append(f"{name}: {rel} isn't in _build/img/")
+            return m.group(0)
+        if len(data) > IMG_MAX:
+            problems.append(f"{name}: {rel} is over {IMG_MAX:,} bytes: crop it tighter or save it as JPEG")
+        elif not data.startswith(magic) or (mime == "image/webp" and data[8:12] != b"WEBP"):
+            problems.append(f"{name}: {rel} isn't the {mime} its name says")
+        else:
+            failed.discard(rel)
+            return f'{m.group(1)}"data:{mime};base64,{base64.b64encode(data).decode("ascii")}"'
+        return m.group(0)
+    text = IMG_SRC_ATTR.sub(one, text)
+    left = Fragment()
+    left.feed(text)
+    left.close()
+    for src in left.images:
+        if src.startswith("img/") and src not in failed:
+            problems.append(f'{name}: an <img> src {src[:40]!r} wasn\'t embedded: write it src="img/<name>.png"')
+            failed.add(src)
+    return text
+
+
 def review_parts(section):
     """The elements of one section.note the Review view shows (CHASSIS.md; the chassis's script
-    applies the same rule): its h2, each rv block, each h3 whose subsection holds one, and each
+    applies the same rule): its h2, each rv block and concise box, each h3 whose subsection holds
+    one, and each
     Must-know h3 (id ending -must-know) with the first list after it; none of a section a banner
     takes out (out_of_review)."""
     if out_of_review(section):
@@ -549,7 +786,7 @@ def review_parts(section):
             h3, must = k, k["attrs"].get("id", "").endswith("-must-know")
             if must:
                 shown.append(k)
-        elif "rv" in classes_of(k):
+        elif {"rv", "concise"} & classes_of(k):
             if h3 is not None and h3 not in shown:
                 shown.append(h3)
             shown.append(k)
@@ -635,20 +872,32 @@ def cram_block(lines, problems):
     parts = cram_check.blocks(lines)
     following = dict(lines)
     groups = []
+    # Written before S33: no row has a label, and the map shows none (cram_check.check warned).
+    labels = any(DEPTH.fullmatch(cram_check.split_needs(m.group(3))[0]) for m in
+                 (CRAM_ROW.match(t) for _, _, rows in parts["tiers"] for _, t in rows) if m)
     for k, (name, minutes, rows) in enumerate(parts["tiers"], 1):
         items = []
         for n, t in rows:
             where = f"{CRAM}:{n}"
             m = CRAM_ROW.match(t)
-            d = DEPTH.fullmatch(m.group(3).strip()) if m else None
-            if not d:
+            # The row's needs list (FB-193), split off by cram_check's own parser, which has passed it.
+            text, needs, _ = cram_check.split_needs(m.group(3)) if m else (None, None, True)
+            d = DEPTH.fullmatch(text) if m else None
+            if m and not labels:
+                label, thing = None, text
+            elif d:
+                label, thing = d.group(1), d.group(2)
+            else:
                 problems.append(f"{where}: no depth label (Know cold, Use, Recognize or Not on <exam>, "
                                 "then a colon) before the one thing (S33)")
                 continue
-            thing = d.group(2)[:-1] if d.group(2).endswith(".") else d.group(2)
+            thing = thing[:-1] if thing.endswith(".") else thing
             items.append(f'        <li><b>{inline(thing, where, problems)}</b> → <a class="xref" '
                          f'href="#{html.escape(m.group(2), quote=True)}">{inline(m.group(1), where, problems)}'
-                         f"</a> ({html.escape(d.group(1), quote=False)})</li>")
+                         "</a>" + (f" ({html.escape(label, quote=False)})" if label else "")
+                         + (" · needs " + ", ".join(f'<a class="xref" href="#{html.escape(k[1:], quote=True)}">'
+                                                    f"{html.escape(num, quote=False)}</a>" for num, k in needs)
+                            if needs else "") + "</li>")
         groups.append(f'      <div class="eq"><div class="eqh">Tier {k}: '
                       f'{inline(name, f"{CRAM} tier {k}", problems)} ({minutes} min)</div><ul>\n'
                       + "\n".join(items) + "</ul></div>")
@@ -682,8 +931,9 @@ def hand_cram(nav_tree):
             if "hand-written" in p else f"frag/examnav.html: {p}" for p in dict.fromkeys(out)]
 
 
-def build(root):
-    """(page, problems)."""
+def build(root, warnings=None):
+    """(page, problems); what builds but wants a later pass (a cram order written before S33) is
+    appended to warnings, a list, when one is given."""
     b = os.path.join(root, "_build")
     frag = os.path.join(b, "frag")
     problems = []
@@ -732,20 +982,27 @@ def build(root):
             problems.append(f"frag/sec{n}.html missing (notes file {n:02d})")
             continue
         with open(path, encoding="utf-8") as f:
-            text = f.read().strip()
+            raw = f.read()
+        text = raw.strip()
+        leftovers(f"frag/sec{n}.html", raw, problems, warnings)
         opens = re.findall(r"<section\b[^>]*>", text)
         if len(opens) != 1 or not re.fullmatch(
                 r"""<section\s+class=["']note["']\s+id=["']sec-%d["']\s*>""" % n, opens[0]) \
                 or not text.startswith(opens[0]) or not text.endswith("</section>"):
             problems.append(f'frag/sec{n}.html: not one <section class="note" id="sec-{n}">')
-        check_fragment(f"frag/sec{n}.html", text, classes, problems)
-        rv += rv_problems(f"frag/sec{n}.html", Tree(text))
+        check_fragment(f"frag/sec{n}.html", text, classes, problems, images=True)
+        tree = Tree(text)
+        rv += rv_problems(f"frag/sec{n}.html", tree)
+        problems += box_problems(f"frag/sec{n}.html", tree)
+        text = embed_images(f"frag/sec{n}.html", text, os.path.join(b, "img"), problems)
         sections.append(link_citations(f"frag/sec{n}.html (§{n})", text, key, cited, problems))
 
     examnav = os.path.join(frag, "examnav.html")
     if os.path.isfile(examnav):
         with open(examnav, encoding="utf-8") as f:
-            nav = f.read().strip()
+            raw = f.read()
+        nav = raw.strip()
+        leftovers("frag/examnav.html", raw, problems, warnings)
         check_fragment("frag/examnav.html", nav, classes, problems, markers=False)
         nav_tree = Tree(nav)
         problems += hand_cram(nav_tree)
@@ -777,7 +1034,9 @@ def build(root):
                 problems.append(f"frag/{name}: its FIG marker appears {n} times, not once "
                                 "(a step-through drawn statically, or its marker dropped or repeated)")
             with open(os.path.join(frag, name), encoding="utf-8") as f:
-                text = f.read().strip()
+                raw = f.read()
+            text = raw.strip()
+            leftovers(f"frag/{name}", raw, problems, warnings)
             # Placed mid-text, anything around a figure would join the text beside its marker.
             if len(re.findall(r"<figure\b", text, re.I)) != 1 or len(re.findall(r"</figure\b", text, re.I)) != 1 \
                     or not re.fullmatch(
@@ -823,7 +1082,10 @@ def build(root):
                 ids.feed(nav + body)
             except (AssertionError, NotImplementedError):
                 pass  # a fragment's own check has refused it
-            bad, _ = cram_check.check(lines, ids.ids)
+            warned = []
+            bad, _ = cram_check.check(lines, ids.ids, warnings=warned)
+            if warnings is not None:
+                warnings += [f"{CRAM}: {w}" for w in warned]
             problems += [f"{CRAM}:{b}" if b[0].isdigit() else f"{CRAM}: {b}" for b in bad]
             if not bad:
                 block = cram_block(lines, problems)
@@ -882,7 +1144,10 @@ def main(argv=None):
         print("assemble: no _build/chassis.html here (copy the skill's templates/notes-chassis.html)",
               file=sys.stderr)
         return 2
-    page, problems = build(args.root)
+    warnings = []
+    page, problems = build(args.root, warnings)
+    for w in warnings:
+        print(f"WARN: {w}")
     if problems:
         for m in problems:
             print(f"  {m}")

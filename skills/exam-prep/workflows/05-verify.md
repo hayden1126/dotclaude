@@ -1,6 +1,6 @@
 # 05 Verify
 
-Baseline as of 2026-11-10; changes only via `12-retro`.
+Baseline as of 2026-11-12; changes only via `12-retro`.
 
 Nothing reaches the student unverified. Verification has three parts: a checker that computes
 every value the notes print, reviewers who read every section against its sources, and fixes
@@ -65,7 +65,9 @@ Spawn one `reviewer` per section file, all at once (FB-102), each from
 4. **STYLE:** the rest of `_build/STYLE.md`, each subsection's depth label (S33) among it.
 
 Each brief names the answer sets the student hasn't attempted: the notes quote none of them, and
-a quote is a blocker. Findings come back ranked blocker, major, minor, in at most 700 words.
+a quote is a blocker. Its `{{ANSWER FILES}}` slot names each file MANIFEST.md marks `Answers:
+yes` whose blocks the coverage matrix maps into the section: wording that tracks an official
+solution is a finding (FB-071), reworded from the slide or derived plainly in step 5. Findings come back ranked blocker, major, minor, in at most 700 words.
 Reviewers never open `practice/` (FB-105). Give each reviewer the diagram slides of its section
 that no checker trace covers (`02-extract` listed them in STATUS), to compare with the extract and
 the page image (FB-104).
@@ -93,7 +95,8 @@ Its findings are majors, settled and applied in step 5 like the section reviewer
 Fresh reviewers, not the section reviewers, spawned together with step 3's (they read different
 things), check every condensation against the sources: here
 the Must-know checklists, one reviewer per two or three sections, from the brief's "Audit"
-variant (FB-105). The cheat sheet (`07-cheatsheet`) and the cram order (`08-practice`) get the
+variant (FB-105), its `{{Q-ONLY FILES}}` slot filled with the copies under `_build/q-only/`
+(`02-extract` step 3.4, FB-056) of the extracts its sections cite that hold solutions. The cheat sheet (`07-cheatsheet`) and the cram order (`08-practice`) get the
 same audit when they exist.
 
 ## Step 5: Apply the fixes

@@ -10,6 +10,7 @@ import contextlib
 import importlib.util
 import io
 import os
+import shutil
 import tempfile
 import unittest
 
@@ -190,6 +191,41 @@ class Html(unittest.TestCase):
         code, out = self.check('<p><a class="slink" href="#src-D9">D9 p.1</a></p>')
         self.assertEqual(code, 1, out)
         self.assertIn("UNRESOLVED #src-D9 (defined 0x)", out)
+
+    def test_a_citation_in_another_case_than_its_row_resolves(self):
+        # Notes cite the forum as `Ed #12`, MANIFEST's row is ED: the sample hub, so changed,
+        # assembles, and its citation's href and the key's row id meet.
+        spec = importlib.util.spec_from_file_location(
+            "assemble", os.path.join(REPO, "skills", "exam-prep", "scripts", "assemble.py"))
+        assemble = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(assemble)
+        tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, tmp)
+        root = os.path.join(tmp, "site")
+        shutil.copytree(os.path.join(REPO, "tests", "exam_prep", "fixtures", "site"), root)
+        sec1 = os.path.join(root, "_build", "frag", "sec1.html")
+        with open(sec1, encoding="utf-8") as f:
+            text = f.read()
+        self.assertIn('<a class="slink">D1 p.4</a>', text)
+        with open(sec1, "w", encoding="utf-8") as f:
+            f.write(text.replace('<a class="slink">D1 p.4</a>', '<a class="slink">Ed #12</a>', 1))
+        with open(os.path.join(root, "MANIFEST.md"), "a", encoding="utf-8") as f:
+            f.write("| ED | `sources/forum/posts.md` | staff | n/a | in | no | n/a | Forum posts |\n")
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            self.assertEqual(assemble.main(["--root", root]), 0, out.getvalue())
+        page = os.path.join(root, "_build", "notes.html")
+        with open(page, encoding="utf-8") as f:
+            self.assertIn('href="#src-ED"', f.read())
+        code, out = self.check_file(page)
+        self.assertEqual(code, 0, out)
+        self.assertIn("0 unresolved; 0 duplicate ids; 0 citations with no in-page link", out)
+
+    def check_file(self, path):
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            code = linkcheck.main(["--html", path])
+        return code, out.getvalue()
 
     def test_a_missing_page_is_a_usage_error(self):
         err = io.StringIO()

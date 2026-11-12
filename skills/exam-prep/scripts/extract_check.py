@@ -37,7 +37,14 @@ It prints one line per doc: what is in scope, what has a block, `(image only` en
 slide with no block, an in-scope page not rendered, a doc with no blocks, an open `UNREADABLE:`
 flag, a Scope it can't read, any block for a `reserved` doc (FB-023) or for a `pending` one (its
 file has arrived: give it a real Scope); 0 otherwise. Blocks for a doc id MANIFEST lacks, or for
-an `out` row, are warnings. Stdlib only, plus reveal_slice.py from this directory."""
+an `out` row, are warnings.
+
+The question-only copies (qonly.py, hard rule 4, FB-056): it also fails, naming the file and line, on a
+`_build/q-only/` file that still holds a solution or an answers file's block (anything qonly.py
+would take out), and on an extract that holds answers with no copy, or with a copy whose first
+line names another SHA-256 than the extract's (stale: the extract changed after qonly.py ran).
+A copy whose extract is gone or holds no answer now is a warning. Stdlib only, plus
+reveal_slice.py and qonly.py from this directory."""
 import argparse
 import contextlib
 import importlib.util
@@ -312,6 +319,44 @@ def check(root, doc, row, b):
     return f"{doc}: {b['blocks']} blocks, {flags}", open_flags
 
 
+def qonly_check(root, rows):
+    """(lines, failed) for the question-only copies against the extracts."""
+    here = os.path.dirname(os.path.abspath(__file__))
+    spec = importlib.util.spec_from_file_location("qonly", os.path.join(here, "qonly.py"))
+    qonly = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(qonly)
+    out, bad, due = [], False, {}
+    for name in qonly.extracts(root):
+        src = os.path.join(root, "_build", "extract", name)
+        with open(src, encoding="utf-8") as f:
+            if qonly.due(f.read(), rows)[0]:
+                due[name] = qonly.first_line(name, src)
+    for name in qonly.copies(root):
+        rel = f"_build/q-only/{name}"
+        with open(os.path.join(root, rel), encoding="utf-8") as f:
+            text = f.read()
+        head, _, body = text.partition("\n")
+        offset = 1
+        if not qonly.FIRST_LINE.match(head):
+            body, offset = text, 0
+        for line, why in qonly.strip(body, rows)[1]:
+            out.append(f"{rel}:{line + offset}: ANSWER IN A QUESTION-ONLY COPY: {why}; rerun "
+                       "qonly.py")
+            bad = True
+        if name not in due:
+            out.append(f"warning: {rel} has no extract holding answers now; qonly.py removes a "
+                       "copy it wrote, any other file is yours to delete")
+        elif not head.startswith(due[name]):
+            out.append(f"{rel}:1: STALE: _build/extract/{name} changed after its copy was "
+                       "written; rerun qonly.py")
+            bad = True
+    for name in sorted(set(due) - set(qonly.copies(root))):
+        out.append(f"_build/extract/{name}: holds answers, NO QUESTION-ONLY COPY "
+                   f"_build/q-only/{name}; run qonly.py")
+        bad = True
+    return out, bad
+
+
 def unverified(root):
     """Doc ids STATUS.md's `Unverified:` lines name; none when it can't be read (fail closed)."""
     try:
@@ -375,7 +420,10 @@ def main(argv=None):
             print(f"warning: blocks for {doc}, a doc id MANIFEST.md lacks (a typo in a header?)")
         elif kind not in ("in", "concepts"):
             print(f"warning: blocks for {doc}, whose MANIFEST.md scope is {rows[doc]['scope']!r}")
-    return 1 if bad else 0
+    lines, failed = qonly_check(args.root, rows)
+    for line in lines:
+        print(line)
+    return 1 if bad or failed else 0
 
 
 if __name__ == "__main__":

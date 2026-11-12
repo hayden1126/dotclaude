@@ -1,4 +1,4 @@
-<!-- exam-prep template backbone.md.tmpl. Baseline as of 2026-11-10; changes only via `12-retro`. Drop this line in the hub copy. -->
+<!-- exam-prep template backbone.md.tmpl. Baseline as of 2026-11-12; changes only via `12-retro`. Drop this line in the hub copy. -->
 # Backbone: {{COURSE}} {{EXAM}}: concept order, id registry, coverage
 
 The single source of truth for the writers. Every section number, title and id below is fixed
@@ -30,8 +30,10 @@ Each is stated once, in the subsection named here, and every other use links to 
 | 1.{{N}} | Must know | `sec-1-must-know` | summary of §1 | | review checklist |
 
 - Lettered sets: `set-{{NAME}}-a` .. `-{{LAST}}`: a) {{...}}, b) {{...}} [{{CITE}}].
-- Figures: `fig-1-{{SLUG}}` Fig 1.{{K}} ({{static | step-through}}: {{what it shows, its data}})
-  [{{CITE}}].
+- Figures: `fig-1-{{SLUG}}` Fig 1.{{K}} ({{static | step-through | slide image}}: {{what it shows,
+  its data}}) [{{CITE}}].
+- Diagram-taught: {{yes | no}} ({{yes: the slides that teach it through diagrams, cited | no}}).
+  A `yes` section leads with a figure, so its Figures line names one (`coverage_check.py`).
 - Worked examples: `ex-1-{{SLUG}}` Worked example 1.{{K}}: "{{TITLE}}" (data: {{CHECKER:
   `examples.out.md`, SECTION OF IT | NO CHECKER: the sources it builds on}}; the course's Checker
   line decides, for every example alike).
@@ -40,14 +42,26 @@ Each is stated once, in the subsection named here, and every other use links to 
 
 - §{{N.M}} → §{{N.M}} ("{{the relation, in one phrase}}").
 
+## Mechanism sweep
+
+One row per candidate a section holds: each mechanism whose parts pass data, construction whose
+count or shape matters, comparison of two structures and trace of a drilled procedure, the slides'
+own diagrams among them. A kept row goes on to the shortlist; a cut one says why (redundant,
+decorative, out of scope).
+
+| Section | Candidate | Slide diagram | Kept or cut | Why |
+|---|---|---|---|---|
+| {{N.M}} | {{what it shows}} | {{CITE or "none"}} | {{kept as `fig-N-SLUG` or cut}} | {{reason}} |
+
 ## Figure shortlist
 
 Found from both directions: mechanisms the notes can't carry in prose, and the slides' own
-diagrams. Each row says why prose isn't enough.
+diagrams. Each row says why prose isn't enough. The student sees this list before any figure is
+built.
 
 | id | Section | Kind | Why a figure | Source |
 |---|---|---|---|---|
-| `fig-{{N}}-{{SLUG}}` | {{N.M}} | {{static or step-through}} | {{reason}} | {{CITE or "new"}} |
+| `fig-{{N}}-{{SLUG}}` | {{N.M}} | {{static, step-through or slide image}} | {{reason}} | {{CITE or "new"}} |
 
 ## How it's tested
 

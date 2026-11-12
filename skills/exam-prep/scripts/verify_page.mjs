@@ -44,10 +44,10 @@
 // A notes page with the Review / Full notes toggle (.viewtog, CHASSIS.md) runs all of the above a
 // second time in the Review view (pressed through its own button; step-throughs and static
 // figures, which it hides, aside), its shots named <width>-<scheme>-review-..., and checks there
-// that the view shows exactly what CHASSIS.md says (every rv block, worked examples open, each h3
-// over one, each Must-know h3 and its list, the map, the source key, the fixed line) and hides the
-// rest, a section with a Not on <exam> or Unverified banner before its first h3 whole, and that
-// clicking a link to something it hides switches to Full notes and lands on it, as do a hash change
+// that the view shows exactly what CHASSIS.md says (every rv block and concise box (FB-094), worked examples
+// open, each h3 over one, each Must-know h3 and its list, the map, the source key, the fixed line)
+// and hides the rest, a section with a Not on <exam> or Unverified banner before its first h3 whole, and that
+// clicking a link to something it hides (a figure aside: C5 pins it) switches to Full notes and lands on it, as do a hash change
 // to it and a load of the page at its hash with the Review view remembered (near the top, both).
 // Then the long jump (CHASSIS.md, C1), at 390 and 1280 px with smooth scrolling on, in Chromium and
 // in WebKit (Safari's engine, where a page scroll the rail starts cancels the jump): from the top it
@@ -62,8 +62,34 @@
 // a closed worked example is shot with it opened), the first worked example opened (-wex),
 // the exam-day map opened (-map), the source key with its first row targeted (-key; the row must
 // be the :target and on screen, and at the page's bottom, where the shot is taken, the rail's link
-// to the last section must be active), and with --views one per view (-view-<name>). Exit 0 when every check passes, 1 on any failure, 2 on bad
-// usage.
+// to the last section must be active), and with --views one per view (-view-<name>).
+// In each viewport and view, the pinned figure panel (CHASSIS.md, C5, FB-125), where a shown a.xref links to a
+// figure: a plain click opens a role="dialog" holding a copy of that figure, its drawing scaled to fit
+// the panel's width (no part past its sides, no sideways scroll box), without moving the page
+// or changing the view, focus inside it, its aria-label naming the figure, no id on the page
+// repeated, a step-through's copy with no controls or live region, its background the theme's
+// surface (an original figure's), on screen after a scroll (at 900 px and below a bottom sheet
+// across the width at most 46% of the height, above it under half the width); another figure link
+// swaps it, Escape closes it with focus back on the link, its close button closes it (at 900 px and
+// below, with the drawer opened over the pinned sheet, one Escape closes the drawer alone, and the
+// foot's --tail is the same before the pin and after two resizes and the unpin), and a
+// Ctrl+click goes to the browser (not prevented, no panel); at 1280 px a mouse resting on the link
+// shows an aria-hidden preview after 300 ms (none at 150 ms), holding no repeated id, gone once the
+// mouse leaves; at 390 px a hover shows none, and at both a touch pointer never does. Shot:
+// <width>-<scheme>[-review]-pin.png, the panel open.
+// Last in each viewport, on a notes page (one with a rail) or a mock page, the theme chrome (CHASSIS.md, C2 to
+// C4, FB-124): the page's scrollbar track an opaque color in both themes (a transparent one shows white
+// inside a light-scheme parent frame); every theme button (aria-keyshortcuts="t") an icon with no
+// words, none in the rail, one fixed on screen at 1280 px; at 900 px and below, the closed drawer
+// casting no shadow (computed box-shadow none: off-screen, it would paint a strip down the page's
+// left edge); the full-screen buttons
+// (aria-keyshortcuts="f") hidden exactly when document.fullscreenEnabled is false, where shown
+// pressed and labelled "Exit full screen" in full screen and unpressed "Full screen" out of it (a
+// fullscreenchange with a stand-in fullscreenElement), and at 1280 px,
+// where it is true, one fixed on screen; T flips data-theme and the colors, Ctrl+T doesn't, and
+// neither does T typed in an input. Headless can't stand in for the host's frame, so a look inside
+// a light-scheme parent iframe stays the student's (C2).
+// Exit 0 when every check passes, 1 on any failure, 2 on bad usage.
 import fs from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -233,7 +259,7 @@ for (const width of [390, 1280]) {
             const tag = k.tagName.toLowerCase();
             if (tag === 'h2') want.set(k, true);
             else if (tag === 'h3') { h3 = k; must = /-must-know$/.test(k.id); want.set(k, must); }
-            else if (k.classList.contains('rv')) { want.set(k, true); if (h3) want.set(h3, true); }
+            else if (k.classList.contains('rv') || k.classList.contains('concise')) { want.set(k, true); if (h3) want.set(h3, true); }
             else if (must && (tag === 'ul' || tag === 'ol')) { want.set(k, true); must = false; } else want.set(k, false);
           }
           for (const [k, w] of want) if (w !== vis(k)) bad.push(`${w ? 'hides' : 'shows'} ${name(k)}`);
@@ -249,6 +275,7 @@ for (const width of [390, 1280]) {
       for (const b of rv) fail(`${tag}: the Review view ${b}`);
       if (!rv.length) console.log('  review view shows its blocks and hides the rest');
     }
+    await figPanel(page, tag, width);
     const r = await page.evaluate(() => {
       const main = document.getElementById('main') || document.body;
       const mj = [...document.querySelectorAll('mjx-container')];
@@ -514,7 +541,7 @@ for (const width of [390, 1280]) {
         const vis = (e) => e.getClientRects().length > 0;
         const a = [...document.querySelectorAll('#main a[href^="#"]')].find((x) => {
           const t = document.getElementById(decodeURIComponent(x.getAttribute('href').slice(1)));
-          return vis(x) && t && !vis(t);
+          return vis(x) && t && !vis(t) && t.tagName.toLowerCase() !== 'figure';  // a figure pins (C5)
         });
         if (!a) return null;
         a.setAttribute('data-vp-hid', '1');
@@ -610,8 +637,301 @@ for (const width of [390, 1280]) {
         console.log(`  view ${v}: ${s.parts.length} parts`);
       }
     }
+    if (!review) await themeChrome(page, tag, width);
     await ctx.close();
   }
+}
+
+// The pinned figure panel (CHASSIS.md, C5), on whatever page has a shown a.xref to a figure.
+function inReview(s) { return s.view === 'review'; }
+async function figPanel(page, tag, width) {
+  const links = await page.evaluate(() => {
+    const vis = (e) => e.getClientRects().length > 0;
+    const out = [];
+    document.querySelectorAll('[data-vp-fig]').forEach((a) => a.removeAttribute('data-vp-fig'));
+    for (const a of document.querySelectorAll('#main a.xref[href^="#"]')) {
+      let t = null;
+      try { t = document.getElementById(decodeURIComponent(a.getAttribute('href').slice(1))); } catch (e) { /* bad escape */ }
+      if (!t || t.tagName.toLowerCase() !== 'figure' || !vis(a)) continue;
+      a.setAttribute('data-vp-fig', String(out.length));
+      out.push({ id: t.id, step: !!t.querySelector('.fig-controls') });
+    }
+    return out;
+  });
+  if (!links.length) { console.log('  no figure link to pin'); return; }
+  const was = failures;
+  const sel = (i) => `[data-vp-fig="${i}"]`;
+  const state = (i) => page.evaluate(([s, id]) => {
+    const vis = (e) => e.getClientRects().length > 0;
+    const dlg = [...document.querySelectorAll('[role="dialog"]')].find(vis);
+    const peeks = [...document.querySelectorAll('[aria-hidden="true"]')].filter((e) => vis(e) && e.querySelector('figure'));
+    const all = [...document.querySelectorAll('[id]')].map((e) => e.id);
+    const dup = [...new Set(all.filter((x, k) => all.indexOf(x) !== k))];
+    const orig = document.getElementById(id);
+    const cap = orig.querySelector('figcaption');
+    const fm = cap && cap.textContent.replace(/\s+/g, ' ').trim().match(/^Fig\.?\s*[\w.]*\d[\w.]*/);
+    const im = orig.querySelector('svg[aria-label],img[alt]');
+    const name = fm ? fm[0].replace(/\.$/, '') : (im && (im.getAttribute('aria-label') || im.getAttribute('alt'))) || id;
+    const surface = getComputedStyle(document.querySelector('#main figure') || document.body).backgroundColor;
+    const base = { y: Math.round(window.scrollY), vw: innerWidth, vh: innerHeight, dup, peeks: peeks.length,
+      view: document.documentElement.getAttribute('data-notesview'), name, surface,
+      onLink: document.activeElement === document.querySelector(s) };
+    if (!dlg) return { ...base, open: false };
+    const fig = dlg.querySelector('figure');
+    const r = dlg.getBoundingClientRect();
+    return { ...base, open: true, label: dlg.getAttribute('aria-label') || '',
+      focusIn: dlg.contains(document.activeElement), fig: fig ? fig.id : null,
+      live: fig ? fig.querySelectorAll('.fig-controls, button, input, [aria-live]').length : 0,
+      bg: getComputedStyle(dlg).backgroundColor,
+      // the copy's drawings against the panel's content box, sideways (the panel scrolls down)
+      wide: (() => {
+        const left = r.left + dlg.clientLeft;
+        const right = left + dlg.clientWidth;
+        const out = [...dlg.querySelectorAll('figure svg, figure img')].filter((e) => !e.parentElement.closest('svg'))
+          .map((e) => e.getBoundingClientRect()).filter((b) => b.left < left - 1 || b.right > right + 1)
+          .map((b) => `${Math.round(b.left)}..${Math.round(b.right)} in ${Math.round(left)}..${Math.round(right)}`);
+        for (const b of dlg.querySelectorAll('.figbox')) if (b.scrollWidth > b.clientWidth + 1) out.push(`a box scrolling ${b.scrollWidth} in ${b.clientWidth}`);
+        return out;
+      })(),
+      rect: { top: r.top, bottom: r.bottom, left: r.left, right: r.right, width: r.width, height: r.height } };
+  }, [sel(i), links[i].id]);
+  const click = async (i) => {
+    await page.evaluate((s) => document.querySelector(s).scrollIntoView({ block: 'center', behavior: 'instant' }), sel(i));
+    await page.waitForTimeout(100);
+    const before = await state(i);
+    try { await page.click(sel(i), { timeout: 5000 }); } catch (e) { fail(`${tag}: couldn't click the link to figure #${links[i].id}: ${String(e.message).split('\n')[0]}`); return null; }
+    await page.waitForTimeout(250);
+    return { before, after: await state(i) };
+  };
+  const pinned = (i, c, what) => {
+    const s = c.after;
+    const id = links[i].id;
+    if (!s.open) { fail(`${tag}: ${what} to figure #${id} opened no panel (role="dialog") (C5)`); return false; }
+    if (Math.abs(s.y - c.before.y) > 2) fail(`${tag}: ${what} to figure #${id} moved the page ${c.before.y} to ${s.y} px: it pins, never jumps (C5)`);
+    if (s.view !== c.before.view) fail(`${tag}: ${what} to figure #${id} switched the view (C5)`);
+    if (!s.fig || !s.fig.startsWith(id) || s.fig === id) fail(`${tag}: the panel holds ${s.fig ? '#' + s.fig : 'no figure'}, not a copy of #${id} with its id suffixed (C5)`);
+    if (!s.focusIn) fail(`${tag}: focus stayed outside the panel when it opened (C5)`);
+    if (!s.label.includes(s.name)) fail(`${tag}: the panel's aria-label "${s.label}" doesn't name ${s.name} (C5)`);
+    if (s.dup.length) fail(`${tag}: with #${id} pinned, ids repeat: ${s.dup.slice(0, 3).join(', ')} (C5)`);
+    if (links[i].step && s.live) fail(`${tag}: the pinned step-through #${id} keeps ${s.live} controls or live regions: it pins its frame, static (C5)`);
+    if (s.wide.length) fail(`${tag}: the pinned copy of #${id} runs past the panel: ${s.wide.join(', ')} (C5: it scales to the panel)`);
+    if (s.bg !== s.surface) fail(`${tag}: the panel's background ${s.bg} isn't the theme's surface ${s.surface} (C5)`);
+    const r = s.rect;
+    if (width <= 900) {
+      if (Math.abs(r.bottom - s.vh) > 1 || r.left > 1 || r.right < s.vw - 1 || r.height > 0.46 * s.vh) {
+        fail(`${tag}: the panel isn't a bottom sheet at most 46% high: ${JSON.stringify(r)} in ${s.vw}x${s.vh} (C5)`);
+      }
+    } else if (r.top < 0 || r.bottom > s.vh || r.right > s.vw || r.width >= s.vw / 2) {
+      fail(`${tag}: the panel isn't on screen under half the width: ${JSON.stringify(r)} in ${s.vw}x${s.vh} (C5)`);
+    }
+    return true;
+  };
+  const first = await click(0);
+  if (!first || !pinned(0, first, 'a click on the link')) return;
+  await page.screenshot({ path: path.join(outDir, `${tag}-pin.png`) });
+  await page.evaluate(() => window.scrollBy({ top: 600, behavior: 'instant' }));
+  await page.waitForTimeout(150);
+  const scrolled = await state(0);
+  if (!scrolled.open || scrolled.rect.top < 0 || scrolled.rect.bottom > scrolled.vh + 1) {
+    fail(`${tag}: after a scroll the pinned figure left the screen (C5)`);
+  }
+  let last = 0;
+  for (const j of [links.findIndex((l) => l.id !== links[0].id), links.findIndex((l, k) => l.step && k > 0)]) {
+    if (j <= 0 || j === last) continue;
+    const c = await click(j);
+    if (c) pinned(j, c, 'another figure link');
+    last = j;
+  }
+  await page.keyboard.press('Escape');
+  await page.waitForTimeout(150);
+  const esc = await state(last);
+  if (esc.open) fail(`${tag}: Escape left the pinned figure open (C5)`);
+  else if (!esc.onLink) fail(`${tag}: closing the panel left focus off the link that opened it (C5)`);
+  const again = await click(0);
+  if (again && again.after.open) {
+    const closed = await page.evaluate(() => {
+      const dlg = [...document.querySelectorAll('[role="dialog"]')].find((e) => e.getClientRects().length > 0);
+      const b = dlg && [...dlg.querySelectorAll('button')].find((x) => /close/i.test((x.getAttribute('aria-label') || '') + x.textContent));
+      if (!b) return 'no close button';
+      b.click();
+      return dlg.getClientRects().length > 0 ? 'still open' : '';
+    });
+    if (closed) fail(`${tag}: the panel's close button: ${closed} (C5)`);
+  }
+  if (width <= 900 && await page.evaluate(() => !!(document.getElementById('menuBtn') && document.getElementById('rail')))) {
+    // The drawer over a pinned sheet: one Escape closes the drawer alone, the topmost layer.
+    const tail = () => page.evaluate(() => document.getElementById('main').style.getPropertyValue('--tail') || '0px');
+    await page.waitForTimeout(250);
+    const tail0 = await tail();
+    const layered = await click(0);
+    if (layered && layered.after.open) {
+      await page.evaluate(() => document.getElementById('menuBtn').click());
+      await page.waitForTimeout(250);
+      await page.keyboard.press('Escape');
+      await page.waitForTimeout(150);
+      const s = await state(0);
+      const railOpen = await page.evaluate(() => document.getElementById('rail').classList.contains('open'));
+      if (railOpen || !s.open) fail(`${tag}: one Escape with the drawer open over a pinned figure ${railOpen ? 'left the drawer open' : 'closed the pinned figure too'}: it closes the drawer alone (C5)`);
+      // The foot's tail (fitTail) holds through resizes while pinned, and after the unpin.
+      const vp = page.viewportSize();
+      for (const h of [vp.height + 120, vp.height]) {
+        await page.setViewportSize({ width: vp.width, height: h });
+        await page.waitForTimeout(250);
+      }
+      await page.keyboard.press('Escape');
+      await page.waitForTimeout(250);
+      const tail1 = await tail();
+      if ((await state(0)).open) fail(`${tag}: a second Escape left the pinned figure open (C5)`);
+      if (tail1 !== tail0) fail(`${tag}: the page's foot tail (--tail) was ${tail0} before a pin and ${tail1} after two resizes and the unpin: it holds whatever the sheet's padding (C1)`);
+    }
+  }
+  // A Ctrl+click is the browser's (a new tab; in the Review view, to a hidden figure, the view's own
+  // switch to Full notes, which would end this pass's view, so it is checked in Full notes).
+  const mod = inReview(await state(0)) ? { prevented: false, open: false } : await page.evaluate((s) => {
+    const a = document.querySelector(s);
+    let prevented = null;
+    const spy = (e) => { prevented = e.defaultPrevented; e.preventDefault(); };
+    window.addEventListener('click', spy);
+    a.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, ctrlKey: true, button: 0 }));
+    window.removeEventListener('click', spy);
+    return { prevented, open: [...document.querySelectorAll('[role="dialog"]')].some((e) => e.getClientRects().length > 0) };
+  }, sel(0));
+  if (mod.prevented || mod.open) fail(`${tag}: a Ctrl+click on a figure link ${mod.open ? 'pinned the figure' : 'was prevented'}: it keeps the plain jump (C5)`);
+  // The hover preview: desktop and a mouse only.
+  await page.mouse.move(1, 1);
+  await page.evaluate((s) => document.querySelector(s).scrollIntoView({ block: 'center', behavior: 'instant' }), sel(0));
+  await page.waitForTimeout(100);
+  await page.hover(sel(0));
+  await page.waitForTimeout(120);
+  const early = await state(0);
+  await page.waitForTimeout(380);
+  const rested = await state(0);
+  await page.mouse.move(1, 1);
+  await page.waitForTimeout(150);
+  const left = await state(0);
+  if (width > 900) {
+    if (early.peeks) fail(`${tag}: the hover preview showed before 300 ms (C5)`);
+    if (!rested.peeks) fail(`${tag}: no aria-hidden hover preview after resting on a figure link for 300 ms (C5)`);
+    else if (rested.dup.length) fail(`${tag}: the hover preview repeats ids: ${rested.dup.slice(0, 3).join(', ')} (C5)`);
+    if (left.peeks) fail(`${tag}: the hover preview stayed after the mouse left the link (C5)`);
+  } else if (rested.peeks) fail(`${tag}: a hover preview showed at ${width} px, where the panel is a sheet (C5)`);
+  await page.evaluate((s) => {
+    const a = document.querySelector(s);
+    a.dispatchEvent(new PointerEvent('pointerover', { bubbles: true, pointerType: 'touch' }));
+  }, sel(0));
+  await page.waitForTimeout(450);
+  if ((await state(0)).peeks) fail(`${tag}: a touch on a figure link showed the hover preview (C5)`);
+  if (failures === was) {
+    console.log(`  pinned figure: ${links.length} figure links, #${links[0].id} pinned ${width <= 900 ? 'as a bottom sheet' : 'beside the text'}, swapped, closed${width > 900 ? ', previewed on hover' : ''}`);
+  }
+}
+
+// The track part of a computed scrollbar-color ("<thumb> <track>"), or null for `auto`.
+function scrollTrack(v) {
+  const parts = String(v).match(/rgba?\([^)]*\)|#[0-9a-f]+|[a-z-]+/gi) || [];
+  return parts.length === 2 ? parts[1] : null;
+}
+function opaque(c) {
+  if (!c || /^transparent$/i.test(c)) return false;
+  const m = c.match(/^rgba\(([^)]*)\)$/i);
+  return m ? parseFloat(m[1].split(/[\s,/]+/).filter(Boolean)[3]) >= 1 : true;
+}
+
+// The theme chrome (CHASSIS.md, C2 to C4) on a notes page (one with a rail) or a mock page (its
+// nav.views bar, which stands in for the notes page's top bar): the page's scrollbar
+// track opaque in both themes, the theme toggle an icon with no words (fixed top right at desktop
+// width), the full-screen buttons hidden exactly when the frame grants no full screen, and T
+// flipping the theme, but not with Ctrl held or while focus is in an input.
+async function themeChrome(page, tag, width) {
+  const state = () => page.evaluate(() => ({
+    theme: document.documentElement.getAttribute('data-theme'),
+    bg: getComputedStyle(document.documentElement).getPropertyValue('--bg').trim(),
+    sc: getComputedStyle(document.documentElement).scrollbarColor,
+  }));
+  const c = await page.evaluate(() => {
+    if (!document.getElementById('rail') && !document.querySelector('nav.views')) return null;
+    const vis = (e) => e.getClientRects().length > 0 && getComputedStyle(e).visibility !== 'hidden';
+    const keyed = (k) => [...document.querySelectorAll('button[aria-keyshortcuts]')]
+      .filter((b) => b.getAttribute('aria-keyshortcuts').toLowerCase().split(/\s+/).includes(k));
+    const theme = keyed('t');
+    const fs = keyed('f');
+    const fsOn = !!(document.fullscreenEnabled || document.webkitFullscreenEnabled);
+    return {
+      theme: theme.length,
+      worded: theme.filter((b) => b.textContent.trim()).map((b) => '#' + b.id + ' "' + b.textContent.trim() + '"'),
+      railWords: [...document.querySelectorAll('#rail button')].filter((b) => /theme/i.test(b.textContent))
+        .map((b) => b.textContent.trim()),
+      fixed: theme.filter((b) => vis(b) && getComputedStyle(b).position === 'fixed').length,
+      shown: theme.filter(vis).length,
+      fsOn,
+      fsWrong: fs.filter((b) => b.hidden === fsOn).map((b) => '#' + b.id),
+      fsFixed: fs.filter((b) => vis(b) && getComputedStyle(b).position === 'fixed').length,
+      railShadow: (() => {
+        const r = document.getElementById('rail');
+        return r && window.innerWidth <= 900 && !r.classList.contains('open') ? getComputedStyle(r).boxShadow : 'none';
+      })(),
+    };
+  });
+  if (!c) return;
+  const was = failures;
+  const before = await state();
+  const t0 = scrollTrack(before.sc);
+  if (!opaque(t0)) fail(`${tag}: the page's scrollbar track is ${t0 || before.sc}, not an opaque color (C2)`);
+  if (!c.theme) fail(`${tag}: no theme button with aria-keyshortcuts="t" (C3)`);
+  else if (!c.shown) fail(`${tag}: no theme button visible (C3)`);
+  if (c.worded.length) fail(`${tag}: theme buttons with words: ${c.worded.join(', ')} (C3: an icon)`);
+  if (c.railWords.length) fail(`${tag}: a theme button in the rail: "${c.railWords[0]}" (C3: a fixed icon top right)`);
+  if (width >= 1280 && !c.fixed) fail(`${tag}: no theme icon fixed on screen at ${width} px (C3)`);
+  if (c.railShadow !== 'none') fail(`${tag}: the closed drawer casts a shadow (${c.railShadow}), a strip down the page's left edge`);
+  if (c.fsWrong.length) {
+    fail(`${tag}: full-screen buttons ${c.fsWrong.join(', ')} ${c.fsOn ? 'hidden where' : 'shown where no'} full screen is granted (C4)`);
+  } else if (c.fsOn && width >= 1280 && !c.fsFixed) fail(`${tag}: full screen is granted and no full-screen icon is fixed on screen (C4)`);
+  if (c.fsOn && !c.fsWrong.length) {
+    // The buttons follow full screen (the page's fullscreenchange handler): pressed and "Exit full
+    // screen" in it, unpressed and "Full screen" out of it. Driven by a stand-in fullscreenElement,
+    // since headless can't be relied on to enter full screen and leave it.
+    const drift = await page.evaluate(() => {
+      const fs = [...document.querySelectorAll('button[aria-keyshortcuts]')]
+        .filter((b) => b.getAttribute('aria-keyshortcuts').toLowerCase().split(/\s+/).includes('f'));
+      const out = [];
+      const read = (on) => fs.forEach((b) => {
+        const p = b.getAttribute('aria-pressed');
+        const l = b.getAttribute('aria-label');
+        if (p !== String(on) || l !== (on ? 'Exit full screen' : 'Full screen')) out.push(`#${b.id} ${on ? 'in' : 'out of'} full screen: aria-pressed ${p}, label "${l}"`);
+      });
+      Object.defineProperty(document, 'fullscreenElement', { get: () => document.documentElement, configurable: true });
+      document.dispatchEvent(new Event('fullscreenchange'));
+      read(true);
+      delete document.fullscreenElement;
+      document.dispatchEvent(new Event('fullscreenchange'));
+      read(false);
+      return out;
+    });
+    if (drift.length) fail(`${tag}: the full-screen buttons don't follow full screen: ${drift.join('; ')} (C4)`);
+  }
+  await page.evaluate(() => document.activeElement && document.activeElement.blur && document.activeElement.blur());
+  await page.keyboard.press('t');
+  const flipped = await state();
+  if (!flipped.theme || flipped.theme === before.theme || flipped.bg === before.bg) {
+    fail(`${tag}: pressing T didn't flip the theme (data-theme ${before.theme} to ${flipped.theme}) (C4)`);
+  } else {
+    const t1 = scrollTrack(flipped.sc);
+    if (!opaque(t1)) fail(`${tag}: after T the page's scrollbar track is ${t1 || flipped.sc}, not an opaque color (C2)`);
+  }
+  await page.keyboard.press('Control+t');
+  const ctrl = await state();
+  if (ctrl.theme !== flipped.theme) fail(`${tag}: Ctrl+T flipped the theme: T ignores Ctrl, Cmd and Alt (C4)`);
+  await page.evaluate(() => {
+    const i = document.createElement('input');
+    i.id = 'vp-typing';
+    document.getElementById('main').prepend(i);
+    i.focus();
+  });
+  await page.keyboard.press('t');
+  const typed = await state();
+  await page.evaluate(() => document.getElementById('vp-typing').remove());
+  if (typed.theme !== flipped.theme) fail(`${tag}: typing T in an input flipped the theme (C4)`);
+  if (failures === was) console.log(`  theme chrome: track ${t0}, ${c.fixed ? 'fixed ' : ''}icon, full screen ${c.fsOn ? 'granted, shown' : 'not granted, hidden'}, T flips ${before.theme || 'system'} to ${flipped.theme}`);
 }
 
 // scrollY unchanged for 600 ms: the smooth scroll ended, or something cancelled it (L18).

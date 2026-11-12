@@ -20,6 +20,10 @@ SCRIPT = os.path.join(REPO, "skills", "exam-prep", "scripts", "extract_check.py"
 _spec = importlib.util.spec_from_file_location("extract_check", SCRIPT)
 extract_check = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(extract_check)
+_spec = importlib.util.spec_from_file_location("qonly", os.path.join(os.path.dirname(SCRIPT),
+                                                                     "qonly.py"))
+qonly = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(qonly)
 
 MANIFEST = """# Source manifest: WID 1001 Midterm
 
@@ -78,6 +82,11 @@ class ExtractCheck(unittest.TestCase):
         self.write(f"_build/extract/{name}", text)
 
     def run_check(self):
+        """extract_check.py after qonly.py, as 02-extract step 3 runs them: test_qonly.py pins the
+        question-only copies' own checks."""
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            qonly.main(["--root", self.root])
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
             code = extract_check.main(["--root", self.root])

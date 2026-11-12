@@ -1,4 +1,4 @@
-<!-- exam-prep template hub-CLAUDE.md.tmpl. Baseline as of 2026-11-10; changes only via `12-retro`. Drop this line in the hub copy. -->
+<!-- exam-prep template hub-CLAUDE.md.tmpl. Baseline as of 2026-11-12; changes only via `12-retro`. Drop this line in the hub copy. -->
 # {{NAME}}
 
 {{COURSE TITLE}}, {{TERM}}. An exam-prep hub: use the exam-prep skill for any work here.
@@ -6,6 +6,9 @@
 ## Exam facts
 
 - {{EXAM}}: {{DATE}}, {{TIME}}, {{LENGTH}}.
+- On the day: room {{ROOM, or where it is split, each room with its last-name range}}; bring
+  {{WHAT TO BRING}}; banned {{WHAT IS BANNED}}; name and id on the sheet {{required | not
+  required | no sheet}}. A fact not found is written "not recorded".
 - Scope: the rows of `MANIFEST.md`, the one statement of it. Change scope there, never here.
 - Rules: {{open or closed book}}; calculator {{yes or no}}; cheat sheet {{allowed: size, one side or two, collected, name required | not allowed}}.
 - The instructor's exam-format statement, verbatim: "{{QUOTE}}" ({{SOURCE: file:line, or Ed #N and date}}). {{NONE: Not recorded. The nearest staff statements, each quoted, sourced and labeled "not an exam-format statement": "{{QUOTE}}" ({{SOURCE}}).}}
@@ -16,8 +19,8 @@
 ## Repo rules
 
 - Course material is copyrighted. `sources/` and everything rendered or cut from it
-  (`_build/pages/`, `_build/text/`, `_build/slices/`, `_build/media/`) are gitignored. The repo
-  stays local: never push, and never add a remote without the student's go.
+  (`_build/pages/`, `_build/text/`, `_build/slices/`, `_build/media/`, `_build/img/`) are
+  gitignored. The repo stays local: never push, and never add a remote without the student's go.
 - `reserved` files in `MANIFEST.md` belong to a later exam: never extract or open them now.
 - `Answers: yes` files in `MANIFEST.md` never reach a mock writer, and nothing published quotes
   them before the student has attempted that set.
@@ -45,3 +48,9 @@
   scope; student posts are signals.
 - The notes follow `_build/STYLE.md` and the page follows `_build/CHASSIS.md`. Keep both when
   editing.
+
+## Tools
+
+- Browser checks: `EXAM_PREP_PLAYWRIGHT={{THE PLAYWRIGHT PACKAGE DIRECTORY, found once at intake |
+  none: _build/node_modules/ holds it}}` before each `verify_page.mjs`, `verify_videos.mjs` and
+  `print_sheet.mjs` run, so no session hunts for it again.

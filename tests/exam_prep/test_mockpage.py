@@ -398,10 +398,12 @@ class Figure(Build):
             def __init__(self):
                 super().__init__()
                 self.copies, self.texts, self.inside, self.ids = [], [], False, []
+                self.button = False  # the page's own icons (C3, C4) are svgs inside buttons
 
             def handle_starttag(self, tag, attrs):
                 self.ids += [v for k, v in attrs if k == "id"]
-                if tag == "svg":
+                self.button = self.button or tag == "button"
+                if tag == "svg" and not self.button:
                     self.copies.append([])
                     self.inside = True
                 if self.inside:
@@ -410,6 +412,8 @@ class Figure(Build):
             def handle_endtag(self, tag):
                 if tag == "svg":
                     self.inside = False
+                if tag == "button":
+                    self.button = False
 
             def handle_data(self, data):
                 if self.inside and data.strip():

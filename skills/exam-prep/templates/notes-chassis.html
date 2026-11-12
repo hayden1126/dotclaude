@@ -1,4 +1,4 @@
-<!-- exam-prep template notes-chassis.html. Baseline as of 2026-11-10; changes only via `12-retro`.
+<!-- exam-prep template notes-chassis.html. Baseline as of 2026-11-12; changes only via `12-retro`.
      The hub copy is _build/chassis.html: fill its placeholders there and drop this comment.
      Layout: a fixed left rail (section and subsection contents with scroll-spy) beside one reading
      column of sections. Math renders with MathJax SVG. Callouts: definition, worked example,
@@ -21,6 +21,7 @@
     --warn:#c05621;  --warn-wash:#fbeee5;  --warn-ink:#9a4318;
     --key:#6d46c2;   --key-wash:#efeafb;   --key-ink:#543699;
     --focus:#0b6e8f;
+    --scroll-thumb:#aeb8c0;
     color-scheme:light;
     --maxw:72ch; --rail:20rem;
     --f-display:"IBM Plex Sans",system-ui,sans-serif;
@@ -37,6 +38,7 @@
     --warn:#e3925f;  --warn-wash:#2d1d12;   --warn-ink:#f0b48a;
     --key:#a98ee6;   --key-wash:#201635;    --key-ink:#c6b2f1;
     --focus:#49b6d6;
+    --scroll-thumb:#4f5e68;
     color-scheme:dark;
   }}
   :root[data-theme="dark"]{
@@ -49,10 +51,16 @@
     --warn:#e3925f;  --warn-wash:#2d1d12;   --warn-ink:#f0b48a;
     --key:#a98ee6;   --key-wash:#201635;    --key-ink:#c6b2f1;
     --focus:#49b6d6;
+    --scroll-thumb:#4f5e68;
     color-scheme:dark;
   }
 
   *{box-sizing:border-box}
+  /* themed scrollbars (C2): color-scheme alone left light native bars after the toggle inside a
+     host frame. The page's own track is opaque: Chrome inside a light-scheme parent frame paints
+     white behind a transparent one, whatever color-scheme says. */
+  :root{scrollbar-color:var(--scroll-thumb) var(--bg);background:var(--bg)}
+  .rail{scrollbar-color:var(--scroll-thumb) transparent}
   body{background:var(--bg);color:var(--ink);font-family:var(--f-body);
     font-size:17px;line-height:1.62;margin:0;-webkit-text-size-adjust:100%}
   h1,h2,h3,h4{font-family:var(--f-display);line-height:1.2;text-wrap:balance;color:var(--ink)}
@@ -81,7 +89,10 @@
   .toc .grp{margin-top:.7rem}
 
   .content{min-width:0;padding:0 clamp(1rem,5vw,3.5rem)}
-  .wrap{max-width:var(--maxw);margin:0 auto;padding-block:3rem 8rem}
+  /* desktop: text stays clear of the fixed icons (40 px at .75rem from the right edge, C3) */
+  @media (min-width:901px){.content{padding-right:4rem}}
+  /* --tail: the script's extra room at the foot, so the last subsection can reach the spy line */
+  .wrap{max-width:var(--maxw);margin:0 auto;padding-block:3rem calc(8rem + var(--tail,0px))}
   .pagehead{max-width:var(--maxw);margin:0 auto;padding:2.5rem 0 .5rem}
   .pagehead h1{font-size:clamp(1.8rem,4.5vw,2.6rem);margin:.2rem 0 .3rem}
   .pagehead .lede{color:var(--ink-soft);font-size:1.02rem;margin:.3rem 0 0}
@@ -211,6 +222,41 @@
   .fig-controls button{font-family:var(--f-display);font-size:.82rem;padding:.35rem .7rem;border-radius:7px;
     border:1px solid var(--hair-strong);background:var(--surface-2);color:var(--ink);cursor:pointer;min-height:36px}
   .fig-controls button[aria-pressed="true"]{background:var(--accent);border-color:var(--accent);color:#fff}
+  /* a slide-image figure: a cropped slide, never wider than the column */
+  figure>img{display:block;max-width:100%;height:auto;margin:0 auto;border-radius:6px}
+
+  /* ---- the concise box that opens a subsection (C6): bold-labelled bullets, the labels hung in
+     a column on wide screens and inline on a phone ---- */
+  .concise{border:1px solid var(--hair);border-top:3px solid var(--sec-accent);border-radius:10px;
+    background:color-mix(in srgb,var(--sec-accent) 5%,var(--surface));padding:.65rem 1rem;margin:.7rem 0 1.4rem}
+  .concise>ul{list-style:none;margin:0;padding:0}
+  .concise>ul>li{position:relative;margin:.3rem 0;padding-left:6.6rem;line-height:1.5}
+  .concise>ul>li>strong:first-child{position:absolute;left:0;top:.2rem;background:none;padding:0;
+    font-family:var(--f-display);font-size:.68rem;font-weight:700;letter-spacing:.06em;text-transform:uppercase;
+    color:var(--sec-accent);white-space:nowrap}
+  @media (max-width:560px){
+    .concise>ul>li{padding-left:0}
+    .concise>ul>li>strong:first-child{position:static;margin-right:.35rem}
+  }
+
+  /* ---- the pinned figure panel and its hover preview (C5): a copy of a figure a link names ---- */
+  .figpin{position:fixed;z-index:35;background:var(--surface);color:var(--ink);border:1px solid var(--hair-strong);
+    border-radius:12px;box-shadow:0 10px 36px rgba(0,0,0,.22);overflow:auto;overscroll-behavior:contain}
+  .figpin[hidden]{display:none}
+  .figpin figure{margin:0;border:0;padding:.2rem 0 0;background:transparent}
+  /* the copy scales to the panel, its viewBox kept: the page's 460 px floor for a figure on a phone
+     (which scrolls it sideways in its box) would push it past a bottom sheet's edge */
+  .figpin figure svg,.figpin figure>img{min-width:0;max-width:100%;height:auto}
+  .figpanel{right:1rem;bottom:1rem;width:min(30rem,38vw);max-height:min(70vh,40rem);padding:0 .9rem .9rem}
+  .figpanel:focus{outline:none}
+  .figpanel:focus-visible{outline:2px solid var(--focus);outline-offset:2px}
+  .figpanel-bar{position:sticky;top:0;z-index:1;display:flex;align-items:center;gap:.6rem;background:var(--surface);
+    padding:.55rem 0 .45rem;border-bottom:1px solid var(--hair);font-family:var(--f-display);font-size:.85rem}
+  .figpanel-t{flex:1 1 auto;min-width:0;font-weight:650;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .figpanel-go{flex:none;font-size:.8rem}
+  .figpanel-x{flex:none;font:inherit;font-size:1.15rem;line-height:1;width:36px;height:36px;border-radius:8px;cursor:pointer;
+    border:1px solid var(--hair-strong);background:var(--surface-2);color:var(--ink)}
+  .figpeek{width:min(26rem,36vw);max-height:50vh;overflow:hidden;padding:.6rem .8rem;pointer-events:none}
 
   /* MathJax sizing */
   mjx-container{display:inline-block;overflow-x:auto!important;overflow-y:hidden;max-width:100%!important;vertical-align:-0.25em}
@@ -227,20 +273,39 @@
   .menubtn{font:inherit;font-family:var(--f-display);font-size:.85rem;background:var(--surface-2);
     border:1px solid var(--hair-strong);color:var(--ink);border-radius:8px;padding:.4rem .7rem;min-height:40px;cursor:pointer;
     flex:none;white-space:nowrap}
-  /* a phone's top bar with the view toggle has no room left for the brand */
-  @media (max-width:480px){ .topbar .brand:has(~ .viewtog){display:none} }
+  /* a phone's top bar with the view toggle has no room left for the brand, nor for full screen
+     (the theme icon then takes the auto margin back) */
+  @media (max-width:480px){ .topbar .brand:has(~ .viewtog),.topbar .viewtog~.fsbtn{display:none}
+    .topbar .viewtog~.fsbtn:not([hidden])+.themebtn{margin-left:auto} }
   .themebtn{flex:none;margin-left:auto;background:var(--surface-2);border:1px solid var(--hair-strong);color:var(--ink);
     border-radius:8px;padding:.4rem .6rem;min-height:40px;cursor:pointer;font-size:.95rem;line-height:1}
-  .rail .themebtn{margin:1rem 0 0;width:100%;font-family:var(--f-display);font-size:.8rem}
+  .themebtn svg{display:block}
+  /* desktop: the theme icon, fixed top right, and full screen under it (C3, C4); below 900 px
+     the top bar holds both instead */
+  .themefab{position:fixed;top:.75rem;right:.75rem;z-index:30;margin:0;width:40px;height:40px;
+    padding:0;display:flex;align-items:center;justify-content:center;box-shadow:0 2px 10px rgba(0,0,0,.12)}
+  .fsfab{top:calc(.75rem + 48px)}
+  /* full screen shows only where the host frame grants it; in the top bar it takes the auto
+     margin, so both icons sit right */
+  .fsfab[hidden],.fsbtn[hidden]{display:none}
+  .topbar .fsbtn:not([hidden])+.themebtn{margin-left:0}
   .backdrop{display:none;position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:45}
 
   @media (max-width:900px){
     .layout{grid-template-columns:minmax(0,1fr)}
     .topbar{display:flex}
     .rail{position:fixed;top:0;left:0;z-index:50;height:100dvh;width:min(85vw,21rem);background:var(--surface);
-      transform:translateX(-100%);transition:transform .22s ease;box-shadow:0 0 40px rgba(0,0,0,.2)}
-    .rail.open{transform:none}
+      transform:translateX(-100%);transition:transform .22s ease,box-shadow .22s ease}
+    /* the shadow only while open: closed, the drawer sits just off-screen and its shadow would
+       paint a grey strip down the page's left edge */
+    .rail.open{transform:none;box-shadow:0 0 40px rgba(0,0,0,.2)}
     body.navopen .backdrop{display:block}
+    .themefab{display:none}
+    /* the pinned figure is a bottom sheet (C5), and the page's foot can scroll above it */
+    .figpanel{left:0;right:0;bottom:0;width:auto;max-height:45dvh;border-radius:14px 14px 0 0;
+      border-bottom:0;padding-bottom:calc(.9rem + env(safe-area-inset-bottom,0px))}
+    body.figpinned .wrap{padding-bottom:max(50vh,calc(8rem + var(--tail,0px)))}
+    .figpeek{display:none}
   }
   @media (prefers-reduced-motion:reduce){*{transition:none!important;scroll-behavior:auto!important}}
   html{scroll-behavior:smooth}
@@ -277,21 +342,23 @@
     <p class="brand">{{BRAND}}<small>{{COURSE}} · {{EXAM}}</small></p>
     <!-- REVIEW TOGGLE --><div class="viewtog" role="group" aria-label="Notes view"><button type="button" data-pick="review" aria-pressed="false">Review</button><button type="button" data-pick="full" aria-pressed="true">Full notes</button></div><!-- /REVIEW TOGGLE -->
     <nav><ul class="toc" id="toc"></ul></nav>
-    <button class="themebtn" id="themeBtn2" type="button">Toggle theme</button>
   </aside>
+  <button class="themebtn themefab" id="themeBtn2" type="button" aria-label="Toggle light or dark theme" title="Toggle theme (T)" aria-keyshortcuts="t"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="8.5" fill="none" stroke="currentColor" stroke-width="2"/><path d="M12 3.5a8.5 8.5 0 0 1 0 17z" fill="currentColor"/></svg></button>
+  <button class="themebtn themefab fsfab" id="fsBtn2" type="button" hidden aria-pressed="false" aria-label="Full screen" title="Full screen (F)" aria-keyshortcuts="f"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg></button>
 
   <div class="content">
     <div class="topbar">
       <button class="menubtn" id="menuBtn" type="button" aria-expanded="false" aria-controls="rail">☰ Sections</button>
       <p class="brand">{{BRAND}}</p>
       <!-- REVIEW TOGGLE --><div class="viewtog" role="group" aria-label="Notes view"><button type="button" data-pick="review" aria-pressed="false">Review</button><button type="button" data-pick="full" aria-pressed="true">Full notes</button></div><!-- /REVIEW TOGGLE -->
-      <button class="themebtn" id="themeBtn" type="button" aria-label="Toggle light or dark theme">◐</button>
+      <button class="themebtn fsbtn" id="fsBtn" type="button" hidden aria-pressed="false" aria-label="Full screen" title="Full screen (F)" aria-keyshortcuts="f"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg></button>
+      <button class="themebtn" id="themeBtn" type="button" aria-label="Toggle light or dark theme" title="Toggle theme (T)" aria-keyshortcuts="t"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="8.5" fill="none" stroke="currentColor" stroke-width="2"/><path d="M12 3.5a8.5 8.5 0 0 1 0 17z" fill="currentColor"/></svg></button>
     </div>
 
     <header class="pagehead">
       <h1>{{COURSE TITLE}}: {{EXAM}} Study Notes</h1>
       <p class="lede">{{WHAT THE NOTES COVER, AND WHAT THEY DRILL}}</p>
-      <!-- REVIEW TOGGLE --><p class="lede rvlede">Review view: only the worked examples, pitfalls and Must-know lists picked for a last read. Switch to Full notes for everything else.</p><!-- /REVIEW TOGGLE -->
+      <!-- REVIEW TOGGLE --><p class="lede rvlede">Review view: only each subsection's concise box and the worked examples, pitfalls and Must-know lists picked for a last read. Switch to Full notes for everything else.</p><!-- /REVIEW TOGGLE -->
       <span class="examline">{{DAY DATE · TIME · ALLOWED MATERIALS · SCOPE}}</span>
     </header>
 
@@ -302,6 +369,11 @@
   </div>
 </div>
 <div class="backdrop" id="backdrop"></div>
+<div class="figpin figpanel" id="figPanel" role="dialog" aria-modal="false" aria-label="Pinned figure" tabindex="-1" hidden>
+  <div class="figpanel-bar"><span class="figpanel-t" id="figPanelT"></span><a class="figpanel-go" id="figPanelGo" href="#main">Go to figure</a><button class="figpanel-x" id="figPanelX" type="button" aria-label="Close pinned figure" title="Close (Esc)">×</button></div>
+  <div id="figPanelBody"></div>
+</div>
+<div class="figpin figpeek" id="figPeek" aria-hidden="true" hidden></div>
 
 <script>
   window.MathJax = {
@@ -332,6 +404,26 @@
     apply(next); try{localStorage.setItem('notes-theme',next);}catch(e){}
   }
   ['themeBtn','themeBtn2'].forEach(function(id){var b=document.getElementById(id); if(b) b.addEventListener('click',toggle);});
+  // ---- full screen (C4): only where the host frame grants it (an iframe's allow="fullscreen") ----
+  var fsOK=!!(document.fullscreenEnabled||document.webkitFullscreenEnabled);
+  function fsEl(){return document.fullscreenElement||document.webkitFullscreenElement;}
+  function fsToggle(){
+    if(fsEl()){(document.exitFullscreen||document.webkitExitFullscreen).call(document);}
+    else{var r=root.requestFullscreen||root.webkitRequestFullscreen; var p=r&&r.call(root); if(p&&p.catch) p.catch(function(){});}
+  }
+  function fsSync(){var on=!!fsEl(); ['fsBtn','fsBtn2'].forEach(function(id){var b=document.getElementById(id); if(!b) return;
+    b.setAttribute('aria-pressed',on?'true':'false'); var t=on?'Exit full screen':'Full screen'; b.title=t+' (F)'; b.setAttribute('aria-label',t);});}
+  if(fsOK){['fsBtn','fsBtn2'].forEach(function(id){var b=document.getElementById(id); if(b){b.hidden=false; b.addEventListener('click',fsToggle);}});
+    document.addEventListener('fullscreenchange',fsSync); document.addEventListener('webkitfullscreenchange',fsSync);}
+  // ---- keys (C4): F full screen, T theme; never with Ctrl, Cmd or Alt held (Ctrl+F still finds)
+  // or while typing ----
+  document.addEventListener('keydown',function(e){
+    if(e.ctrlKey||e.metaKey||e.altKey||e.repeat) return;
+    var t=e.target; if(t&&(t.isContentEditable||/^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName))) return;
+    var k=(e.key||'').toLowerCase();
+    if(k==='f'&&fsOK){e.preventDefault();fsToggle();}
+    else if(k==='t'){e.preventDefault();toggle();}
+  });
 
   // ---- mobile nav drawer ----
   var rail=document.getElementById('rail'), menuBtn=document.getElementById('menuBtn'), backdrop=document.getElementById('backdrop');
@@ -339,7 +431,9 @@
   function closeNav(){rail.classList.remove('open');document.body.classList.remove('navopen');menuBtn.setAttribute('aria-expanded','false');menuBtn.focus();}
   if(menuBtn){menuBtn.addEventListener('click',function(){rail.classList.contains('open')?closeNav():openNav();});}
   if(backdrop){backdrop.addEventListener('click',closeNav);}
-  document.addEventListener('keydown',function(e){if(e.key==='Escape'&&rail.classList.contains('open'))closeNav();});
+  // Escape closes the topmost layer only: the open drawer marks the key handled, so a pinned figure
+  // under it stays (C5's handler skips a handled Escape)
+  document.addEventListener('keydown',function(e){if(e.key==='Escape'&&!e.defaultPrevented&&rail.classList.contains('open')){e.preventDefault();closeNav();}});
 
   // ---- build TOC from the rendered section/h2/h3 ----
   var toc=document.getElementById('toc'), main=document.getElementById('main');
@@ -384,7 +478,31 @@
   function rebuildSpy(){
     spyList=[]; spied.forEach(function(el){if(el.id&&el.getClientRects().length)spyList.push(el);});
     spyList.sort(function(a,b){return a.getBoundingClientRect().top-b.getBoundingClientRect().top;});
+    fitTail();
   }
+  /* room at the foot (--tail) so the last shown subsection can scroll to the spy line, short of
+     the page's bottom, where the spy marks the last entry whatever is at the line: without it, a
+     page whose last section is short marks the last subsection while the one before sits at the
+     line. Computed from the foot's padding as it stands (8rem plus the tail, or the pinned sheet's
+     50vh at 900 px and below), so a second call changes nothing, pinned or not. */
+  function fitTail(){
+    var h=null;
+    for(var i=spyList.length-1;i>=0;i--){ var el=spyList[i];
+      if(el.tagName.toLowerCase()==='h3'&&el.getClientRects().length){ h=el; break; } }
+    var se=document.scrollingElement||root, cur=parseFloat(main.style.getPropertyValue('--tail'))||0, t=0;
+    if(h){
+      // the page's height with the foot at .wrap's bare 8rem (its rule above): what the tail adds to
+      var rem=parseFloat(getComputedStyle(root).fontSize)||16;
+      var natural=se.scrollHeight-window.innerHeight-((parseFloat(getComputedStyle(main).paddingBottom)||0)-8*rem);
+      var want=h.getBoundingClientRect().top+window.scrollY-(parseFloat(getComputedStyle(h).scrollMarginTop)||0)+8;
+      t=Math.max(0,Math.ceil(want-natural));
+    }
+    if(t!==cur) main.style.setProperty('--tail',t+'px');
+  }
+  // refit when the column's size changes (fonts, MathJax, an opened example, a view) or the viewport's
+  if(window.ResizeObserver){ var tailFrame=0;
+    new ResizeObserver(function(){ cancelAnimationFrame(tailFrame); tailFrame=requestAnimationFrame(fitTail); }).observe(main); }
+  window.addEventListener('resize',fitTail);
   rebuildSpy();
   function onScroll(){
     var line=130, best=spyList.length?spyList[0].id:null;
@@ -405,7 +523,7 @@
   },{passive:true});
   onScroll();
 
-  // ---- Review view (CHASSIS.md): shows the notes' own rv blocks, Must-know lists, headings, the
+  // ---- Review view (CHASSIS.md): shows the notes' own rv blocks and concise boxes, Must-know lists, headings, the
   // map and the source key, and hides the rest; no copy of any text. Present only when assemble.py
   // keeps the toggle (PLAN.md gives it minutes). ----
   var picks=[].slice.call(document.querySelectorAll('.viewtog button[data-pick]'));
@@ -429,7 +547,7 @@
         var tag=k.tagName.toLowerCase();
         if(tag==='h2') return;
         if(tag==='h3'){ h3=k; must=/-must-know$/.test(k.id||''); if(!must) k.classList.add('rvhide'); return; }
-        if(k.classList.contains('rv')){ if(h3) h3.classList.remove('rvhide'); return; }
+        if(k.classList.contains('rv')||k.classList.contains('concise')){ if(h3) h3.classList.remove('rvhide'); return; }
         if(must&&(tag==='ul'||tag==='ol')){ must=false; return; }
         k.classList.add('rvhide');
       });
@@ -481,7 +599,7 @@
     }); });
     // a link to something the Review view hides switches to Full notes, then jumps there
     document.addEventListener('click',function(e){
-      if(!reviewOn) return;
+      if(!reviewOn||e.defaultPrevented) return;  // a figure link pins its figure instead (C5)
       var a=e.target.closest('a[href^="#"]'); if(!a) return;
       var id=decodeURIComponent(a.getAttribute('href').slice(1)), t=document.getElementById(id);
       if(!t||shown(t)) return;
@@ -499,6 +617,116 @@
     var fig=btn.closest('figure'); if(!fig) return;
     var handler=window.NotesFig[fig.id]; if(handler) handler(btn.dataset.act,btn,fig);
   });
+
+  // ---- the pinned figure panel (C5): a link to a figure opens a copy of it, cloned from the one
+  // original, in a panel that stays on screen (a bottom sheet below 900 px); on desktop a 300 ms
+  // hover shows the same copy as a preview. A step-through shows its current frame, controls gone.
+  var panel=document.getElementById('figPanel'), peek=document.getElementById('figPeek');
+  function figOf(a){
+    if(!a||!a.classList.contains('xref')) return null;
+    var h=a.getAttribute('href')||''; if(h.charAt(0)!=='#'||h.length<2) return null;
+    var t=null; try{ t=document.getElementById(decodeURIComponent(h.slice(1))); }catch(e){}
+    return t&&t.tagName.toLowerCase()==='figure'&&!t.closest('.figpin')? t : null;
+  }
+  // a copy with every id suffixed and every reference to one (url(#..), #.., aria id lists)
+  // rewritten, so the page keeps one of each id and an arrow marker still draws
+  function copyOf(fig,suffix){
+    var c=fig.cloneNode(true), map={};
+    c.querySelectorAll('.fig-controls').forEach(function(x){x.remove();});
+    var all=[c].concat([].slice.call(c.querySelectorAll('*')));
+    all.forEach(function(el){ if(el.id){ map[el.id]=el.id+suffix; el.id=map[el.id]; } });
+    all.forEach(function(el){
+      el.classList.remove('rvhide');
+      [].slice.call(el.attributes).forEach(function(at){
+        if(at.name==='id') return;
+        if(at.name==='aria-live'){ el.removeAttribute('aria-live'); return; }
+        var v=at.value, nv=v.replace(/url\(\s*['"]?#([^'")\s]+)['"]?\s*\)/g,function(m,id){return map[id]?'url(#'+map[id]+')':m;});
+        if(nv.charAt(0)==='#'&&map[nv.slice(1)]) nv='#'+map[nv.slice(1)];
+        if(/^aria-(labelledby|describedby|controls)$/.test(at.name)) nv=nv.split(/\s+/).map(function(t){return map[t]||t;}).join(' ');
+        if(nv!==v) el.setAttribute(at.name,nv);
+      });
+    });
+    return c;
+  }
+  function figName(fig){
+    var cap=fig.querySelector('figcaption'), t=cap? cap.textContent.replace(/\s+/g,' ').trim() : '';
+    var m=t.match(/^Fig\.?\s*[\w.]*\d[\w.]*/);
+    var svg=fig.querySelector('svg[aria-label],img[alt]');
+    return (m? m[0].replace(/\.$/,'') : '') || (svg&&(svg.getAttribute('aria-label')||svg.getAttribute('alt'))) || fig.id;
+  }
+  // the copy sits outside its section: it takes the section's accent, again on each theme change
+  function syncAccent(box){
+    var fig=box.dataset.of&&document.getElementById(box.dataset.of), sec=fig&&fig.closest('section.note');
+    if(!sec) return;
+    var cs=getComputedStyle(sec);
+    ['--sec-accent','--sec-accent-hl'].forEach(function(p){ box.style.setProperty(p,cs.getPropertyValue(p)); });
+  }
+  function resync(){ [panel,peek].forEach(function(b){ if(b&&!b.hidden) syncAccent(b); }); }
+  if(window.MutationObserver) new MutationObserver(resync).observe(root,{attributes:true,attributeFilter:['data-theme']});
+  if(window.matchMedia){ var mq=window.matchMedia('(prefers-color-scheme:dark)'); if(mq.addEventListener) mq.addEventListener('change',resync); }
+  var opener=null;
+  function fill(box,fig,body,suffix){
+    body.textContent=''; body.appendChild(copyOf(fig,suffix)); box.dataset.of=fig.id; syncAccent(box);
+  }
+  function pin(fig,a){
+    hidePeek();
+    var name=figName(fig);
+    fill(panel,fig,document.getElementById('figPanelBody'),'--pin');
+    document.getElementById('figPanelT').textContent=name;
+    document.getElementById('figPanelGo').setAttribute('href','#'+fig.id);
+    panel.setAttribute('aria-label','Pinned figure: '+name);
+    panel.hidden=false; document.body.classList.add('figpinned');
+    opener=a; panel.scrollTop=0;
+    try{ panel.focus({preventScroll:true}); }catch(e){ panel.focus(); }
+  }
+  function unpin(){
+    if(!panel||panel.hidden) return;
+    panel.hidden=true; document.body.classList.remove('figpinned');
+    document.getElementById('figPanelBody').textContent='';
+    if(opener&&document.contains(opener)){ try{ opener.focus({preventScroll:true}); }catch(e){ opener.focus(); } }
+    opener=null;
+  }
+  var peekTimer=null, peekFor=null;
+  function hidePeek(){ clearTimeout(peekTimer); peekTimer=null; peekFor=null; if(peek&&!peek.hidden){ peek.hidden=true; peek.textContent=''; } }
+  function showPeek(fig,a){
+    fill(peek,fig,peek,'--peek'); peek.hidden=false;
+    var r=a.getBoundingClientRect(), w=peek.offsetWidth, h=peek.offsetHeight;
+    var x=Math.max(8,Math.min(r.left,innerWidth-w-8)), y=r.bottom+8;
+    if(y+h>innerHeight-8) y=Math.max(8,r.top-h-8);
+    peek.style.left=x+'px'; peek.style.top=y+'px';
+  }
+  // a plain left click pins; Ctrl, Cmd, Shift, Alt or a middle click keeps the jump. Capture, so it
+  // runs before the Review view's switch to Full notes, which then sees it handled.
+  if(panel){
+    document.addEventListener('click',function(e){
+      if(e.defaultPrevented||e.button!==0||e.ctrlKey||e.metaKey||e.shiftKey||e.altKey) return;
+      var a=e.target.closest&&e.target.closest('a.xref'), fig=figOf(a); if(!fig) return;
+      e.preventDefault();
+      if(window.innerWidth<=900&&rail.classList.contains('open')) closeNav();
+      pin(fig,a);
+    },true);
+    document.getElementById('figPanelX').addEventListener('click',unpin);
+    document.addEventListener('keydown',function(e){
+      if(e.key==='Escape'&&!e.defaultPrevented&&!panel.hidden&&!rail.classList.contains('open')) unpin();
+    });
+  }
+  // the preview: a mouse that rests on a figure link for 300 ms, on a wide screen; never on touch
+  var hoverOK=window.matchMedia&&window.matchMedia('(hover:hover) and (pointer:fine)');
+  if(peek){
+    document.addEventListener('pointerover',function(e){
+      if(e.pointerType!=='mouse'||!(hoverOK&&hoverOK.matches)||window.innerWidth<=900) return;
+      var a=e.target.closest&&e.target.closest('a.xref'), fig=figOf(a);
+      if(!fig||a===peekFor) return;
+      hidePeek(); peekFor=a;
+      peekTimer=setTimeout(function(){ if(peekFor===a) showPeek(fig,a); },300);
+    });
+    document.addEventListener('pointerout',function(e){
+      if(!peekFor) return;
+      if(e.relatedTarget&&peekFor.contains(e.relatedTarget)) return;
+      if(e.target===peekFor||peekFor.contains(e.target)) hidePeek();
+    });
+    window.addEventListener('scroll',function(){ if(peekFor) hidePeek(); },{passive:true});
+  }
 })();
 </script>
 

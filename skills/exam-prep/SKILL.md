@@ -5,7 +5,7 @@ description: Use when a student is preparing for a course exam (midterm, final, 
 
 # Exam prep
 
-Baseline as of 2026-11-10; changes only via `12-retro`.
+Baseline as of 2026-11-12; changes only via `12-retro`.
 
 ## Overview
 
@@ -82,7 +82,11 @@ session) when the hub has its own conventions:
 | `sources/` | course material as received; `sources/ed/` the Ed digest and raw pull | ignored |
 | `_build/pages/`, `_build/text/`, `_build/slices/`, `_build/media/` | renders, deck slices, extracted images | ignored |
 | `_build/shots/`, `_build/package*.json` | the browser check's screenshots, a local Playwright install | ignored |
-| `_build/` (rest) | extracts, backbone, checker, hub copies of STYLE, CHASSIS, CONVERT, page build | tracked |
+| `_build/videos/` | the watch list's frames and transcripts, when kept at all | ignored |
+| `_build/q-only/` | each extract with a solution, as a question-only copy (`02-extract` step 3.4) | tracked |
+| `_build/img/` | slide-image figures, cropped from the page renders (`04-write` step 4) | ignored |
+| `_build/watch/` | the watch list's topics, candidates, fetch log, rankings, merge log and annotations | tracked |
+| `_build/` (rest) | extracts, backbone, checker, hub copies of STYLE, CHASSIS, CONVERT, WATCH, page build | tracked |
 | `notes/`, `cheatsheet/`, `practice/` | the products; `practice/*-key.md` and `practice/tutor/` quarantined | tracked |
 | `practice/<exam-slug>/`, `cheatsheet/<exam-slug>/` | a finished exam's products, archived by `11` and frozen; its keys stay quarantined | tracked |
 
@@ -101,7 +105,7 @@ names (00 runs 01's Ed pull; 02 starts 05's checker).
 | 05 | `workflows/05-verify.md` | checker, reviews applied | self-test covers every official part (or nothing is computable), no `TODO-VERIFY` left |
 | 06 | `workflows/06-site.md` | the notes page, published | `verify_page.mjs` passes, URL in STATUS |
 | 07 | `workflows/07-cheatsheet.md` | sheet HTML and PDF (only if allowed); with no sheet allowed, the notes page's Review view (`.rv` tags in the notes) when PLAN.md gives it minutes | `check_pdf.py` passes; the Review view: `assemble.py` within its minutes, `verify_page.mjs` passes in both views, the notes page republished |
-| 08 | `workflows/08-practice.md` | mocks, quarantined keys, mock pages, the cram order | the key script asserts every computable value; the leak check passes |
+| 08 | `workflows/08-practice.md` | mocks, quarantined keys, mock pages, the cram order; the watch list when PLAN.md asks for one | the key script asserts every computable value; the leak check passes; the watch list, when asked: `videos.py` exits 0 and its page's checks pass |
 | 09 | `workflows/09-tutor.md` | walk-throughs, quizzes, notes patches, `_build/logs/tutor.md` | on demand |
 | 10 | `workflows/10-polish.md` | scan, report, apply on approval | on demand |
 | 11 | `workflows/11-next-exam.md` | the finished exam archived, the templates reconciled, the next exam's MANIFEST and PLAN; a source added to this exam | the next exam's PLAN.md approved and its build launched |
@@ -114,7 +118,9 @@ names (00 runs 01's Ed pull; 02 starts 05's checker).
    (`00-intake` step 8) adds the STATUS line `Build running: <date>` before its first stage, and its
    last stage removes it (`08-practice` step 7.5 puts `Stage 08 built` in its place); a build stage
    run alone on request (07, 08, `11`'s source additions) and a `10-polish` pass add and remove
-   their own. Any end of a build removes it: a last stage that is skipped or cut short, a stop at a
+   their own; `08-practice`'s watch list run alone changes no notes, sheet or mock, and adds none,
+   but waits while a `Build running` or `Polish:` line stands, since both commit STATUS and
+   `practice/`. Any end of a build removes it: a last stage that is skipped or cut short, a stop at a
    stage's step 1, a stage that stops to wait for a notes patch. While the line stands, a `09-tutor`
    tab runs within its Step 1's limits, and no session dispatches a notes patch: the build session
    never does, since it can't show the student a change or ask them.
@@ -133,7 +139,10 @@ names (00 runs 01's Ed pull; 02 starts 05's checker).
    is computable, each comes from a cited source, its working shown for the reviewers to redo.
 4. **Keys are quarantined.** A key lives in its own file under a STOP header; no page build reads it
    (FB-154). Until the student has attempted a mock, no answer leaves the keys: STATUS,
-   `_build/logs/`, commits and replies name a part, never its value.
+   `_build/logs/`, commits and replies name a part, never its value. An official solution is kept
+   from the agents that must not see answers the same way: each extract that holds one has a
+   question-only copy under `_build/q-only/` (`02-extract` step 3.4), and those agents read the
+   copy, never the extract (FB-056).
 5. **Course material is copyrighted.** `sources/` and renders stay gitignored, the hub repo stays
    local, and no remote is added without the student's go (FB-011).
 6. **One output file per agent.** Load the delegation skill before the first spawn; spawn unnamed

@@ -1,6 +1,6 @@
 # 10 Polish
 
-Baseline as of 2026-11-10; changes only via `12-retro`.
+Baseline as of 2026-11-12; changes only via `12-retro`.
 
 A pass over the verified notes for one kind of failure, or for a scope change that came after the
 build: scan, report, then apply exactly what the student approves (FB-170). It runs only when the
@@ -22,6 +22,14 @@ from then on, in the cram night's session (`08-practice` step 8, its one tab), b
 | Numbering | departures from S3 and the backbone's `set-` registry (FB-172) | one reader, the numbering variant | every section |
 | Redundancy | an idea stated more often than S6 allows (FB-171) | the main session | the sections the student names |
 | Scope | every product a scope change touches (FB-180) | the main session | the whole hub |
+| Box | subsections with no concise box (S34, FB-094) or no Depth line (S33) | the main session | every section, or the ones the student names |
+| Figure | mechanisms with no figure, and sections with no `Diagram-taught` line (S11, FB-115) | the main session, by `03-backbone` step 5's sweep | every section, or the ones the student names |
+
+The box and figure passes bring a hub built before S34 or the widened S11 up to them, a reopened
+hub's old sections among them (`11-next-exam` otherwise leaves those as written). Two build
+warnings name them (FB-015): a cram order with no S33 depth label on any row (`cram_check.py` and
+`assemble.py` warn `PRE_S33`) gets its labels in a box pass, and a backbone with no
+`Diagram-taught` line (`coverage_check.py` warns) gets its lines in a figure pass.
 
 A direct instruction that names its edit, what and where ("add the cost caveat to §4.6 and where
 §3 first gives the cost"), is an approved list of one, the pass `edit`: skip steps 3 and 4, but
@@ -84,9 +92,10 @@ From the student's ask: the pass, the sections, and the pattern.
 - **Redundancy** covers only the sections the student names.
 - **Scope** starts from the source for the change, quoted: staff-authored text or an endorsed
   answer (hard rule 7), never a student's post alone.
+- **Box** and **figure** take no pattern: their rules, S34 and S11, are the pattern.
 
 Name the pass's log, `_build/logs/polish-<pass>-<date>.md` (`<pass>` one of `clarity`, `causation`,
-`numbering`, `redundancy`, `scope`, `edit`; a second pass of the same kind that day adds `-2`, then
+`numbering`, `redundancy`, `scope`, `box`, `figure`, `edit`; a second pass of the same kind that day adds `-2`, then
 `-3`, before `.md`, and that name is the pass's everywhere, its STATUS line and its baseline file
 included). Start it: the ask in the student's words, the pass, the sections, the pattern, and the
 hub's head (`git rev-parse HEAD`) as `before <sha>`. The log marks each step's end as it finishes
@@ -157,6 +166,16 @@ step 1 says.
   place of step 7.5's patches and checks (11 runs them however it ends; its step 1 needs the hub
   free). Step 7.4's report names it, so a student whose session ends first asks again.
 
+- **Box.** The main session alone. In each named section's notes file, list every subsection
+  but the Must-know list with no `> **In short:**` box under its heading, and every one with no
+  Depth line (S33). When `cram_check.py` warns `PRE_S33`, list the cram order's rows too: each
+  takes its label from its subsection's Depth line, once that line exists.
+- **Figure.** The main session alone, as `03-backbone` step 5 runs: the mechanism sweep over the
+  named sections' notes and their slides' diagrams (their extract blocks and page images), each
+  candidate kept or cut with its reason; each section marked `Diagram-taught: yes` or `no`; and
+  the kept rows not yet drawn as the proposed shortlist, each with its kind (static, step-through,
+  slide image). A figure the section already has counts toward its floor.
+
 ## Step 4: Report
 
 1. Check every finding against the file before reporting it (FB-108): open the line it quotes and
@@ -171,12 +190,32 @@ step 1 says.
    new line exactly: the student sees a sheet's change before it is made, FB-137); then a
    recommendation (a rank, numbers, or for numbering a scope) and the question: which items to
    apply. While a mock is untaken, the log's leak check passes first. Then show the report in the
-   message itself (hard rule 11).
+   message itself (hard rule 11). A figure pass's report is the proposed shortlist with its cut
+   rows, one line each: the student sees it before any figure is built (FB-062), as `03-backbone`
+   step 5 does when run alone; a build's `Figure shortlist:` STATUS line comes out once this pass
+   is approved.
 4. The student answers with a rank, numbers, "your recommendation" or a scope; text they add to an
    item is shown again before it goes in (while a mock is untaken, from the log once it passes).
    Log the answer and commit.
 
 ## Step 5: Apply
+
+**A box or figure pass applies through writers**, in place of item 3's one-fix edits: the new
+text is the notes' own, so it is written the way the build writes it. Item 2's baseline comes
+first, as for any pass. For a figure pass the main session then adds to the backbone the Mechanism
+sweep table, each section's `Diagram-taught` line and the approved shortlist rows (after which
+`coverage_check.py` exits 0 with no warning), and crops each approved slide image into
+`_build/img/` (`04-write` step 4.5, its `.gitignore` line added first when the hub lacks it). Then one writer per section file, spawned at once from the
+"Write" brief's "Polish variant", each changing only its own file: a box pass adds the
+approved boxes (S34) and missing Depth lines and changes nothing else; a figure pass adds the
+approved FIG markers, a diagram-taught section's first figure right after its first box, and trims
+prose that only re-describes a new figure (S11). While a mock is untaken, each brief carries this
+pass's fence (step 1) as its reading limits. The main session checks that `git diff` names only
+those files and only those changes, and runs one fresh section reviewer per changed file from the
+"Review" brief (`05-verify`'s), settling its findings as `05-verify` does. Then each changed
+section's fragment takes the change in `CONVERT.md`'s forms (its boxes, its new figures drawn as
+`06-site` draws them), and a box pass labels the cram order's rows from the new Depth lines. Items
+4 to 6 run as for any pass.
 
 1. Apply the approved items and nothing else (FB-170). An item the student adds is applied and
    logged with the others. A scope list starts with its MANIFEST.md change (after item 2's

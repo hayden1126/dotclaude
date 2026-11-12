@@ -1,4 +1,4 @@
-<!-- exam-prep template PLAN.md.tmpl. Baseline as of 2026-11-10; changes only via `12-retro`. Drop this line in the hub copy. -->
+<!-- exam-prep template PLAN.md.tmpl. Baseline as of 2026-11-12; changes only via `12-retro`. Drop this line in the hub copy. -->
 # PLAN: {{COURSE}} {{EXAM}} prep
 
 Approved: not yet
@@ -19,15 +19,16 @@ view line is the one exception: `assemble.py` reads it as written, so it ends at
 source is the student's answer to `00-intake` question 5.
 
 - Scope authority: {{<WORK: the document or set that mirrors the exam, e.g. PE1> mirrors the exam, so scope and the mocks follow it | full coverage, mock shapes beyond the review}} ({{SOURCE}})
-- Sources: the `in` rows of `MANIFEST.md`; `reserved` and `out` rows are never opened ({{SOURCE}})
+- Sources: the `in` rows of `MANIFEST.md`; `reserved` and `out` rows are never opened, but for the graded previous exam's `out` row, read once into its shape file (`11-next-exam` step 4, FB-182) ({{SOURCE}})
 - Cheat sheet: {{allowed, as CLAUDE.md states | not allowed}} ({{SOURCE}})
 - Review view: {{<N> minutes of reading | none: a sheet is allowed | none: the student declined it}}
+- Watch list: {{yes | yes, with the student's links: <URL>, ... | no}} ({{SOURCE}})
 - Deliverables: the table below ({{SOURCE}})
 - Depth: weighted by how the exam tests; procedures get depth, definitions stay brief (default)
-- Figures: where prose can't carry a mechanism, plus {{N}} step-throughs: {{PROCEDURES}} (default)
+- Figures: diagram first (STYLE S11): a drawn figure where prose can't carry a mechanism, and a step-through fed by the checker for every trace of a drilled procedure: {{PROCEDURES}} (default)
 - Reader: may have skipped the lectures; assume no prior exposure (default)
 - Checker: {{what is computable: arithmetic, search traces, executed queries, rule derivations | nothing is computable, so review leans on cited sources and the cold solver}} ({{SOURCE}})
-- Priority if time runs short: notes page, then cheat sheet, then mock (default)
+- Priority if time runs short: notes page, then cheat sheet, then mock{{WATCH LIST: , then the watch list}} (default)
 - Publishing: private artifacts only; a deploy anywhere else waits for the student's go after review (default)
 - Walk-throughs, quizzes and questions: on request, during the build too, within `09-tutor`'s limits while STATUS's `Build running` line stands (notes fixes wait for its end); polish passes: after the build (default)
 
@@ -41,6 +42,7 @@ source is the student's answer to `00-intake` question 5.
 | 4 | Mock exams, quarantined keys, mock pages | `practice/mock-<slug>.md` (slugs `{{EXAM_SLUG}}`, `{{EXAM_SLUG}}-<n>`, `{{EXAM_SLUG}}-harder`), each keyed by `practice/mock-<slug>-key.md` | the key script prints KEY OK for each (with a checker, every computable value asserted); the cold solver's disagreements are settled; `mock_leak.py` prints LEAK OK on each mock page |
 | 5 | Cram order, offered the night before | `practice/cram-order.md` | every item points into the verified notes (a link, or plain-text notes' `§x.y` title); `cram_check.py` prints CRAM OK |
 | 6 | Checker, {{ONLY IF SOMETHING IS COMPUTABLE}} | `_build/verify/` | its self-test checks every official part (or skips one it can't compute) |
+| 7 | Watch list, {{ONLY IF THE WATCH LIST LINE SAYS YES}} | `practice/videos.json`, `practice/videos.html`, a private artifact | `videos.py` exits 0, `verify_page.mjs` and `verify_videos.mjs` pass (the latter when it has segments), LEAK OK while a mock is untaken, URL in STATUS |
 
 Out of scope: the `reserved` and `out` rows of `MANIFEST.md`; deploys beyond private artifacts;
 any push or remote.
@@ -61,7 +63,7 @@ spawn, and spawn unnamed.
 | 05 verify | main, {{N}} section reviewers, {{N}} checklist auditors, {{N}} cold readers (one per two or three sections) | | fixes applied single-threaded |
 | 06 site | {{N}} converters, then main | | the notes page |
 | 07 cheat sheet, or the Review view | {{SHEET: main, {{N}} content gap scanners, then 1 question-type scanner, then 1 auditor | REVIEW VIEW: main | NEITHER: skipped}} | {{the sheet, if allowed | the Review view, <N> minutes of reading | skipped: no sheet allowed and no Review view}} | `cheatsheet/`, or the `.rv` tags in `notes/` and `_build/frag/` |
-| 08 practice | {{N}} mock writers (the harder set's included), then 1 cold solver per mock, then 1 cram order auditor | {{QUESTION SHAPES}} | `practice/` |
+| 08 practice | {{N}} mock writers (the harder set's included), then 1 cold solver per mock, then 1 cram order auditor{{WATCH LIST: , then 1 watch list ranker per topic, a cut-loss reviewer per topic with a cut and 1 annotator per topic}} | {{QUESTION SHAPES}} | `practice/` |
 
 `pending` rows of `MANIFEST.md` are checked at every stage boundary: one that has arrived is
 ingested and extracted before stage 03 runs, or before the next stage when 03 is done.
@@ -82,5 +84,5 @@ cross-references, the mock views and the checker each name the rule above that g
 
 - Every deliverable's "done when" holds.
 - `STATUS.md` lists every published artifact's URL and every judgment call.
-- Nothing under `sources/`, `_build/pages/`, `_build/text/`, `_build/slices/` or `_build/media/` is
-  tracked; no remote exists.
+- Nothing under `sources/`, `_build/pages/`, `_build/text/`, `_build/slices/`, `_build/media/` or
+  `_build/img/` is tracked; no remote exists.
