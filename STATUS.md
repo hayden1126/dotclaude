@@ -210,10 +210,9 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     unless the outer terminal has the `hyperlinks` feature, and Windows Terminal isn't
     auto-detected (`tmux list-clients -F '#{client_termfeatures}'` showed none). The lead set
     `terminal-features ',xterm-256color:hyperlinks'` live on HAYPC's server (gone at the next
-    server start); a reattach picks it up. With `mouse on`, tmux also takes the click, so Windows
-    Terminal needs Shift held to bypass mouse mode (Ctrl+Shift+click; untested). Fix: one line
-    beside the `progressbar` one in `tmux/claude.conf`, once Hayden confirms the reattach works;
-    rides the next PR after Nov 16.
+    server start). Hayden confirmed links open at once with plain Ctrl+click: no reattach, and
+    `mouse on` doesn't block it. Fix: one line beside the `progressbar` one in
+    `tmux/claude.conf`; rides the next PR after Nov 16.
   - **A shell redirect overwrites a file with no guard** (seen 2026-11-11, a lane session in
     another repo): the plan said a helper didn't exist (a research subagent's "found no existing
     ... helper", never checked by path), and the session then created that path with
