@@ -415,7 +415,25 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
   - **A custom CLAUDE_CONFIG_DIR breaks the hook layer** (lane config-dir, 2026-10-19): hook
     commands run `$HOME/.claude/hooks/...` and 16 hook files hard-code `~/.claude`, while
     `setup.sh` installs to `${CLAUDE_CONFIG_DIR:-$HOME/.claude}`. Matters for a new device
-    ([[hayden-new-device-goal]]); unreachable on HAYPC.
+    ([[hayden-new-device-goal]]) and is the first step of the multi-account item below.
+  - **Several Claude accounts on one machine** (Hayden, 2026-11-11): work account 1 for company
+    A, work account 2 for company B, a personal account for the rest. Each project gets a default
+    account at first, which can be overridden later. Open fork, Hayden's to think through: keep
+    every setting, skill and hook shared, or split some per account. Known so far:
+    - The likely mechanism is one `CLAUDE_CONFIG_DIR` per account: the login, `.claude.json`,
+      memory and history all live there. A project can't pick it from its own settings
+      ([[cc-project-env-reaches-hooks]]: a project's `env` never sets `CLAUDE_CONFIG_DIR`), so
+      the per-project default needs a launcher: a `claude` wrapper reading a per-project map,
+      plus `lane open`, `pass-respawn` and tab restore passing it on.
+    - It needs the item above fixed first.
+    - Lead's lean (opinion, unresearched): share CLAUDE.md, skills, agents and hooks (one
+      install, symlinked into each config dir); keep per account the login, `.claude.json`
+      (MCP servers, trust), memory, history and plugins; settings as the shared base plus a
+      small per-account overlay (`merge-settings.py` already merges layers), so a company's
+      MCP servers and allowed hosts never reach another account's sessions.
+    - Unchecked: whether Claude Code's own account switch (`/login`) can stand in for separate
+      dirs, and how each dir's sandbox and Edit denies protect the others.
+    Not picked yet; an `/interview` or a lane after Nov 16.
   - Cosmetic: `lane ls`'s PR column reads `none` for a lane whose newest PR sits past the
     200-PR horizon (a per-branch `--state all` call fixes it); an untitled versioned claude's
     tab reads `2.1.303` (`tmux/claude.conf` and `tmux/tmux-tab-bar` fall back to
