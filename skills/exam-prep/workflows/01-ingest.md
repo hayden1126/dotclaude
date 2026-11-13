@@ -73,7 +73,10 @@ name that is no doc id (`KEY NAMES NO DOC`), a `for ...` cell naming its own row
 `pending`, `reserved` or `out` set (`KEY NAMES A SET NOT IN SCOPE`). An answers file solves only
 in-scope sets, since a set that can't be extracted gives its answers no home: drop that set from
 the Key cell and cut its pages from the answers file's Scope, or give the answers file the set's
-Scope (a `pending` set's answers file then waits with it, step 5). The Key cell also sets
+Scope (a `pending` set's answers file then waits with it, step 5). An answers file that solves
+that set alone has only the second fix. When the drop is taken for a `pending` set, log in
+STATUS the set, the answers file and the pages cut: step 5 undoes it once the set arrives. The
+Key cell also sets
 each answers block's home file: a multi-set answers file's own pages go in
 `_build/solutions/<doc id in lower case>.md` (`WRONG SOLUTIONS FILE` otherwise, `02-extract`
 step 3).
@@ -95,7 +98,11 @@ from `pending: <planned scope>` to that planned scope in a form `extract_check.p
 03 (or before the next stage, once 03 is done), and log it in STATUS. An answers file that solves
 a `pending` set (`KEY NAMES A SET NOT IN SCOPE`, step 3) waits with it, its row `pending` too:
 once the set arrives, both rows get their planned scope, and the set is extracted before its
-answers file or in the same wave (`02-extract` step 1).
+answers file or in the same wave (`02-extract` step 1). When step 3 dropped the set instead
+(off a multi-set answers file's Key cell, its pages cut from that file's Scope, the drop logged
+in STATUS), its arrival undoes the drop: put the set back in the Key cell and its pages back in
+the answers file's Scope, then extract the set, and the answers file again in the same wave so
+the restored pages reach the solutions files (`02-extract` step 1). Take the STATUS line out.
 
 ## Ed Discussion
 
