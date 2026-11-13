@@ -206,6 +206,26 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     later (one in the second the previous holder released). A long wait can starve to its
     timeout. Fix shape: a ticket queue (a waiter writes a ticket, and only the oldest live ticket
     may take the lock; a fresh caller queues behind it). Not picked yet; a lane after Nov 16.
+  - **A research gate before architectural decisions** (Hayden, 2026-11-13, via a lane in
+    another repo: "perhaps include as a skill (w/ hook?) in practices skill suite"). That lane
+    answered a security question from its own docs and researched only when asked. Its model
+    run (two parallel Explore agents, about 2.7 min and 50k/86k tokens each, then six checks of
+    its own against code and primary sources) sets the bar: at least two researchers on separate
+    questions, briefed with facts not conclusions; primary sources with URL, date and the latest
+    version; every decision-changing claim checked; a gap table; a saved file marking what was
+    checked versus only reported. Scope: anything with a decision record, or a new dependency,
+    service, endpoint or table across a trust boundary, or a sign-in, permission or data-model
+    change; everything else writes "not needed: <why>". Lead's shape (sent to that lane):
+    - The bar and a two-researcher brief template go into `skills/research-discipline`.
+    - A PreToolUse(ExitPlanMode) check in `practices_check.py` refuses a plan with no
+      `## Research` section: an artifact path that exists, or `none needed: <why>`. The check
+      is hard, not deny-once, since one line satisfies it. A `none needed` plan that names a
+      scope trigger is denied once to confirm the skip.
+    - No hook runs before ExitPlanMode today. Unmeasured: whether a deny lands before Hayden's
+      plan dialog, as it does for AskUserQuestion. Test that first.
+    - The other repo's own decision-record check is theirs to file.
+    Where it lands is Hayden's call; the lead's pick is lane practices' next PR (it owns
+    `practices_check.py`), after Nov 16.
   - **The 5-hour usage limit may be gone for Hayden's account** (2026-11-12, unsettled): claude.ai
     Settings > Usage no longer lists it, but Claude Code's `/usage` still shows a session limit
     (Hayden), and 2.1.323's changelog announces no change. Settle it first: if the status line's
