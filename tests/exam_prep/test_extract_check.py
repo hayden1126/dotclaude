@@ -271,6 +271,25 @@ class ExtractCheck(unittest.TestCase):
         self.assertIn("D3: 3 pages in scope, 3 rendered, 3 with a block, 0 image only, "
                       "1 UNREADABLE", out)
 
+    def test_an_open_flag_is_named_by_file_and_line(self):
+        # A closing line with detail after its tail (`1 flagged UNREADABLE: p.3 weight.`) read as
+        # a block's own text: its `UNREADABLE:` counted as a second open flag, and the failure
+        # named only a count. It closes now, and each open flag is named by file and line.
+        self.extract("D3.md", FULL["D3.md"] + "UNREADABLE: the edge weight under node B\n"
+                     + "Coverage: D3 pp.2-4; 2 blocks; 0 image only; 1 flagged UNREADABLE: "
+                       "p.3 weight.\n")
+        code, out = self.run_check()
+        self.assertEqual(code, 1, out)
+        self.assertIn("D3: 3 pages in scope, 3 rendered, 3 with a block, 0 image only, "
+                      "1 UNREADABLE", out)
+        self.assertIn("_build/extract/D3.md:3: UNREADABLE flag still open", out)
+        self.assertNotIn("D3.md:4:", out)
+        # Once the flag is cleared, the closing line alone fails nothing.
+        self.extract("D3.md", FULL["D3.md"] + "Coverage: D3 pp.2-4; 2 blocks; 0 image only; "
+                     "0 flagged unreadable (p.3 read from the slide's notes).\n")
+        code, out = self.run_check()
+        self.assertEqual(code, 0, out)
+
     def test_an_arrived_pending_file_must_get_a_scope(self):
         self.extract("D10.md", "### [D10 p.1] arrived\n")
         code, out = self.run_check()

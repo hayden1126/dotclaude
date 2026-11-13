@@ -34,11 +34,11 @@ once they count one, its row is checked like any other. A STATUS.md it can't rea
 
 It prints one line per doc: what is in scope, what has a block, `(image only` entries, and
 `UNREADABLE:` flags (the brief's closing `Coverage:` line, qonly.closing(), doesn't count; a
-block's own line starting `Coverage:` does). Exit 1 on a page or
-slide with no block, an in-scope page not rendered, a doc with no blocks, an open `UNREADABLE:`
-flag, a Scope it can't read, any block for a `reserved` doc (FB-023) or for a `pending` one (its
-file has arrived: give it a real Scope); 0 otherwise. Blocks for a doc id MANIFEST lacks, or for
-an `out` row, are warnings.
+block's own line starting `Coverage:` does), each open flag then named by file and line. Exit 1
+on a page or slide with no block, an in-scope page not rendered, a doc with no blocks, an open
+`UNREADABLE:` flag, a Scope it can't read, any block for a `reserved` doc (FB-023) or for a
+`pending` one (its file has arrived: give it a real Scope); 0 otherwise. Blocks for a doc id
+MANIFEST lacks, or for an `out` row, are warnings.
 
 The question-only copies (qonly.py, hard rule 4, FB-056): a copy of an extract that holds
 answers must be exactly what qonly.py writes from that extract now (its first line, then
@@ -46,9 +46,12 @@ qonly.due()'s text); the check compares the two and never strips the copy again.
 the file and line, on an extract that holds answers with no copy; on a copy whose first line
 names another SHA-256 than the extract's (stale: the extract changed after qonly.py ran); on a
 line in a copy that is one qonly.py takes out of the extract (an answer); and on any other
-difference (edited by hand). A copy with no extract holding answers is read as an extract
-would be and fails on anything qonly.py would take out. It also fails on an extract's code fence
-that never closes before the next block header, the `Coverage:` line or the end of the file. Fences are qonly.fences()'s, read as CommonMark reads them (a line
+difference (edited by hand). It fails, by file and line, an extract's line that cites answers (an
+answers file paired with other docs, or a key page of a same-file Answers `yes` doc) and that no
+solution marker cuts, so the copy keeps it (qonly.leaks()): a solution whose marker is worded off
+the format, whatever the wording; a copy holding such a line fails too. A copy with no extract
+holding answers is read as an extract would be and fails on anything qonly.py would take out.
+It also fails on an extract's code fence that never closes before the next block header, the `Coverage:` line or the end of the file. Fences are qonly.fences()'s, read as CommonMark reads them (a line
 with an info string or 4+ spaces of indent closes nothing), so this check and qonly.py pair them
 the same way: a closed fence hides a loose solution marker (a `# solution` comment, a `####
 Solution` heading) from qonly.py, never the bracketed `Solution [<doc> <loc>]` or the bold
@@ -153,13 +156,14 @@ def load_qonly():
 
 
 def blocks(root, rows):
-    """{doc: {"pages", "frags", "blocks", "questions", "image_only", "unreadable"}}."""
+    """{doc: {"pages", "frags", "blocks", "questions", "image_only", "unreadable",
+    "unreadable_at"}}, the last a list of (extract name, line number) for each open flag."""
     out = {}
     closing = load_qonly().closing
 
     def entry(doc):
         return out.setdefault(doc, {"pages": set(), "frags": set(), "blocks": 0, "questions": 0,
-                                    "image_only": 0, "unreadable": 0})
+                                    "image_only": 0, "unreadable": 0, "unreadable_at": []})
 
     def answers(cited, own):
         """Whether a question block of `own` may cover pages of `cited`: its own doc, or an
@@ -192,7 +196,10 @@ def blocks(root, rows):
             if current is None or i in ends:
                 continue
             current["image_only"] += bool(IMAGE_ONLY.search(line))
-            current["unreadable"] += len(UNREADABLE.findall(line))
+            flags = len(UNREADABLE.findall(line))
+            current["unreadable"] += flags
+            if flags:
+                current["unreadable_at"].append((name, i + 1))
             if not question:
                 continue
             for c in CITE.finditer(line):
@@ -356,6 +363,12 @@ def qonly_check(root, rows):
                        "closes before the next block or the end of the file; close it with the "
                        "same mark (as many backticks or tildes) and rerun qonly.py")
             bad = True
+        for i, cite in qonly.leaks(text, rows):
+            out.append(f"_build/extract/{name}:{i + 1}: CITES AN ANSWERS PAGE: {cite}, on a line "
+                       "no solution marker cuts, so the question-only copy keeps it; if it gives "
+                       "an answer, start it `Solution [<doc> <loc>]:`, if it is the question's "
+                       "text, cite the question's own page instead, and rerun qonly.py")
+            bad = True
         for i in qonly.loose_in_fences(text, rows):
             out.append(f"warning: _build/extract/{name}:{i + 1}: a loose solution marker inside a "
                        "code fence, left in as code; if it starts a solution (a starter fence "
@@ -380,6 +393,10 @@ def qonly_check(root, rows):
                 out.append(f"{rel}:{line + offset}: ANSWER IN A QUESTION-ONLY COPY: {why}; "
                            "rerun qonly.py")
                 bad = True
+            for i, cite in qonly.leaks(body, rows):
+                out.append(f"{rel}:{i + 1 + offset}: ANSWER IN A QUESTION-ONLY COPY: a line "
+                           f"citing {cite}; rerun qonly.py")
+                bad = True
             out.append(f"warning: {rel} has no extract holding answers now; qonly.py removes a "
                        "copy it wrote, any other file is yours to delete")
             continue
@@ -396,16 +413,18 @@ def qonly_check(root, rows):
                                                     autojunk=False).get_opcodes()
                if op[0] != "equal"]
         # A line the copy has and qonly.py's text lacks is an answer when it is one qonly.py
-        # takes out of the extract, or reads as a solution marker.
+        # takes out of the extract, reads as a solution marker, or cites answers.
+        cites = dict(qonly.leaks(text, rows))
         leaked = []
         for tag, _, _, j1, j2 in ops:
             if tag == "delete":
                 continue
             for j in range(j1, j2):
                 why = answers.get(qonly.bare(have[j]))
-                if why is None and (qonly.BRACKETED.match(have[j])
-                                    or qonly.SOLUTION.match(have[j])):
+                if why is None and qonly.marker(have[j], set(), j, rows):
                     why = "a solution marker"
+                if why is None and j in cites:
+                    why = f"a line citing {cites[j]}"
                 if why:
                     leaked.append(j)
                     out.append(f"{rel}:{j + 1}: ANSWER IN A QUESTION-ONLY COPY: {why}; "
@@ -448,7 +467,7 @@ def main(argv=None):
         return 1
     found = blocks(args.root, rows)
     empty = {"pages": set(), "frags": set(), "blocks": 0, "questions": 0, "image_only": 0,
-             "unreadable": 0}
+             "unreadable": 0, "unreadable_at": []}
     skip = unverified(args.root)
     bad = False
     for doc, row in rows.items():
@@ -466,8 +485,12 @@ def main(argv=None):
             print(f"{doc}: unverified, added without an extract (STATUS `Unverified:` line, "
                   "FB-013): not checked until it has a block")
             continue
-        line, failed = check(args.root, doc, row, found.get(doc) or empty)
+        b = found.get(doc) or empty
+        line, failed = check(args.root, doc, row, b)
         print(line)
+        for name, at in b["unreadable_at"]:
+            print(f"_build/extract/{name}:{at}: UNREADABLE flag still open; read the page again "
+                  "or ask the student, then reword the line")
         bad |= failed
     for doc in sorted(found):
         kind = rows[doc]["kind"] if doc in rows else None

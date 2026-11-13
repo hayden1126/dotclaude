@@ -13,7 +13,8 @@ What counts as an answer, by the extract format (02-extract, "Solutions in an ex
   `#### Solution` heading, either with a list or quote mark before it), through the end of its
   block: the next `### [<doc> <locator>]` header, the closing `Coverage:` line, or the end of the
   file. The closing line is the brief's whole `Coverage: <range>; N blocks; K image only (...); U
-  flagged unreadable.` (or an older extract's `0 UNREADABLE.` / `UNREADABLE: none.` tail) with
+  flagged unreadable.` (or an older extract's `0 UNREADABLE.` / `UNREADABLE: none.` tail; the
+  flagged count may carry its detail, `1 flagged UNREADABLE: p.3 weight.`) with
   nothing but blank lines after it up to the next header or the end of the file (closing()): a
   solution's own `Coverage: 3/4 = 75%` or `Coverage: 4/5 statements; 3 blocks; 2 of 3 branches`
   line, or one of the closing form with more text after it, is part of the block and goes with
@@ -21,9 +22,12 @@ What counts as an answer, by the extract format (02-extract, "Solutions in an ex
   (fences()).
   The bracketed marker, `Solution [<doc> <locator>]` then a colon or the line's end, cuts
   wherever it sits, in a fence or not: starter code never writes it (`solution[i + 1] = x` isn't
-  one). So does the bold marker (`**Solution:**`, `**Solution**`, `**Official solution:**`), which
-  is Markdown and never a code comment: a starter fence whose closer was forgotten, closed by the
-  solution's own bare fence line, used to hide it. A cut that starts inside a closed fence keeps
+  one). A short qualifier before the first cite (`Solution to Q1a [...]:`, `Solution, part (a)
+  [...]:`) still makes it one, then only with its colon; `Answer [<doc> <locator>]:` is one when
+  <doc> is an Answers `yes` doc (bracketed()). So does the bold marker (`**Solution:**`,
+  `**Solution**`, `**Official solution:**`, `**Solution (Q1):**`), which is Markdown and never a
+  code comment: a starter fence whose closer was forgotten, closed by the solution's own bare
+  fence line, used to hide it. A cut that starts inside a closed fence keeps
   the fence's closing line, so the copy's fences pair as the extract's do. A looser marker (a
   `#### Solution` heading, a `# solution` comment, `Solution:`) inside a closed fence is code and
   cuts nothing (extract_check.py warns, naming its line: loose_in_fences()), unless a fence
@@ -39,6 +43,10 @@ What counts as an answer, by the extract format (02-extract, "Solutions in an ex
 - a page or section block of any other Answers `yes` doc (a past exam with its key, say), unless a
   question part of that doc names the page on its `Pages:` line: a page holding no question part
   is a key page.
+A line no marker cuts that cites answers (a cite of such an answers file, or of a key page:
+answers_cite()) is a solution worded off the format, which no pattern can list in full: it makes
+a copy due, and extract_check.py fails the extract naming its line until the marker is fixed
+(leaks()). A `Pages:` line holding nothing but cites, and the closing line, don't count.
 A copy is due for every extract that holds one of those, or any block of an Answers `yes` doc.
 Its first line names the extract and the SHA-256 of its bytes, which is how extract_check.py
 tells a stale copy. A run rewrites a copy whose text changed, leaves an unchanged one alone, and
@@ -57,19 +65,34 @@ SOLUTION = re.compile(r"^[-*>#\s]*(?:\*\*)?(?:official\s+)?solutions?\b(?:\*\*)?
 # The extract format's own marker (02-extract, the extract brief): `Solution [<doc> <locator>]`,
 # with a list or quote mark before it, bold around the word or the whole marker, and then a colon
 # or the end of the line (more cites may come first). It cuts even inside a fence. The tail keeps
-# starter code such as `solution[i + 1] = best(i)` from reading as one.
+# starter code such as `solution[i + 1] = best(i)` from reading as one. A short qualifier may come
+# between the word and the first cite (`Solution to Q1a [...]:`, `Solution, part (a) [...]:`): it
+# starts with a blank or a comma and holds no colon, bracket or `=` (so `solution = memo[i - 1]`
+# isn't one), and a marker with one needs its colon (so lecture text ending in a cite, `Solution
+# concepts [D4 p.3]`, isn't one). The same shape with `Answer` (`Answer [<doc> <loc>]:`) is a
+# marker only when the first cite's doc is an Answers `yes` one (bracketed()): `Answer the
+# following [HW1 p.2]:` is question text.
 CITED = r"\[[A-Za-z0-9_.-]+\s+[^\]\s][^\]]*\]"
-BRACKETED = re.compile(r"^[-*>#\s]*(?:\*\*)?(?:official\s+)?solutions?(?:\*\*)?\s*"
-                       + CITED + r"(?:\s*" + CITED + r")*(?:\*\*)?\s*(?::|$)", re.I)
+BRACKETED = re.compile(r"^[-*>#\s]*(?:\*\*)?(?:official\s+)?(?P<word>solution|answer)s?\b"
+                       r"(?P<qual>[ \t,]+[\w(),.'-][\w \t(),.'-]{0,29}?)?(?:\*\*)?\s*"
+                       r"\[(?P<doc>[A-Za-z0-9_.-]+)\s+[^\]\s][^\]]*\]"
+                       r"(?:\s*" + CITED + r")*(?:\*\*)?\s*(?::|(?(qual)(?!)|$))", re.I)
 # The bold marker: `**Solution:**`, `**Solution**` or `**Official solution**:`, with a list, quote
-# or heading mark before it. Markdown, never code, so it cuts even inside a fence; the closing `**`
-# keeps a Python `**solution` (dict unpacking) from reading as one.
-BOLD = re.compile(r"^[-*>#\s]*\*\*(?:official\s+)?solutions?\s*:?\s*\*\*", re.I)
+# or heading mark before it, and a short qualifier inside the bold (`**Solution (Q1):**`,
+# `**Solution to part (a)**`). Markdown, never code, so it cuts even inside a fence; the closing
+# `**`, which CommonMark never reads after a blank, keeps a Python `**solution` or `**solution,
+# **extra` (dict unpacking) from reading as one.
+BOLD = re.compile(r"^[-*>#\s]*\*\*(?:official\s+)?solutions?\b(?:[^*\n]{0,40}?[^*\s,])?\s*:?\*\*",
+                  re.I)
 BLOCK = re.compile(r"^###\s+\[(?P<doc>[A-Za-z0-9_.-]+)\s+(?P<loc>[^\]]+)\]")
 QUESTION = re.compile(r"Q[\w.]+(?: stem)?")
 PAGE_LOC = re.compile(r"p\.(\d+)(?:-(\d+))?")
 PAGES_LINE = re.compile(r"^[-*\s]*Pages:(.*)")
 CITE = re.compile(r"\[(?P<doc>[A-Za-z0-9_.-]+)\s+pp?\.\s*(?P<page>\d+)(?:\s*-\s*(?P<end>\d+))?\]")
+# Any `[<doc> <locator>]` cite, and a page locator (extract_check.py's CITE and CITE_PAGES).
+ANY_CITE = re.compile(r"\[(?P<doc>[A-Za-z0-9_.-]+)\s+(?P<loc>[^\]]+)\]")
+CITE_PAGES = re.compile(r"pp?\.\s*(?P<page>\d+)(?:\s*-\s*(?P<end>\d+))?")
+SEPARATORS = re.compile(r"(?:[\s,;&]|and\b)*")
 # CommonMark: an opener is at most 3 spaces in, a run of 3+ backticks or tildes, then an info
 # string (a backtick opener's holds no backtick). A closer is at most 3 spaces in, a run of the
 # opener's character at least as long, then nothing but blanks. Anything else is fence content.
@@ -79,8 +102,12 @@ CLOSER = re.compile(r"^ {0,3}(?P<mark>`{3,}|~{3,})[ \t]*$")
 # flagged unreadable.` Older extracts end it `0 UNREADABLE.` or, with `1 (image only: p.1)`,
 # `UNREADABLE: none.`. A `Coverage:` start, even with `; N blocks;` after it, is a solution's or a
 # tool's line as often as not.
+# The flagged count may carry its detail, in parentheses or after a colon (`1 flagged
+# UNREADABLE: p.3 weight.`); a solution's `Coverage: 4/5 statements; 3 blocks; 2 of 3 branches`
+# still lacks the image-only and unreadable parts. mock_leak.py's NOTE_LINE mirrors this.
 COVERAGE = re.compile(r"^Coverage:\s.*;\s*\d+\s+blocks?\s*;\s*\d+\s*\(?image\s+only\b.*;\s*"
-                      r"(?:\d+\s+(?:flagged\s+)?unreadable|unreadable:\s*none)\.?\s*$", re.I)
+                      r"(?:\d+\s+(?:flagged\s+)?unreadable(?:\s*\(.*\)|\s*:.*)?"
+                      r"|unreadable:\s*none)\.?\s*$", re.I)
 FIRST = "Question-only copy of _build/extract/{name} (sha256 {digest})"
 FIRST_LINE = re.compile(r"^Question-only copy of _build/extract/(?P<name>\S+) "
                         r"\(sha256 (?P<digest>[0-9a-f]{64})\)")
@@ -162,10 +189,20 @@ def fenced(lines):
             for i in range(start, end + 1)}
 
 
-def marker(line, code, i):
+def bracketed(line, rows):
+    """Whether the line is the bracketed marker (BRACKETED): `Solution [<doc> <loc>]:` with any
+    cite, `Answer [<doc> <loc>]:` only when <doc> is an Answers `yes` doc in `rows`."""
+    m = BRACKETED.match(line)
+    if not m:
+        return False
+    return m.group("word").lower() == "solution" or bool((rows.get(m.group("doc")) or {})
+                                                         .get("answers"))
+
+
+def marker(line, code, i, rows):
     """Whether lines[i] is a solution marker: the bracketed or bold form anywhere, a looser one
     only outside a fence."""
-    return bool(BRACKETED.match(line) or BOLD.match(line)
+    return bool(bracketed(line, rows) or BOLD.match(line)
                 or (i not in code and SOLUTION.match(line)))
 
 
@@ -229,7 +266,8 @@ def cuts(text, rows):
     for kind, start, end, m in segs:
         if kind != "block":
             if kind == "pre":
-                cut = next((i for i in range(start, end) if marker(lines[i], code, i)), None)
+                cut = next((i for i in range(start, end) if marker(lines[i], code, i, rows)),
+                           None)
                 if cut is not None:
                     drop(cut, end, "a solution before the first block")
             continue
@@ -249,7 +287,7 @@ def cuts(text, rows):
             if why:
                 drop(start, end, why)
                 continue
-        cut = next((i for i in range(start + 1, end) if marker(lines[i], code, i)), None)
+        cut = next((i for i in range(start + 1, end) if marker(lines[i], code, i, rows)), None)
         if cut is not None:
             drop(cut, end, f"the solution in [{doc} {loc}]")
     return lines, keep, runs, answers_doc
@@ -262,7 +300,48 @@ def loose_in_fences(text, rows):
     lines, keep, _, _ = cuts(text, rows)
     code = fenced(lines)
     return [i for i in sorted(code) if keep[i] and SOLUTION.match(lines[i])
-            and not BRACKETED.match(lines[i]) and not BOLD.match(lines[i])]
+            and not bracketed(lines[i], rows) and not BOLD.match(lines[i])]
+
+
+def answers_cite(doc, loc, rows, qpages):
+    """Whether a `[<doc> <loc>]` cite points into answers, by the rules cuts() takes blocks out
+    by: any cite of an answers file whose `solutions to <doc>` note names other docs only, or a
+    page cite of any other Answers `yes` doc that no question part's `Pages:` line names (a key
+    page). `qpages` is question_pages()."""
+    row = rows.get(doc) or {}
+    if not row.get("answers"):
+        return False
+    pair = row.get("answers_for") or set()
+    if pair and doc not in pair:
+        return True
+    p = CITE_PAGES.fullmatch(loc.strip())
+    if not p:
+        return False
+    lo = int(p.group("page"))
+    return not set(range(lo, max(lo, int(p.group("end") or lo)) + 1)) <= qpages.get(doc, set())
+
+
+def leaks(text, rows):
+    """[(line index, cite)] for each line the copy keeps (every line, when no marker cuts
+    anything) that cites answers (answers_cite()), however it is worded: a solution whose marker
+    no pattern reads. The closing `Coverage:` line and a `Pages:` line holding nothing but cites
+    (it names where a part sits, no answer) don't count. due() makes a copy due for one, and
+    extract_check.py fails the extract by file and line."""
+    lines, keep, _, _ = cuts(text, rows)
+    qpages = question_pages(lines, segments(lines))
+    ends = closing(lines)
+    out = []
+    for i, line in enumerate(lines):
+        if not keep[i] or i in ends:
+            continue
+        p = PAGES_LINE.match(line)
+        if p and SEPARATORS.fullmatch(ANY_CITE.sub("", p.group(1))):
+            continue
+        c = next((c for c in ANY_CITE.finditer(line)
+                  if answers_cite(c.group("doc"), c.group("loc"), rows, qpages)), None)
+        if c:
+            out.append((i, c.group(0)))
+    return out
 
 
 def strip(text, rows):
@@ -294,9 +373,11 @@ def answer_lines(text, rows):
 
 
 def due(text, rows):
-    """Whether an extract needs a question-only copy, and its stripped text."""
+    """Whether an extract needs a question-only copy, and its stripped text: one is due when
+    strip() takes something out, the extract holds a block of an Answers `yes` doc, or a line it
+    keeps cites answers (leaks()), so no agent reads an extract holding such a line."""
     body, removed, answers_doc = strip(text, rows)
-    return bool(removed or answers_doc), body
+    return bool(removed or answers_doc or leaks(text, rows)), body
 
 
 def digest(path):

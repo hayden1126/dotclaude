@@ -18,7 +18,11 @@ tool's `Coverage: 85%` ends no fence; a closed fence holding a line that could o
 forgotten closer balanced by the solution's own fence) exempts nothing; extract_check.py compares a
 copy with what qonly.py writes now and fails a copy with a solution line (naming file and line), a
 hand-edited one, a missing copy, a stale one and an extract's unclosed fence (naming file and
-line), and passes the copy qonly.py wrote."""
+line), and passes the copy qonly.py wrote; a marker with a short qualifier (`Solution to Q1a
+[...]:`, `**Solution (Q1):**`, `Answer [<answers doc> ...]:`) cuts, while `Answer the following [HW1 p.2]:`
+and starter code don't; a line no marker cuts that cites an answers page, whatever its wording,
+makes a copy due and fails the check by file and line; a closing line may carry detail after its
+flagged count."""
 import contextlib
 import importlib.util
 import io
@@ -76,6 +80,18 @@ Pages: [PE1 p.1-2]
 **Solution:** s, a, b
 ### [PE1 p.3] Key
 "Q1: s, a, b"
+"""
+REPRO_A = """### [HW1 p.1] Homework 1
+"Show your work."
+### [HW1 Q1a] Path
+Pages: [HW1 p.1]
+"Find a shortest path." (5 points)
+Solution to Q1a [HW1S p.1]: s, a, t, length 7.
+### [HW1 Q1b] Prove
+Pages: [HW1 p.2]
+"Prove it." (5 points)
+Solution to Q1b [HW1S p.2]: by exchange.
+Coverage: pp.1-2; 3 blocks; 0 image only; 0 flagged unreadable.
 """
 
 
@@ -508,6 +524,131 @@ class QOnly(unittest.TestCase):
                      "Coverage: HW1 pp.1-4; 4 blocks; 2 image only (p.3: a photo; p.4: a plot); "
                      "1 flagged unreadable."):
             self.assertEqual(qonly.closing(["### [HW1 p.1] x\n", "y\n", line + "\n"]), {2}, line)
+
+    def test_a_decorated_marker_is_cut(self):
+        # A marker phrased a little off the brief's form (`Solution to Q1a [...]`, `Solution,
+        # part (a) [...]`) matched no pattern: qonly.py wrote no copy, answer-blind agents read
+        # the extract whole, and extract_check.py passed.
+        self.write("_build/extract/hw1.md", REPRO_A)
+        self.qonly()
+        body = self.read("_build/q-only/hw1.md").partition("\n")[2]
+        self.assertNotIn("length 7", body)
+        self.assertNotIn("by exchange", body)
+        self.assertIn('"Find a shortest path." (5 points)\n', body)
+        self.assertIn('"Prove it." (5 points)\n', body)
+        code, out = self.check()
+        self.assertEqual(code, 0, out)
+        # Each decorated form cuts, in a fence or not; rows pair HW1S with HW1.
+        rows = extract_check.manifest_rows(os.path.join(self.root, "MANIFEST.md"))
+        qonly = load("qonly")
+        for mark in ("Solution to Q1a [HW1S p.1]: 42", "Solution, part (a) [HW1S p.1]: 42",
+                     "- Solution to Q1a [HW1S p.1]:", "**Solution to Q1a** [HW1S p.1]: 42",
+                     "Official solution for (a) [HW1S p.1]: 42", "**Solution (Q1):** 42",
+                     "**Solution (Q1)**: 42", "**Solution to part (a):** 42",
+                     "> **Official solutions, all parts:** 42", "Answer [HW1S p.1]: 42",
+                     "- Answer to Q1a [HW1S p.1]: 42", "**Answer [HW1S p.1]:** 42"):
+            for fence in ("", "```\n"):
+                text = "### [HW1 Q1a] x\nPages: [HW1 p.1]\nWrite f.\n" + fence + mark + "\nmore\n"
+                due, body = qonly.due(text, rows)
+                self.assertTrue(due, (mark, fence))
+                self.assertNotIn("42", body, (mark, fence))
+                self.assertNotIn("more", body, (mark, fence))
+
+    def test_a_decorated_bold_marker_in_a_key_file_is_cut(self):
+        # Repro B: the past exam's own `**Solution (Q1):**` line stayed in its copy.
+        self.write("MANIFEST.md", MANIFEST + PE_ROW)
+        for page in (1, 2, 3):
+            self.write(f"_build/pages/PE1/p-{page:03d}.png", "")
+        self.write("_build/extract/pe1.md", PE.replace("**Solution:**", "**Solution (Q1):**"))
+        self.qonly()
+        body = self.read("_build/q-only/pe1.md").partition("\n")[2]
+        self.assertEqual(body, '### [PE1 p.1] Practice exam\n"Time: 50 minutes."\n'
+                               '### [PE1 Q1] Trace\nPages: [PE1 p.1-2]\n'
+                               '"Trace a breadth-first search from s."\n')
+        code, out = self.check()
+        self.assertEqual(code, 0, out)
+
+    def test_a_line_citing_an_answers_page_fails_whatever_its_wording(self):
+        # The backstop: a line no marker cuts that cites an answers file paired with other docs,
+        # or a key page of a same-file Answers `yes` doc, makes a copy due and fails the check
+        # by file and line, however the solution was phrased.
+        for line in ("The key gives s, a, t, length 7 [HW1S p.1].",
+                     "Worked answer (from [HW1S p.1]): s, a, t.", "See [HW1S Q1]: s, a, t."):
+            with self.subTest(line):
+                text = REPRO_A.replace("Solution to Q1a [HW1S p.1]: s, a, t, length 7.", line)
+                self.write("_build/extract/hw1.md", text)
+                rows = extract_check.manifest_rows(os.path.join(self.root, "MANIFEST.md"))
+                self.assertTrue(load("qonly").due(text, rows)[0])
+                self.qonly()
+                self.assertTrue(os.path.exists(os.path.join(self.root, "_build", "q-only",
+                                                            "hw1.md")))
+                code, out = self.check()
+                self.assertEqual(code, 1, out)
+                self.assertIn("_build/extract/hw1.md:6: CITES AN ANSWERS PAGE", out)
+                self.assertNotIn("hw1.md:10:", out)  # the decorated marker there cuts
+        # A same-file Answers `yes` doc: a cite of its key page in a question part fails; its
+        # question pages don't.
+        self.write("MANIFEST.md", MANIFEST + PE_ROW)
+        for page in (1, 2, 3):
+            self.write(f"_build/pages/PE1/p-{page:03d}.png", "")
+        self.write("_build/extract/pe1.md", PE.replace(
+            '"Trace a breadth-first search from s."\n',
+            '"Trace a breadth-first search from s." [PE1 p.2]\nAs the key has it: s, a, b '
+            '[PE1 p.3]\n'))
+        self.write("_build/extract/hw1.md", HW)
+        self.qonly()
+        code, out = self.check()
+        self.assertEqual(code, 1, out)
+        self.assertIn("_build/extract/pe1.md:6: CITES AN ANSWERS PAGE", out)
+        self.assertNotIn("pe1.md:5:", out)
+        # A cite planted in a copy fails there too, and in a copy with no extract behind it.
+        self.write("_build/extract/pe1.md", PE)
+        self.qonly()
+        self.assertEqual(self.check()[0], 0)
+        copy = self.read("_build/q-only/hw1.md")
+        planted = copy.replace("**Conventions:** none\n",
+                               "**Conventions:** none\nAs on [HW1S p.2].\n")
+        self.write("_build/q-only/hw1.md", planted)
+        line = planted.splitlines().index("As on [HW1S p.2].") + 1
+        code, out = self.check()
+        self.assertEqual(code, 1, out)
+        self.assertIn(f"_build/q-only/hw1.md:{line}: ANSWER IN A QUESTION-ONLY COPY", out)
+        self.write("_build/q-only/extra.md", "### [HW1 Q9] x\nAs on [HW1S p.2].\n")
+        code, out = self.check()
+        self.assertIn("_build/q-only/extra.md:2: ANSWER IN A QUESTION-ONLY COPY", out)
+
+    def test_a_question_line_citing_its_own_pages_is_untouched(self):
+        # The negatives: a question part's cite of its own doc, a `Pages:` line naming an answers
+        # page (cites only, no answer text), `Answer the following [HW1 p.2]:` (a question doc's
+        # cite) and starter code shaped like a qualified marker cut nothing and need no copy.
+        rows = extract_check.manifest_rows(os.path.join(self.root, "MANIFEST.md"))
+        qonly = load("qonly")
+        text = ("### [HW1 Q1a] Path\nPages: [HW1 p.1], [HW1S p.1]\n"
+                '"Find a shortest path; see the figure on [HW1 p.2]." (5 points)\n'
+                "Answer the following [HW1 p.2]:\n```python\nsolution = memo[i - 1]\n"
+                "solution, best = memo[i - 1]\nf(\n    **solution, **extra\n)\n```\n"
+                "Coverage: pp.1-2; 1 blocks; 0 image only; 0 flagged unreadable.\n")
+        self.assertEqual(qonly.due(text, rows), (False, text))
+        self.write("_build/extract/d1.md", text)
+        code, out = self.check()
+        self.assertNotIn("d1.md", out)
+        for line in ("solution = memo[i - 1]", "solution.cache[k - 1]:", "solution (x) = [a b]"):
+            self.assertFalse(qonly.BRACKETED.match(line), line)
+
+    def test_a_coverage_line_with_detail_after_its_tail_closes(self):
+        # `1 flagged UNREADABLE: p.3 weight.` ended the closing form, so the line read as a
+        # block's own text and its `UNREADABLE:` as an open flag.
+        qonly = load("qonly")
+        for line in ("Coverage: D3 pp.2-4; 2 blocks; 0 image only; 1 flagged UNREADABLE: "
+                     "p.3 weight.",
+                     "Coverage: D3 pp.2-4; 2 blocks; 0 image only; 1 flagged unreadable (p.3: the "
+                     "weight).",
+                     "Coverage: D3 pp.2-4; 2 blocks; 0 image only; 2 unreadable: p.3, p.4"):
+            self.assertEqual(qonly.closing(["### [D3 p.2] x\n", "y\n", line + "\n"]), {2}, line)
+        # A solution's own line still doesn't close: it lacks the image-only and unreadable parts.
+        for line in ("Coverage: 4/5 statements; 3 blocks; 2 of 3 branches",
+                     "Coverage: 4/5 statements; 3 blocks; 2 of 3 branches: unreadable"):
+            self.assertEqual(qonly.closing(["### [D3 p.2] x\n", "y\n", line + "\n"]), set(), line)
 
     def test_the_marker(self):
         solution = load("qonly").SOLUTION
