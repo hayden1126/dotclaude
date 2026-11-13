@@ -1,6 +1,6 @@
 # 08 Practice
 
-Baseline as of 2026-11-10; changes only via `12-retro`.
+Baseline as of 2026-11-12; changes only via `12-retro`.
 
 The mock exams, their quarantined keys, the mock page and the cram order. A mock is a dress
 rehearsal: it reads and scores like the real exam, so the student finds what they can't do yet
@@ -68,8 +68,10 @@ section and the type it asks), its type and topic.
   Weight the sections by that statement when it gives weights, else evenly, and say which in the
   plan.
 - Quote each cloned question's text in the plan, its question part only, from its extract. The
-  writers read no source file: a homework's extract holds its solutions under each question, and
-  a file MANIFEST.md marks `Answers: yes` never reaches them (hub CLAUDE.md).
+  writers read the extracts of the sets they clone, which hold no answer, and no source file or
+  solutions file: a homework's source file holds its solutions beside the questions,
+  `_build/solutions/` holds them alone, and a file MANIFEST.md marks `Answers: yes` never reaches
+  them (hub CLAUDE.md).
 - Clones are at exam difficulty with fresh numbers, plus one harder set, its own mock, flagged as
   harder than the exam (FB-155), unless PLAN.md's priority order drops it for time.
 - True or false: for each statement the source tests, list the adjacent variants (swap the
@@ -91,7 +93,9 @@ The plan holds no answer: the writers read it.
 ## Step 3: Write the mocks
 
 1. One writer per mock file, from `<skill>/templates/agent-briefs.md`, section "Mock writer",
-   all spawned at once (each writes only its own file).
+   all spawned at once (each writes only its own file), its `{{EXTRACT FILES}}` slot filled with
+   the extracts under `_build/extract/` (which hold no answer, FB-056) of the sets its rows of the
+   plan clone.
 2. From the hub root, per mock, `python3 -I <skill>/scripts/mockpage.py practice/mock-<slug>.md
    --out _build/mock-<slug>.html`. It refuses any line off the format and names it: fix each,
    and rerun until it writes the page.
@@ -224,6 +228,16 @@ The night before, the student gets a reading list into the verified notes, never
   `06-site` step 4 says: `(15 min): Use: <the one thing>`. `cram_check.py` refuses anything else.
   An older exam's section on a reopened hub has its label from that build (`11-next-exam` step 5
   item 2); a row never makes one up.
+- Ranking ignores what a row relies on, so each row names its needs (FB-193): the earlier subsections
+  it uses, from the backbone's concept order (`03-backbone` step 2), its cross-section links into
+  the row's subsection and the Conventions subsections it applies, as ` needs: [§x.y](<notes
+  URL>#<id>), ...` at the row's end (plain-text notes: `needs: §x.y, §p.q`). A need no earlier row
+  reads and the student hasn't read becomes a row before it, inside the tier's budget (the tier's
+  lowest-ranked row moves down a tier to make room), or the row starts at it (its link names the
+  need, its minutes cover both); never a row that starts in the middle of a topic without its
+  prerequisites. A self-contained subsection names no needs. The `**Read already:**` line lists
+  the subsections the student has said they have read (STATUS, a tutor session), or `nothing`; a
+  need on it is met. `cram_check.py` refuses a need that is neither, naming the row and the fix.
 - Each row links `<notes URL>#<id>`, the published notes page from STATUS (plain-text notes: it
   names `§x.y Title` as text).
 - A mock the student hasn't taken yet gets its line after the tier that prepares it, the harder
@@ -234,11 +248,18 @@ The night before, the student gets a reading list into the verified notes, never
   cut takes out and `Not on <exam>` material among them (what the cut's backbone Conventions line
   says stays keeps its row); the Out of time line links the Must-know lists (plain-text notes: names
   them).
-- `## Tonight`: when `07-cheatsheet` found the sheet is collected with a name, its first item
-  tells the student to write their name on before handing it in (FB-132). Then the exam's date,
-  time and length and what its rules let the student bring (hub CLAUDE.md). With a sheet, the
-  last item is printing and packing the final sheet (`cheatsheet/<exam-slug>-final.pdf`; the mock
-  sheet when no mock was taken).
+- `## Tonight` is the exam-morning card (FB-158), the page the student reads again before leaving: one
+  item each for when (the exam's date, time and length), where (its room; where the room is split,
+  the student's room by last name), what to bring, what is banned, and, with a sheet, the sheet,
+  each ending `(CLAUDE.md, Exam facts)`, the hub's line it comes from, and a fact the hub doesn't
+  record written `not recorded: ask the course staff`. The sheet's item names the one sheet to
+  print and pack in plain words, its file, its link and whether it is printed yet (the final
+  sheet, `cheatsheet/<exam-slug>-final.pdf`, once step 8.3 has built it; until then, or with every
+  mock declined, the mock sheet), never "mock sheet" or "final sheet" as a label, and says whether
+  name and id go on it: when `07-cheatsheet` found the sheet is collected with a name, write them
+  on before handing it in (FB-132). `cram_check.py` checks only that the section has an item, so
+  the card needs no format of its own; step 8.4, and any change to which sheet is printed, update
+  its sheet item.
 
 Then:
 
@@ -249,33 +270,112 @@ Then:
    OK: the student reads the cram order before the mocks, so a row that states a mock's answer
    is reworded.
 3. A fresh reviewer audits it from the Review brief's "Audit" variant (`05-verify` step 4,
-   FB-105): every row's one thing against the section it links. A finding on a row is fixed in
-   the cram order; one on the notes goes through "Changing the notes or a sheet". Then 1 and 2
-   again.
+   FB-105), its `{{EXTRACT FILES}}` slot filled as that step says: every row's one thing against
+   the section it links. A finding on a row is fixed in the cram order; one on the notes goes
+   through "Changing the notes or a sheet". Then 1 and 2 again.
 4. **Rebuild and republish the notes page** (K02). The cram order is published at the top of the
    notes page: `assemble.py` renders the map's cram block from `practice/cram-order.md` on every
    build and opens the map (`06-site` step 4), so the page needs no edit of its own. Run "Changing
    the notes or a sheet" items 1 and 3 to 5 for the notes page (its compare against the keys, the
    rebuild and checks, the republish to the same URL; a rebuild over the Review view's minutes is
    untagged as item 3 says, or with no `.rv` tag left, new minutes as `07-cheatsheet`'s "Tag the
-   review" opening says: set and logged for the student to confirm in this build, which is
-   unattended, and asked after step 8.4, with the student present). Plain-text notes have no
+   review" opening says: set and logged for the student to confirm, asked in step 8's opening,
+   with the student present, when this runs in the build, which is unattended; after step 8.4 the
+   session asks at once (`07-cheatsheet`'s "Tag the review")). Plain-text notes have no
    page: the cram order stays a file. This item runs on its own: after items 1 to 3 here, after step 8.4, and
    after items 1 and 2 for any other later change to the cram order's tiers, rows or skip list. A
    change to the cram order inside "Changing the notes or a sheet" (a row that quotes the changed
    fact) needs no run of it: that list's item 3 rebuilds the page once, and the rebuild takes in
    the cram order as it stands. A change to a mock line alone needs no rebuild: the map holds
    none.
-5. Hand off and commit (Done when's list, up to here) as this
-   stage's opening says, the next-step line kept as step 4 set it. The student acts on the new
-   line, so it comes last, after the handoff's own STATUS edits and just before its commit: set
-   the next-step line to `08 step 8, the cram night`, with the cram order's path, and replace the
-   `Build running` line with `Stage 08 built: <exam-slug>, <date>` (`09-tutor` step 1 reads the
+5. With PLAN.md's `Watch list: yes`, run "Watch list" below first. Then hand off and commit (Done
+   when's list, up to here) as this stage's opening says, the next-step line kept as step 4 set
+   it. The student acts on the new line, so it comes last, after the handoff's own STATUS edits
+   and just before its commit: set the next-step line to `08 step 8, the cram night`, with the
+   cram order's path, and replace the `Build running` line with `Stage 08 built: <exam-slug>, <date>` (`09-tutor` step 1 reads the
    build's end from it); run
    `mock_leak.py STATUS.md practice/*-key.md` until it prints LEAK OK (a mention of the course's
    answer keys is reworded, since the phrase is a key's marker); commit. The last reply is one
    line, nothing above it worth reading: `Stage 08 is built: type /clear, then "start the cram
    night".`
+
+## Watch list
+
+A page of explainer videos per idea of the course, best first, with a notes row where no video is
+good (FB-194): `practice/videos.html`, built by `<skill>/scripts/videos.py` from `practice/videos.json`
+(its docstring holds the JSON's shape and its checks). The rules are `_build/WATCH.md`, ids W1 on.
+It runs when PLAN.md's `Watch list:` line reads yes, after the mocks and the cram order and before
+the cram night (step 7.5 sends it here); with `no`, or no such line, it is skipped. It also runs on
+the student's ask once the notes page is published (its rows link into it). Run alone,
+it changes no notes, sheet or mock, so it adds no `Build running` line; but it commits STATUS and
+`practice/`, so while a `Build running` line stands (a build, a stage run alone, or a `10-polish`
+pass, which adds one while it runs), the ask waits for that run to end (say so, writing nothing:
+the student asks again once it has ended). A `Polish:` line alone blocks nothing: a finished pass
+keeps it in STATUS. Any student's links on the
+`Watch list:` line, or given with the ask, are ranked like the rest (W12).
+
+1. **Set up.** When the hub lacks them, copy `<skill>/templates/WATCH.md` into `_build/WATCH.md`
+   (`cat`, hard rule 12) and add the line `_build/videos/` to `.gitignore`, before any transcript
+   or frame lands (W35). When `_build/watch/` already holds a run (a rerun in this exam), take that
+   run's files out before the first wave, or the merge and the cut-loss slot read a topic's old
+   gap-wave ranking or old cuts as this run's: `git rm -q -f --ignore-unmatch '_build/watch/cand-*'
+   '_build/watch/rank-*' '_build/watch/annot-*' _build/watch/merge-log.md`, then `rm -f` any of
+   them still there (a run cut short before its commit). Git keeps the committed ones in history.
+   `fetch-log.md` stays: item 2's first fetch starts it fresh. Draft the topic list in `_build/watch/topics.md`: one topic per notes
+   section (its key, name, section label), its ideas in teaching order (W22), each with the notes
+   ids it maps to (the backbone's id registry). Load the delegation skill before the first spawn.
+2. **The rankers**, in three parts, since a delegated agent can't run `yt-dlp`, a Python program
+   (L07), or reach a host the sandbox doesn't list (L02): agents search and judge, and the main
+   session fetches. Each part's waves run parallel inside and sequential across (hard rule 6).
+   1. **Search.** One "Watch list ranker" (`<skill>/templates/agent-briefs.md`, part `search`) per
+      topic, in waves of a few, each writing its candidates with their video ids to its own
+      `_build/watch/cand-<topic>.json`.
+   2. **Fetch**, by the main session, single-threaded: each candidate's captions, chapters and
+      storyboard frames into `_build/videos/<topic>/`, named by video id, with `yt-dlp` and W36 to
+      W39's fixes (a looped child's stdin from `/dev/null`, `--sub-langs "en.*,en"`, one fetch at a
+      time with a pause, H.264, one frame opened before any is judged). It runs with the video
+      hosts in `allowed_domains` (exact hosts, as the sandbox's block names them). In a build
+      that is the only way: a sandbox-off call can stop at a permission prompt no one answers
+      (hard rule 1), and it would run `yt-dlp` on untrusted pages outside the sandbox. Run alone,
+      with the student present, a fetch the sandbox still blocks runs with the sandbox off only
+      when the student says so. The run's first fetch starts `_build/watch/fetch-log.md` fresh
+      (`: > _build/watch/fetch-log.md`), so no earlier run's entry reaches the judge; each
+      candidate it can't fetch goes in it with why, and the build goes on. A later wave's fetch
+      appends, and a re-fetch that succeeds takes its candidate's line out.
+   3. **Judge.** Each topic's ranker, resumed (SendMessage to its id) or a fresh one from the
+      same brief, part `judge`, ranks from those files into its own
+      `_build/watch/rank-<topic>.json`; a fetch it asks for again goes back through item 2.
+   Each gap a ranker flags (W13) gets a search in the next wave, with the brief's GAPS slot, then
+   its fetch and judge; that wave writes `_build/watch/cand-<topic>-gaps.json` and
+   `rank-<topic>-gaps.json`, beside the first wave's files and never over them. A gap that wave
+   leaves empty becomes a notes row (W24).
+3. **Merge**, in the main session, single-threaded: build `practice/videos.json` from the
+   fragments, both of a topic's ranking files when a gap wave ran (`rank-<topic>.json` and
+   `rank-<topic>-gaps.json`), each idea's picks as ranked, with the fragment-only fields (`covers`, `rejected`,
+   `gaps`) left out (W19). Then the overlap audit across topics (W14 to W18) and the order check
+   (W20 to W23), each fold and cut logged in `_build/watch/merge-log.md`.
+4. **The cut-loss reviewers**, after any cut or condensation (W29): one fresh "Watch list cut-loss
+   reviewer" per topic that lost a candidate, reading each of the topic's ranking files (its GAP
+   WAVE slot). Check each `+ also` item it proposes against the
+   notes, then put it in that row's `also`.
+5. **The annotators**: one "Watch list annotator" per topic, each writing its own
+   `_build/watch/annot-<topic>.json`: the topic's intro, and each row's thread, differs and tested
+   lines, glosses and a notes row's concise box (W21, W24 to W28). Merge them into
+   `practice/videos.json`, single-threaded.
+6. **Build and check.** `python3 -I <skill>/scripts/videos.py` exits 0 (W30): fix each problem it
+   names in the JSON and run it again. Then `node <skill>/scripts/verify_page.mjs
+   practice/videos.html _build/shots/videos` and, when the page has segments, `node
+   <skill>/scripts/verify_videos.mjs practice/videos.html _build/shots/videos` pass, with
+   `allowed_domains` as `06-site` step 5.3 gives them; look at the shots (W31). While a mock is
+   untaken, `python3 -I <skill>/scripts/mock_leak.py practice/videos.html <keys>` prints LEAK OK,
+   `<keys>` the untaken mocks' keys (in the build, `practice/*-key.md`; W32).
+7. **Publish** `practice/videos.html` with the Artifact tool, private, and check its sharing
+   setting (W34, FB-118), as `06-site` step 6 says. While STATUS has a `Watch list: <URL>` line,
+   the page is this exam's, and a rebuild republishes to that same URL; with none (the first run,
+   or a run after `11-next-exam` step 5 moved the finished exam's URL to `Earlier exams:`), it is a
+   new artifact. Put a `Watch list: <URL>` line in STATUS (a version after it at each republish,
+   as "Changing the notes or a sheet" item 5 says), and commit `practice/videos.json`, `practice/videos.html`,
+   `_build/WATCH.md` and `_build/watch/`, never `_build/videos/`.
 
 ## Step 8: The cram night
 
@@ -288,7 +388,12 @@ and offers the checks it held (`09-tutor` step 1's Patches and Waiting checks bu
 - First, on a course with Ed, offer a re-pull, `ed-pull pull` (`01-ingest`, "Ed Discussion"): staff
   answer late questions the night before. A new staff answer that bears on the exam goes through
   `11-next-exam`'s "A source added to this exam", its `Source added:` STATUS line and source log
-  included.
+  included, but for a post that states only the exam's format (its question count, points or
+  timing), which is no source added (that section's opening): it updates hub CLAUDE.md's Exam
+  facts, quoted with its source, and the cram order's pacing (each mock line's minutes, the card),
+  then step 7's items 1 and 2; the notes are swept for a shape or pacing claim it makes stale (a
+  question count, a minutes-per-part line), each fixed as "Changing the notes or a sheet" says; no
+  key recheck, since no key's answer depends on it.
 - **The key recheck** is no part of the opening. A source added (this re-pull's, or one the
   student brings) ends by leaving its `Source added: <doc> <date>: done` line, and a reference
   change its `Reference changed:` line (step 4's rerun clause); step 8.1's key gate, before each
@@ -297,8 +402,23 @@ and offers the checks it held (`09-tutor` step 1's Patches and Waiting checks bu
 - Then the links: the notes page's URL from STATUS, whose top now holds the cram order (step 7.4),
   each mock page's URL, and the cram order's path. One line defines a tier: a block of reading rows
   with a minute budget, ranked by points per minute, read in order until time runs out.
+- With a sheet, one line in plain words names the one sheet to print: its file, its link from
+  STATUS, and whether it is printed yet (STATUS logs a reprint owed), never "mock sheet" or "final
+  sheet" as a label: the student hears two names as two sheets. Then the exam-morning card, the
+  cram order's `## Tonight` (step 7), shown once, to read again on the exam morning. A `Sheet
+  prune:` line in STATUS (`07-cheatsheet` step 6, FB-146) gets its question now, before any attempt: the
+  prune list shown, the blocks the student cuts taken off as "Changing the notes or a sheet" says.
+- The build's other judgment calls for the student, one line each. A `Figure shortlist:` line
+  (`03-backbone` step 5.4): the log's path, and a `10-polish` figure pass offered for the
+  student's adds and cuts, run when they choose; a no is logged and the line taken out. Without a
+  sheet, a `Review view: set to` line (`07-cheatsheet`'s "Tag the review"): the minutes the build
+  set, asked now, since they give away no answer: kept, or new ones on PLAN.md's line and the
+  Review view rebuilt as that section's opening says; the line comes out of STATUS once the student
+  answers.
 - Ask what the student has already read, and start from there: a row or a tier they say is read is
-  skipped tonight, not deleted.
+  skipped tonight, not deleted. A subsection they name that no row reads goes on the cram order's
+  `**Read already:**` line, and step 7 item 1 reruns; the map doesn't show that line, so it needs
+  no rebuild.
 
 One tab runs
 the cram night: any later session that resumes it first asks the student whether another tab still
@@ -317,7 +437,8 @@ a taken mock's, never an untaken one's, `practice/mock-values-key.md` or `_build
 (they hold every mock's answers; the one exception is step 4's rerun clause, which prints a taken
 mock's section of the values file alone, and step 8.1's key recheck writer opens them in its own
 worktree), and keeps every search inside `notes/`, `cheatsheet/`,
-`_build/frag/` and `_build/extract/` (which hold no mock), and `practice/cram-order.md`, which
+`_build/frag/`, `_build/extract/` and `_build/solutions/` (which hold no mock), and
+`practice/cram-order.md`, which
 step 7.2 keeps free of answers: one over the hub root prints key lines. The writer `09-tutor` step
 5 dispatches (the "Notes patch" brief) makes the change of "Changing the notes or a sheet" item 2,
 but in the cram order, which the main session fixes at the merge (`09-tutor` step 5.5.4), and, for
@@ -434,6 +555,16 @@ merge, as that step says.
      waits; a `blocked` report gets the main session's fix first (a change to the reference as step
      4's rerun clause says, say), then the gate again with the brief changed where the report says
      what stopped it, never a bare respawn, which stops the same way.
+   **A mock declined.** A student who says they won't take a mock, or the rest of them, gets one
+   line of pushback (FB-195), logged in STATUS: what a timed rehearsal finds that reading doesn't. Said
+   again, it stands, never argued a second time: add `Mocks declined: <date> (<slugs>)` to STATUS.
+   A declined mock stays untaken for every rule here (its key closed, the leak checks run with its
+   key), since the student may still take it. With every untaken mock declined, the mock sheet is
+   the exam sheet, and the card's sheet item names it. The final-sheet items STATUS holds go on only
+   once the student hears which untaken mocks' parts each would spoil (STATUS names each item's
+   mock and part, never an answer) and says to add them: then step 8.3 builds the final sheet with
+   them, the card names it, and step 7's items 1 and 2 rerun. The Review view's minutes wait on no
+   attempt: this step's opening asked them.
 2. Record the attempt in STATUS: the mock, then each miss (the part, and why it went wrong), or
    `no misses`, or `misses: from the walk-through` while `09-tutor` walks the student through it
    (its log's misses replace that before step 3). From here the mock counts as taken.
@@ -450,8 +581,9 @@ merge, as that step says.
    the intro's total adjusted), since the student has read the rows above it. With no reading row
    there (the next line is another mock's, or the list ends), they go in a new tier in that place,
    `## Tier <n>: Misses (<M> min)`, the tiers after it renumbered and the intro's tier count up by
-   one. Then step 7's item 1 again, and while a mock is untaken item 2 with the untaken mocks'
-   keys; then step 7.4, the notes page's rebuild and republish.
+   one. With a sheet, the card's sheet item names the final sheet now, not printed yet. Then step
+   7's item 1 again, and while a mock is untaken item 2 with the untaken mocks' keys; then step
+   7.4, the notes page's rebuild and republish.
 5. Commit and hand off as this stage's opening says, then clear each `held: mock first` mark
    (`09-tutor` step 5.5.9), its fields kept, and dispatch the oldest pending patch (`09-tutor` step
    1's Patches bullet).
@@ -476,7 +608,8 @@ The products, each one the hub has:
 | The notes page, its Review view included | `notes/NN-*.md`, `_build/frag/sec<N>.html`, `_build/notes.html` (plain-text notes: `notes/combined.md`) | the notes change, or the cram order's tiers, rows or skip list, which its map renders |
 | Each sheet | `cheatsheet/<exam-slug>-mock.html` and `-final.html` (or `.tex`), never a subfolder of `cheatsheet/` | a fact it copies changes, or a line is added |
 | The cram order | `practice/cram-order.md`, which `assemble.py` renders into the notes page's map (`06-site` step 4) | a row quotes the changed fact, or its tiers, rows or skip list change |
-| The checks | the questions check (FB-191), and the leak compare | the questions check, on a change to the notes; the leak compare, on every change while a mock is untaken |
+| The watch list | `practice/videos.json`, `practice/videos.html` (PLAN.md's `Watch list: yes`) | a notes id a row links changes or goes, or a How it's tested line a row's tested line comes from (W27) changes |
+| The checks | the questions check (FB-191), and the leak compare | the questions check, on a change to the notes or a sheet; the leak compare, on every change while a mock is untaken |
 
 1. **The baseline**, while a mock is untaken: step 4.5's command, run now, on the notes
    (`_build/notes.html`; plain-text notes: `notes/combined.md`) and on each sheet the student
@@ -513,10 +646,23 @@ The products, each one the hub has:
    - The cram order, once it exists, after the notes page's rebuild (its ids come from it): step
      7's item 1, and while a mock is untaken its item 2. A change to a mock line alone rebuilds no
      page: the map holds none.
-4. **The checks.** When the notes changed, `05-verify` step 5's questions check prints QUESTIONS
-   OK (FB-191): `mock_leak.py --questions` on the unattempted sets that step lists from
-   MANIFEST.md, skipped when there is none, its `--pages` the notes Markdown (`notes/*.md`). A hit is
-   reworded with fresh numbers and setup (S7) and repeats from item 2. While a mock is untaken, also
+   - The watch list, once it exists, after the notes page's rebuild: the rows' ids and tested
+     lines fixed in `practice/videos.json`, then "Watch list" item 6 (`videos.py` exits 0, the
+     page's checks, and its leak check while a mock is untaken).
+4. **The checks.** When the notes or a sheet changed, `05-verify` step 5's questions check
+   prints QUESTIONS OK (FB-191): `python3 -I <skill>/scripts/mock_leak.py --hub .`, run from
+   `<root>` by the main session; it reads every page under `notes/` and the sheets directly in
+   `cheatsheet/` (a LaTeX sheet as its `.tex`; a finished exam's frozen archive isn't read), and builds its file list from MANIFEST.md's attempt marks
+   (`extract_check.py --leak-files` prints it, for when a hit needs explaining) and prints
+   `QUESTIONS OK: no unattempted set` when there is none. An exit 2 checked nothing: fix what
+   it names as `05-verify` step 5 says and rerun (MANIFEST.md; a file it reads that isn't UTF-8,
+   named in the message: an extract or solutions file rewritten as UTF-8, a page, a sheet
+   or a course page's `.html` source in `sources/` saved again as UTF-8; `no page found`, with
+   no notes and no sheet yet; or an unattempted set,
+   or an answers file that solves one, with nothing extracted: extract it, after fixing its Key
+   cell as `templates/MANIFEST.md.tmpl`'s legend says when the message names that cell as empty
+   or unread).
+   A hit is reworded with fresh numbers and setup (S7) and repeats from item 2. While a mock is untaken, also
    the leak compare: run item 1 again and compare the hit lines with the baseline's (count them,
    since every hit on the notes reads "(the page)" and a second copy of an answer adds one). A new
    hit on a number, order or table answer is a leak: reword the change and repeat from item 2.
@@ -524,8 +670,9 @@ The products, each one the hub has:
    change only once this item passes, and a session that must end first finishes it: a `09-tutor`
    tab running meanwhile reads the notes and the sheets as committed (its step 1).
 5. **Republish** what changed and is published, once this item 4 passes: the notes page as
-   `06-site` step 6 says (its live read first when this session didn't build the page), and the
-   mock sheet as `07-cheatsheet` step 6 publishes it. Bump each one's version on its STATUS
+   `06-site` step 6 says (its live read first when this session didn't build the page), the
+   mock sheet as `07-cheatsheet` step 6 publishes it, and the watch list as "Watch list" item 7
+   says. Bump each one's version on its STATUS
    line (`v2` after its URL at the first republish, then `v3` and on) and tell the student. The
    final sheet isn't published. Then what the student must redo, each logged in STATUS until they
    say it is done: a printed sheet that changed (the final sheet included) is printed again; a
@@ -553,7 +700,9 @@ mocks, keys, `practice/mock-values-key.md`, `_build/mock-plan.md`, `_build/verif
 mock pages and the cram order are committed, handed off, STATUS's next-step line starts `08 step 8,
 the cram night` and it records `Stage 08 built: <exam-slug>, <date>`, the notes page's exam-day map
 holds the cram order and renders open (step 7.4; plain-text notes: no page), and step 7.5's last
-line asks for `/clear`. Then, on the cram night: STATUS LEAK OK against the untaken mocks' keys
+line asks for `/clear`. With PLAN.md's `Watch list: yes`, also: `videos.py` exits 0, the page's
+checks pass (W30 to W32), it is published privately and its URL is in STATUS. Then, on the cram
+night: STATUS LEAK OK against the untaken mocks' keys
 after each write; before each attempt the changed mock sheet shown and reprinted (with LaTeX, its
 PDF checked first); after it, the attempt and its misses in STATUS, the final sheet (changed as
 "Changing the notes or a sheet" says while a mock is untaken), the cram order updated with CRAM OK

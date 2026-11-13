@@ -1,6 +1,6 @@
 # 01 Ingest
 
-Baseline as of 2026-11-10; changes only via `12-retro`.
+Baseline as of 2026-11-12; changes only via `12-retro`.
 
 Ingest puts every source the plan names on disk under `<root>`, renders each in-scope page to an
 image and its text, counts everything from disk into `MANIFEST.md`, and pulls Ed. The main session
@@ -47,6 +47,41 @@ slide numbers next to PDF pages wherever the two differ (L04). Fill each row's N
 `<what it is>[; <remark>]`, what the source is in a few words ("Lecture 4: search") first, and its
 By, as the template's legend says: the page's source key shows both.
 
+Fill each row's Answers from intake's question 2 (`yes` for a file that holds answers), then its
+Key cell, after looking at the file's rendered pages (or, for a source without pages, its
+sections), in exactly one of these forms (the template's legend gives them too):
+
+- empty or `-`, for a doc that isn't an answers doc;
+- `for HW1, HW2 and HW3`, for a separate answers file: the sets it solves, each a doc id of this
+  table, never its own row's, and each in scope (below);
+- `pp. 7-9, 11` or `p.N`, for a doc holding its own key (a past exam) on those pages, a PDF only
+  (a deck's Pages holds its slide count, so a deck is never paged);
+- `inline`, when each solution sits under its question on the same page, so no page is a key
+  page;
+- `sections: Marking scheme, Answers`, for a source without pages, such as a Word exam or a
+  slide deck (`sections: #/5, #/6`): its key is the sections or slides with exactly those
+  locators, each extracted as a block of that name (`### [PE3 Marking scheme] ...`).
+
+Notes stay free text: nothing reads them for answers, so a Key form written there does nothing.
+Only the key pages or sections the Key cell names go to `_build/solutions/`; the cover, the rules
+and a formula sheet stay in the extract (`02-extract`). `extract_check.py` fails an in-scope
+Answers `yes` row with no Key form (`NO KEY`), a cell in any other wording (`UNREAD KEY`), a set
+name that is no doc id (`KEY NAMES NO DOC`), a `for ...` cell naming its own row
+(`KEY NAMES ITS OWN DOC`), a filled cell on a row whose Answers isn't `yes`
+(`KEY WITHOUT ANSWERS`), `sections: ...` on a doc with pages (`SECTIONS KEY ON A PAGED DOC`),
+`p.` or `pp.` on a doc without them (`PAGES KEY ON AN UNPAGED DOC`) and a `for ...` cell naming a
+`pending`, `reserved` or `out` set (`KEY NAMES A SET NOT IN SCOPE`). An answers file solves only
+in-scope sets, since a set that can't be extracted gives its answers no home: drop that set from
+the Key cell and cut its pages from the answers file's Scope, or give the answers file the set's
+Scope (a `pending` set's answers file then waits with it, step 5). An answers file that solves
+that set alone has only the second fix. When the drop is taken for a `pending` set, log it in
+STATUS as a drop line, `Pending set dropped: <set> off <answers doc>'s Key cell, <pages or
+slides> cut from its Scope`: step 5 undoes it once the set arrives, during the build or after it
+(`11-next-exam`). The Key cell also sets
+each answers block's home file: a multi-set answers file's own pages go in
+`_build/solutions/<doc id in lower case>.md` (`WRONG SOLUTIONS FILE` otherwise, `02-extract`
+step 3).
+
 ## Step 4: Originals
 
 When the student wants the originals gone, compare every original's SHA-256 with its `sources/`
@@ -61,7 +96,18 @@ root: give the student the exact command.
 A `pending` row is checked at every stage boundary. When its file arrives, rewrite the row's Scope
 from `pending: <planned scope>` to that planned scope in a form `extract_check.py` reads (`in`,
 `in, PDF pp.A-B` or `in, slides #/A-#/B`), run steps 1 to 3 for it, then extract it before stage
-03 (or before the next stage, once 03 is done), and log it in STATUS.
+03 (or before the next stage, once 03 is done), and log it in STATUS. An answers file that solves
+a `pending` set (`KEY NAMES A SET NOT IN SCOPE`, step 3) waits with it, its row `pending` too:
+once the set arrives, both rows get their planned scope, and the set is extracted before its
+answers file or in the same wave (`02-extract` step 1). When step 3 dropped the set instead
+(off a multi-set answers file's Key cell, its pages cut from that file's Scope, the drop logged
+in STATUS), its arrival undoes the drop: put the set back in the Key cell and its pages back in
+the answers file's Scope, then extract the set, and the answers file again in the same wave so
+the restored pages reach the solutions files (`02-extract` step 1). Take the drop line out. A
+set that arrives after the build runs this same undo in `11-next-exam`'s "A source added" (its
+step 4) whenever STATUS holds a `Pending set dropped: <set>` line for it, and in "A source added
+unverified" (its item 2) only for a set the student has attempted: that path refuses an
+unattempted set.
 
 ## Ed Discussion
 

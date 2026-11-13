@@ -1,6 +1,6 @@
 # 11 Next exam
 
-Baseline as of 2026-11-10; changes only via `12-retro`.
+Baseline as of 2026-11-12; changes only via `12-retro`.
 
 The next exam of a course whose hub this skill built. The hub is reused, never forked: the
 finished exam's mocks, keys and sheets are archived, the hub's copies of the skill's templates are
@@ -86,15 +86,24 @@ questions, each only when the reading left it open:
    `out` or was `in` for the finished exam: on this exam, or not. That answer makes the exam
    cumulative or not, row by row. For a row this exam covers only in part, ask for its first and
    its last in-scope slide, each as the PDF page or the printed slide number (FB-024: a deck split
-   across exams starts partway). Ask too which answer sets the student has attempted since (their
-   Answers cells become `yes, attempted`), and which question sets with no solutions row (their
-   Answers cells become `no, attempted YYYY-MM-DD`).
+   across exams starts partway). Ask too which question sets the student has attempted in full
+   since: each such set's own Answers cell becomes `yes, attempted YYYY-MM-DD` for a past exam
+   holding its own key, else `no, attempted YYYY-MM-DD`; a separate answers file's row stays
+   `yes`, since it may solve several sets.
 3. Missing sources (question 3).
-4. This exam's rules (question 4): date, time, length, sheet, calculator, book, question types.
+4. This exam's rules (question 4): date and time, length, room (where it is split, the student's
+   by last name), what to bring and what is banned, sheet, calculator, book, question types: the
+   cram order's exam-morning card reads them (FB-158).
 5. The Review view, the one part of question 5 asked per exam, only when this exam allows no sheet
    (question 4): offer the notes page's Review view and, on a yes, its minutes of reading
    (`00-intake` question 5, FB-143), for PLAN.md's `Review view:` line. A reopen asks it even when the finished exam had one, and even
    when the reading settled the rest.
+6. The finished exam as graded (FB-182): ask for the student's marked paper (a scan, a photo, the
+   course's PDF of it), asked at every reopen, even when the reading settled the rest. Without
+   it the build goes on, and PLAN.md's Decisions log `graded <old exam>: not given`.
+7. The watch list, for this exam (`00-intake` question 6, FB-194), with any video links the
+   student already uses, for PLAN.md's `Watch list:` line. A reopen asks it even when the finished
+   exam had one.
 
 Question 5's sheet preferences are the profile's, never asked again. The plan shows these defaults,
 each marked "(default)", beside `00-intake` step 3's own:
@@ -114,29 +123,43 @@ old path.
 
 ## Step 4: Draft the hub files
 
-Draft all three in `<root>`, as `00-intake` step 4 does, before showing anything:
+Draft each of these in `<root>`, as `00-intake` step 4 does, before showing anything:
 
 - **`MANIFEST.md`**, from `<skill>/templates/MANIFEST.md.tmpl`, the rows carried: its title names
   this exam; each row for this exam in an `in` form; new files as new rows with new doc ids (none
   renumbered or reused: citations use them); the finished exam's rows `in` when this exam covers
   them, else `out` with "on <old exam>" as Notes' remark; each carried row's Notes as
-  `<what it is>[; <remark>]`, what it is filled where the old row lacks it, and its By; Answers cells carried, each set the student
-  has attempted since marked `yes, attempted`, or with no solutions row `no, attempted
-  YYYY-MM-DD` (question 2); topic cuts for this exam only. A
+  `<what it is>[; <remark>]`, what it is filled where the old row lacks it, and its By; Answers
+  and Key cells carried (a row from before the Key column gets its Key cell as `01-ingest` step 3
+  writes it, and Notes keep only what it is and a remark), each set the student has attempted
+  since marked in its own row's cell, `yes, attempted YYYY-MM-DD` (a past exam holding its own
+  key) or `no, attempted YYYY-MM-DD`, an answers file's row left `yes` (question 2); topic cuts
+  for this exam only. A
   cumulative exam needs no other scope word: its old rows are `in`.
 - **`CLAUDE.md`**: its Exam facts become this exam's, from
   `<skill>/templates/hub-CLAUDE.md.tmpl`, with a line `Earlier exams:` naming each earlier exam,
   its date and its tag (the finished one added to any list already there); its Repo rules become
-  the template's current ones, word for word. Of the course's schedule,
+  the template's current ones, word for word, and its Tools line is kept, or found and written as
+  `00-intake` step 4 says when the hub lacks it. Of the course's schedule,
   only this exam's date, time and length are copied: homework due dates and the lecture calendar
   are pointed to at their home, never copied (FB-181).
+- **The graded exam** (FB-182), when question 6 brought it: copied into `sources/` by name with a MANIFEST.md
+  row `out` (Notes: `graded <old exam>; read once for its shape`), and read once, by the main
+  session, into `_build/<old-slug>-shape.md`: each question's shape (its type, its points, the
+  minutes it took or would take), and where points were lost and why, knowledge or time, by
+  question and topic, never a question's text or answer. Its first line labels it a modelling
+  choice from one exam, never an exam-format claim (hard rule 8). It feeds three things, each
+  logged as that modelling choice: PLAN.md's depth (a topic that lost points for knowledge gets a
+  Decisions line for more depth), the mocks' minute budgets and the cram order's lead ("The build
+  on a reopened hub", row 08). Nothing reads the paper again.
 - **`PLAN.md`**, from `<skill>/templates/PLAN.md.tmpl`, reading `Approved: not yet`, with this
   exam's slug (`exam2`, never the finished exam's) and, first in its Decisions, the line
   `- Reopened from <old exam> (tag exam/<old-slug>): every stage also follows 11-next-exam's "The
   build on a reopened hub" (the student)`. That line routes a draft here and tells a resumed build
   what differs. Its `Review view:` line is this exam's: `none: a sheet is allowed`, `<N> minutes
   of reading` from question 5, or `none: the student declined it`, and its Deliverables and 07
-  rows follow it.
+  rows follow it. Its `Watch list:` line is question 7's answer, in `00-intake` question 6's
+  forms.
 
 Then `00-intake` steps 5 and 6: audit the plan, show it with the scope rows and the exam facts,
 and refine it. Show also what step 5 will do: the files it archives and the template copies it
@@ -153,11 +176,16 @@ In this order, each item logged as it lands:
    `practice/<old-slug>/`: every `practice/mock-*.md` (the keys and `mock-values-key.md` among
    them), `practice/cram-order.md`, `_build/verify/mock_key.py`, `_build/mock-plan.md` and each
    `_build/mock-<slug>.html`; and into `cheatsheet/<old-slug>/`: every file of its sheets (`.html`,
-   `.pdf`, `.tex`, `.layout.json`) and `_build/sheet-outline.md`. The Review view's tags were the
+   `.pdf`, `.tex`, `.layout.json`) and `_build/sheet-outline.md`. A watch list, when one was built,
+   goes too: `practice/videos.json` and `practice/videos.html` into `practice/<old-slug>/`, and
+   `_build/watch/` whole into `practice/<old-slug>/watch/` (it is tracked, and its topics, picks and
+   merge log were the finished exam's), so a new run starts from an empty `_build/watch/`. Delete
+   `_build/videos/` (`rm -rf`: gitignored, W35, so the tag can't keep it, and a new run's judge
+   must never read the finished exam's fetched files). The Review view's tags were the
    finished exam's: take each `.rv` marker out of `notes/` and each class `rv` out of
    `_build/frag/`, the blocks kept (`07-cheatsheet` tags this exam's afresh, and `assemble.py`
    refuses a tag while PLAN.md's line says `none`). Move STATUS's attempt, miss and
-   final-sheet lines into `practice/<old-slug>/attempts.md`. Then the listing shows none of them at
+   final-sheet lines and its `Mocks declined:` line into `practice/<old-slug>/attempts.md`. Then the listing shows none of them at
    the top level (`practice/tutor/` and `_build/verify/set_key.py` stay: they are the course's
    homework). Why: every rule that finds the current exam's mocks, keys and sheets reads a top-level
    name (`practice/*-key.md`, `practice/mock-<slug>.md`, `cheatsheet/<exam-slug>-mock.pdf`), and
@@ -178,11 +206,17 @@ In this order, each item logged as it lands:
    files differ, the usual case, so a `&&` after it would skip the copy. Then `cmp` each copy
    with its template. Then the chassis: its diff the same way, then `cat
    <skill>/templates/notes-chassis.html > _build/chassis.html`, its placeholders filled for this
-   exam as `06-site` step 1 says. A hub-local source key goes: a `source_key.py`, the key fragment
+   exam as `06-site` step 1 says: a hub copy older than the skill's takes the new chassis whole
+   (the theme chrome, the scrollbars and the keys among it), never a merge into the old one. When
+   the hub has `_build/WATCH.md` (a watch list was built), it is reconciled the same way, its diff
+   to the same file, then `cat <skill>/templates/WATCH.md > _build/WATCH.md`. A hub-local source
+   key goes: a `source_key.py`, the key fragment
    or notes file it wrote, and the hrefs it wrote into `a.slink`s, each removed (`git rm` the files,
    the hrefs taken out of their fragments), logged; `assemble.py` now builds the key from
    MANIFEST.md and refuses a citation with an href of its own. Add any of `00-intake` step 1's
-   `.gitignore` lines the hub lacks.
+   `.gitignore` lines the hub lacks. A line ignores only untracked files, so for each line added,
+   `git ls-files <path>` lists the files already tracked under it: `git rm --cached <file>` each
+   one (it stays on disk, out of the index), logged.
    Then list in the log the STYLE rules the diff adds (their `S` numbers): the old sections may
    miss them, and the report offers a `10-polish` pass. S33 is never left to that offer: the
    reopened build's `05-verify` gives each old subsection this exam keeps `in` that has no
@@ -192,9 +226,16 @@ In this order, each item logged as it lands:
 3. **Reset STATUS.** Take out every line about the finished exam's build, mocks, sheets and cram
    night: `Stage 08 built`, `Reopened build:`, `Tutor:`, `Polish:`, `Source added:`, `Skip asked:`,
    the final-sheet items, a mock sheet logged as changed or to print again, each `Key checked:`
-   and `Reference changed:` line and the key rechecks' part ids (item 1 moved the attempts). An `Unverified:` line stays: its material is still unchecked
-   ("A source added unverified"). Keep the notes page's URL line (same URL from here on), and add
-   the finished exam's sheet and mock page URLs to the `Earlier exams:` line (start it
+   and `Reference changed:` line, the `Watch list:` line, the key rechecks' part ids, and any of
+   the build's judgment calls still waiting for the student: a `Sheet prune:` line (its sheet is
+   archived), a `Review view: set to` line (the minutes were the finished exam's; step 3's question 5
+   sets this exam's on PLAN.md's line) and a `Figure shortlist:` line (the backbone keeps the shortlist, and a
+   `10-polish` figure pass stays on offer). Item 1 moved the attempts and the `Mocks declined:`
+   line. An `Unverified:` line stays: its material is still unchecked
+   ("A source added unverified"). A `Pending set dropped:` line stays too while its set's row is
+   still `pending`: its undo runs when the set arrives (`01-ingest` step 5). Keep the notes
+   page's URL line (same URL from here on), and add the finished exam's sheet, mock page and watch
+   list URLs to the `Earlier exams:` line (start it
    when there is none), as `<old exam>: <name> <URL>, ... (tag exam/<old-slug>)`. Set the
    next-step line to `11 step 6, launch the build for <exam> (_build/logs/reopen-<old-slug>.md)`.
 4. **The approval line, last**, as `00-intake` step 7 item 3 says. Commit, staging the archive's
@@ -238,20 +279,25 @@ check the references by hand and rebuild `notes/combined.md` from the section fi
 | Before 01 | Rebuild the page as it stands with the reconciled chassis and copies (`06-site` steps 3 and 5): a fragment, a check or a screenshot that fails is fixed at its source, as `06-site` says, and committed. |
 | 01 | Only the rows this exam added or changed: copy, render (a row whose range grew renders its new pages, `render_pdf.sh <file> <doc> <first> <last>`). |
 | 02 | Extract only what has no block yet; `extract_check.py` runs over the whole MANIFEST (its warnings on an `out` row's blocks are expected). |
-| 03 | Extend `_build/backbone.md`. Its title names this exam. The Conventions keep the old lines and add this exam's; the old cut lines go, and each part of the old notes this exam doesn't cover gets a cut line as a topic cut does (`03-backbone` step 1): each subsection whose sources in the coverage matrix all lie outside this exam's scope (an `out` row; pages or slides outside an `in` row's range for this exam, as when a deck is split across exams; or this exam's topic cuts), a whole section as `§N (all)`, each with why (MANIFEST's row or range, or the cut's source). New material goes in new sections after the last (`sec-<N+1>`, `notes/<NN+1>-<slug>.md`); a short addition to an old section is a new subsection placed just before its Must know, whose number moves up by one and whose id stays. Nothing else is renumbered, and no id or file is reused (the cram order, the map and Must-know lines link them). New coverage-matrix and How it's tested rows; `coverage_check.py` over everything. |
-| 04 | Writers for the new sections only, each brief carrying the `## Patterns` lines of `_build/logs/tutor.md` (where this student stalled before). The main session writes a new subsection in an old section itself, in the Write brief's Format, adds its Must-know line, and updates any text that names the moved Must know by number. It banners what each cut line names, `> **Not on <exam>:** <why, cited>`, at the top of a whole section or at the subsection, and judges each old `Not on <old exam>` banner: material this exam covers loses it, material still out gets this exam's name, and one inside a section-level banner goes. In a section cut only in part, its Must-know lines follow `10-polish` step 3's rule for a cut: a line that names only cut material goes, one that names cut and kept material is reworded to the kept part (a section cut whole keeps its list, under its banner). `linkcheck.py` over everything. |
+| 03 | Extend `_build/backbone.md`. Its title names this exam. The Conventions keep the old lines and add this exam's; the old cut lines go, and each part of the old notes this exam doesn't cover gets a cut line as a topic cut does (`03-backbone` step 1): each subsection whose sources in the coverage matrix all lie outside this exam's scope (an `out` row; pages or slides outside an `in` row's range for this exam, as when a deck is split across exams; or this exam's topic cuts), a whole section as `§N (all)`, each with why (MANIFEST's row or range, or the cut's source). New material goes in new sections after the last (`sec-<N+1>`, `notes/<NN+1>-<slug>.md`); a short addition to an old section is a new subsection placed just before its Must know, whose number moves up by one and whose id stays. Nothing else is renumbered, and no id or file is reused (the cram order, the map and Must-know lines link them). Each old section with no `Diagram-taught` line gets `- Diagram-taught: pre-S11` (`03-backbone` step 5.2, FB-015): `coverage_check.py` warns on it, naming `10-polish`'s figure pass, which sets `yes` or `no`, and fails a section left with no line once any section carries one. New coverage-matrix and How it's tested rows; `coverage_check.py` over everything. |
+| 04 | Writers for the new sections only, each brief carrying the `## Patterns` lines of `_build/logs/tutor.md` (where this student stalled before), labelled in the brief "evidence from one past exam, never an exam-format claim" (hard rule 8, FB-182). The main session writes a new subsection in an old section itself, in the Write brief's Format, adds its Must-know line, and updates any text that names the moved Must know by number. It banners what each cut line names, `> **Not on <exam>:** <why, cited>`, at the top of a whole section or at the subsection, and judges each old `Not on <old exam>` banner: material this exam covers loses it, material still out gets this exam's name, and one inside a section-level banner goes. In a section cut only in part, its Must-know lines follow `10-polish` step 3's rule for a cut: a line that names only cut material goes, one that names cut and kept material is reworded to the kept part (a section cut whole keeps its list, under its banner). `linkcheck.py` over everything. |
 | 05 | The checker grows: this exam's examples added, the self-test extended to its sets' official parts, every old assertion kept. Reviewers read the new sections and subsections and any old text that changed beyond a banner. |
-| 06 | The exam-day map is rewritten from this exam's How it's tested rows (a shape on cut material stays out, as `06-site` step 4 says). The whole page is rebuilt and checked, then republished to the notes URL STATUS holds (`06-site` step 6, its live read first), its version bumped. |
+| 06 | The exam-day map is rewritten from this exam's How it's tested rows (a shape on cut material stays out, as `06-site` step 4 says). The whole page is rebuilt and checked, then republished to the notes URL STATUS holds (`06-site` step 6, its live read first), its version bumped. When that URL can't be updated (STATUS's owner for it isn't this account, or the session has no write access), a new private artifact as `06-site` step 6 says: the hand-off leads with the new link, and the old page is marked stale in STATUS (FB-118). |
 | 07 | This exam's sheets, `cheatsheet/<exam-slug>-mock.html` and on, from the template, never from the archived ones. With no sheet allowed, the Review view when PLAN.md's `Review view:` line gives minutes, tagged afresh as `07-cheatsheet`'s "Tag the review" says (step 5.1 took the finished exam's tags off). When this exam covers an earlier exam's material, `diff` each archive's mock and final sheets (`cheatsheet/<slug>/`, every earlier exam's): the lines a final sheet added are the student's earlier misses, and each in this exam's scope is a candidate at step 2's picking. |
-| 08 | A fresh `_build/mock-plan.md`, `_build/verify/mock_key.py` from the template, mocks under this exam's slug, and a fresh cram order whose skip list names the old material the cut lines name, and whose Out of time line leaves out the sections cut whole. When this exam covers an earlier exam's material, step 3.4 also compares each clone with every archived mock (`practice/<slug>/mock-<slug>.md`, listed and read by path, never a key), so a new mock doesn't reuse an instance the student has already seen answered. |
+| 08 | A fresh `_build/mock-plan.md`, `_build/verify/mock_key.py` from the template, mocks under this exam's slug, and a fresh cram order whose skip list names the old material the cut lines name, and whose Out of time line leaves out the sections cut whole. With `_build/<old-slug>-shape.md` (step 4), the plan's minutes per question follow the minutes its shapes took against their points, and the cram order's first tier leads with the topics that lost points for knowledge, each a modelling choice from one exam logged in STATUS (hard rule 8), never a claim about this exam's questions. When this exam covers an earlier exam's material, step 3.4 also compares each clone with every archived mock (`practice/<slug>/mock-<slug>.md`, listed and read by path, never a key), so a new mock doesn't reuse an instance the student has already seen answered. |
 | 09, 10 | As written. The tutor log goes on, its old sections kept. |
 
 ## A source added to this exam
 
 A source the approved plan doesn't name, such as a widening `10-polish` can't make because its
 material was never extracted, or a file a staff post adds after the build; and a `pending` row's
-file that arrives after the build (one that arrives during it is the build's, `01-ingest` step 5).
-Not official solutions to a set MANIFEST.md already lists: `09-tutor` step 6 takes those. While a
+file that arrives after the build (one that arrives during it is the build's, `01-ingest` step 5),
+whose arrival also undoes any drop STATUS logs for it (step 4).
+Not official solutions to a set MANIFEST.md already lists: `09-tutor` step 6 takes those. Not a
+staff post that states only the exam's format (its question count, points or timing, FB-159): that updates
+CLAUDE.md's Exam facts, quoted with its source, and the cram order's pacing (`08-practice` step 8's
+re-pull says how), and sweeps the notes for a shape or pacing claim it makes stale, each fixed as
+`08-practice`'s "Changing the notes or a sheet" says; no extract, no key recheck. While a
 build runs, a new source waits for its end: the student brings it again then.
 
 It runs as a build stage run alone, the way `07` or `08` run on request (hard rule 1), in the
@@ -270,7 +316,8 @@ build is this build's end, not a stage's.
 1. **Check.** As `10-polish` step 1 says: `05-verify` done (and `06-site` with a page), no `Build
    running` line, the hub free, and whether a mock is untaken. While one is, `08-practice` step 8's
    fence binds this session and every agent it spawns: searches only in `notes/`, `cheatsheet/`,
-   `_build/frag/` and `_build/extract/`, nothing opened under `practice/` but
+   `_build/frag/`, `_build/extract/` and `_build/solutions/` (an answer-blind brief keeps
+   `_build/solutions/` out of its own scope), nothing opened under `practice/` but
    the cram order (and 08 step 8's one exception, its step 4's rerun clause), never `_build/verify/mock_key.py` or
    `_build/mock-plan.md`; each brief it spawns keeps its own scope and adds: nothing opened under
    `practice/`, no `_build/verify/mock_key.py` or `_build/mock-plan.md`, and no search over the hub
@@ -303,14 +350,24 @@ build is this build's end, not a stage's.
 4. **Build**, for that source only. While a mock is untaken, the student looks away from this window
    from here to step 5's look-back: tell them first to come back when a reply's only line asks for
    `/clear`, and to type it before reading anything above that line. The MANIFEST.md change first,
-   then `01-ingest` steps 1 to 3, `02-extract`, then `03-backbone` and `04-write` placing and
+   then `01-ingest` steps 1 to 3, `02-extract` (a new set with solutions gets a solutions file
+   beside each extract holding its blocks, `_build/solutions/<name>.md` under that extract's name,
+   a deck split over two extracts two, from the agent that writes its extract, or from its answers
+   file's own agent when that file solves several sets). For a `pending` row's file, when STATUS
+   holds a `Pending set dropped: <doc>` line (`01-ingest` step 3), the MANIFEST.md change is
+   `01-ingest` step 5's undo: the set back in the answers file's Key cell and its pages back in
+   that file's Scope, then the set and the answers file extracted in one wave (`02-extract` step
+   1), so the restored pages reach the solutions files, and the drop line taken out in 02's
+   commit. Then `03-backbone`
+   and `04-write` placing and
    writing the new material as rows 03 and 04 of "The build on a reopened hub" do: new sections
    after the last, or a subsection before an old section's Must know, with their ids,
    coverage-matrix and How it's tested rows. Nothing else of those rows applies: the backbone's
    title stays, its Conventions keep their lines and add any the new material needs (`03-backbone`
    step 4), cut lines and banners change only where the material takes cut material back
    (`10-polish` step 3's widening), and no `Reopened build:` line is written, since the log tracks
-   this build. A placement that differs from the report's is logged, for step 5's report. Then
+   this build. Each old section with no `Diagram-taught` line is marked `pre-S11` as row 03 says,
+   since the new sections carry theirs. A placement that differs from the report's is logged, for step 5's report. Then
    `05-verify` on the new material, then the products as `10-polish` step 3's widening says, each
    the hub has, rebuilt and rechecked as `08-practice`'s "Changing the notes or a sheet" items 2 to
    4 say (the one list of the published products and what a change does to each: the notes page
@@ -330,8 +387,10 @@ build is this build's end, not a stage's.
    source before the next attempt, from step 5's `done` line). The log marks each stage's end once
    its commit is made (`02 done`), each product's (`page done`, `sheets done`, `cram order done`),
    and `step 4 done` after the last. Before
-   `step 4 done`, that section's item 4 questions check prints QUESTIONS OK on the notes as they
-   now stand (FB-191), so
+   `step 4 done`, that section's item 4 questions check prints QUESTIONS OK on the notes and the sheets
+   as they now stand (FB-191), `python3 -I <skill>/scripts/mock_leak.py --hub .` run
+   by the main session (the script builds its file list from MANIFEST.md's attempt marks, a new
+   set's included), so
    step 5's republish carries no hit. With no mock untaken, a sheet's change is shown to the
    student before it is made (FB-137). While one is, every change to the notes or a sheet runs
    `08-practice`'s "Changing the notes or a sheet" with the untaken mocks' keys, its item 4
@@ -358,7 +417,9 @@ build is this build's end, not a stage's.
    product that is published, its version bumped), and log `republished`. Then the report to the
    student: what was added where (a placement that differs from step 2's report), each text
    reworded, the version, and what they must redo, as that item 5 lists it (a changed sheet printed
-   again, the cram order's next mock line). Last, log `step 5 done`, hand off and commit;
+   again, the cram order's next mock line). After `Stage 08 built`, a `Figure shortlist:` line
+   this path's `03-backbone` step 5.4 wrote is offered in the same report, as `08-practice` step
+   8's opening offers one (a no logged and the line taken out). Last, log `step 5 done`, hand off and commit;
    the closing commit takes out the `Build running` line and any `Skip asked:` line for it, and
    rewrites the source's line as `Source added: <doc> <date>: done (<the log>)`. This path
    spawns no key recheck: while a mock is untaken, that line is what `08-practice` step 8.1's key
@@ -388,13 +449,16 @@ read).
   rows the change added, or changed from a row reading `Rendered: no` at `<sha>` (MANIFEST.md on
   disk against `git show <sha>:MANIFEST.md`, before anything is restored; a row the change didn't
   touch keeps its renders): each file `git diff --name-only <sha>` names, and each untracked file
-  under `notes/`, `_build/extract/`, `_build/frag/` and `_build/verify/` (`git status --porcelain
-  --untracked-files=all`), all but `_build/logs/` and `practice/tutor/`, which a tutor tab may
-  write. Then, on their go, `git restore --source=<sha> --staged --worktree -- <each listed tracked
-  file>`, which also takes a file `<sha>` lacks out of the index and off the disk; `rm` each
+  under `notes/`, `_build/extract/`, `_build/solutions/`, `_build/frag/` and `_build/verify/`
+  (`git status --porcelain --untracked-files=all`), all but `_build/logs/` and `practice/tutor/`,
+  which a tutor tab may write; and each crop in `_build/img/` a slide-image FIG marker on disk names for one of those doc
+  ids (`grep -n 'FIG fig-[^:]*: slide image of <doc> ' notes/*.md`: the marker's id is the
+  crop's file name). Then, on their go, `git restore --source=<sha> --staged --worktree -- <each
+  listed tracked file>`, which also takes a file `<sha>` lacks out of the index and off the disk; `rm` each
   untracked one; and for each listed doc id, delete what `01-ingest` rendered for it:
   `_build/pages/<doc>/` and `<doc>@300dpi/`, `_build/text/<doc>/` or `<doc>.md`,
-  `_build/media/<doc>/`. STATUS.md is among the restored files (only this build wrote it since
+  `_build/media/<doc>/`, and each crop listed for it in `_build/img/`. STATUS.md is among the
+  restored files (only this build wrote it since
   `<sha>`: no attempt starts, no key recheck settles and no tutor tab writes STATUS while `Build
   running` stands), so add
   the line `Source added: <doc> <date>: stopped, nothing applied (<the log>)` and commit it all at
@@ -418,17 +482,19 @@ happens:
 |---|---|---|
 | A `09-tutor` tab, or a second tab beside the cram night's (`08-practice` step 8: one tab runs it; that tab tutors under its step and is neither) | Nothing written and no pushback: a source is added before `Stage 08 built` in a session of its own, from then on in the cram night's tab, so the student asks there | The same |
 | A build under way or unfinished: `Build running` stands (the unattended build, a stage or pass run alone, "A source added" past its fence, an addition under way), or `05-verify` isn't done (`06-site` too, when the notes have a page) | Nothing written and no pushback: the ask waits until no `Build running` line stands and `05-verify` is done (`06-site` too, with a page), and the student brings it then. "A source added" past its fence stops instead on their word that it won't resume ("A stop"), and they ask again once it has | The same |
-| "A source added" before its fence, its step 1 checks passed | The pushback, with step 2's report, its `Skip asked` line committed when the report is shown | That build ends declined at step 2 (logged), then the addition |
-| The hub isn't free (`10-polish` step 1: a notes patch open, `08-practice` step 8.3 or 8.4 under way) | The pushback | The addition, once the hub is free: in this session, or at the student's next ask |
-| Any other: before `Stage 08 built`, a session of its own; from then on, the cram night's tab, between attempts | The pushback | The addition |
+| "A source added" before its fence, its step 1 checks passed | The pushback, with step 2's report, its `Skip asked` line committed when the report is shown | That build ends declined at step 2 (logged), then the addition; for a doc the skip isn't open to (the pushback says which), that build goes on instead, never declined, the student told why |
+| The hub isn't free (`10-polish` step 1: a notes patch open, `08-practice` step 8.3 or 8.4 under way) | The pushback | The addition, once the hub is free: in this session, or at the student's next ask; for a doc the skip isn't open to, "A source added" in its place |
+| Any other: before `Stage 08 built`, a session of its own; from then on, the cram night's tab, between attempts | The pushback | The addition; for a doc the skip isn't open to, "A source added" in its place |
 
 **The pushback**, before any notes are written: what the skip costs (the material goes in
 unchecked, its values quoted from the source and never computed, under an `Unverified` banner, off
 every sheet, out of the mocks and the cram order's reading rows, and out of `09`'s walk-throughs and
 quizzes while its STATUS line stands) and about how long "A source added" would take for this
-source. Then commit `Skip asked: <file>, <date>, pushback
-given` in STATUS (while a mock is untaken, after `08-practice` step 4's STATUS check with the
-untaken mocks' keys, as every STATUS write then), and wait, writing no notes. The full path, if
+source. For a doc the skip isn't open to, a question doc the student hasn't attempted or the
+answers to one (the addition's item 1 gives the test, and refuses it), the pushback
+says instead that the skip isn't open to it and why, and offers "A source added".
+Then commit `Skip asked: <file>, <date>, pushback given` in STATUS (while a mock is untaken,
+after `08-practice` step 4's STATUS check with the untaken mocks' keys, as every STATUS write then), and wait, writing no notes. The full path, if
 they take it, is "A source added" from its step 1. The line goes when the source is in: in "A
 source added"'s closing commit (step 5), or in the addition's commit, which puts the `Unverified:`
 line in its place. It goes too on the student's word that the source won't be added (logged), and
@@ -438,21 +504,39 @@ it, since the line was committed before the fence.
 **The addition**, in the session the table names. However it ends (done, a failed check, a failed
 fence check, "A stop" below), its last act is `10-polish` step 7.5's patches and checks, which its
 fence held. While a mock is untaken, an ending that adds nothing (a failed check, a failed fence
-check) logs why in STATUS and ends its reply with one line, `Nothing was added: type /clear, then
-"why did the addition stop?"`, since the student, looking away, waits for a `/clear` line; the
-fresh session answers from STATUS, then runs step 7.5.
+check, item 1's refusal) logs why in STATUS and ends its reply with one line, `Nothing was added:
+type /clear, then "why did the addition stop?"`, since the student, looking away, waits for a
+`/clear` line; the fresh session answers from STATUS, then runs step 7.5.
 
 1. **Check and fence.** While a mock is untaken (STATUS records each attempt), the addition's first
    message, before any tool runs, is one line: `Look away from this window now: come back when a
    reply's only line asks for /clear, and type it before reading anything above that line.` The
    student stays away until the look-back (item 6), and `08-practice` step 8's fence binds this
    session: it opens no untaken mock's key, `practice/mock-values-key.md` or
-   `_build/verify/mock_key.py`, and searches only `notes/`, `cheatsheet/`, `_build/frag/` and
-   `_build/extract/`. Then check as "A source added" step 1 does: `05-verify`
+   `_build/verify/mock_key.py`, and searches only `notes/`, `cheatsheet/`, `_build/frag/`,
+   `_build/extract/` and `_build/solutions/`. Then check as "A source added" step 1 does: `05-verify`
    done (and `06-site` with a page), no `Build running` line, the hub free, the tree clean but for `_build/logs/` and
-   `practice/tutor/`; note `git rev-parse HEAD`. A check that fails is told to the student, and
-   the addition waits for it. Pick the doc's id now, a new one as `01-ingest` gives (none reused):
-   it is `<doc>` from here on, in its MANIFEST.md row and both STATUS lines, and the id
+   `practice/tutor/`; note `git rev-parse HEAD`. A check that fails ends the addition with nothing
+   added, as the opening says: logged in STATUS, and told to the student, or, while a mock is
+   untaken, the reply ending with the `Nothing was added` line. Then the doc itself, judged by the MANIFEST.md row item 2 will write
+   for it (its Answers and Key cells as the template's legend says): this path takes a lecture, a
+   reading or a set the student has attempted, and refuses an unattempted set or an answers file
+   that solves one, as `extract_check.py` counts them: a row whose Answers cell is `yes` and whose
+   Key cell either is `for` naming a set whose row lacks `attempted`, or is anything else (the
+   doc's own pages, `inline`, `sections:`, or empty or unread) with no `attempted` in its own
+   Answers cell; or a row with no `attempted` in its Answers cell that an in-scope answers row's
+   `for` key names (or will, once item 2's undo puts it back). A recitation with its worked
+   solutions inline is one. Its notes would quote such a set, which the questions check blocks,
+   and that check exits without a verdict until the doc is extracted, and this path extracts
+   only in item 2's undo, for an attempted set. It refuses too any other question doc the student
+   hasn't attempted, whatever its row says: a practice set, homework or past exam that no answers
+   row names, Answers `no` included, which the script counts as a set only once a `Q` block of it
+   is extracted, so its notes here would quote unattempted questions unchecked. A refused doc goes to "A source added", which extracts it: the addition ends there
+   with nothing added, as its opening says, the `Skip asked` line gaining `; refused: <why>, "A
+   source added" takes it` (committed, checked as the pushback's STATUS write) and kept until that
+   path's closing commit, and the student told so. Pick the
+   doc's id now: a `pending` row's file keeps that row's id,
+   and any other gets a new one as `01-ingest` gives (none reused); it is `<doc>` from here on, in its MANIFEST.md row and both STATUS lines, and the id
    `extract_check.py` reads. Then add `Build running: <date>` and `Unverified add: <doc>, started
    <date>` to STATUS and commit them (hard rule 1: while they stand a `09-tutor` tab keeps its
    build limits and dispatches no patch, and no attempt or polish pass starts). Check that this
@@ -461,9 +545,16 @@ fresh session answers from STATUS, then runs step 7.5.
    otherwise another tab wrote in between: take both lines out, commit, and stop, and the student
    asks again.
 2. **Ingest** the doc as `01-ingest` steps 1 to 3 do: copied in by name, rendered, and its
-   MANIFEST.md row, `in` with the doc id item 1 picked and its count from disk, its Answers cell as
-   the template's legend says, its Notes what the source is, then `;` and who put it in scope (a staff
-   post, or the student's word, quoted).
+   MANIFEST.md row, `in` with the doc id item 1 picked and its count from disk, its Answers and
+   Key cells as the template's legend says, its Notes what the source is, then `;` and who put it
+   in scope (a staff post, or the student's word, quoted). A `pending` row's file rewrites that
+   row as `01-ingest` step 5 does; when STATUS holds a `Pending set dropped: <doc>` line
+   (`01-ingest` step 3; the set is an attempted one, as item 1 requires), `01-ingest` step 5's undo
+   runs here too, the one extract this path makes: the set
+   back in the answers file's Key cell and its pages back in that file's Scope, then the set and
+   the answers file extracted in one wave (`02-extract` step 1, its check included), since the
+   restored pages are official solutions and have their home only in the solutions files. The
+   drop line goes in item 5's commit. The notes stay unverified all the same.
 3. **Write**, the notes only, in the Write brief's Format: a new section after the last, or a
    short subsection just before an old section's Must know, placed and named as "The build on a
    reopened hub" row 03 says, any text naming the moved Must know by number updated. Each
@@ -481,7 +572,7 @@ fresh session answers from STATUS, then runs step 7.5.
      its citation; never computed, and the checker isn't extended for it. This is the one exception
      to hard rule 3, to STYLE S7's first two sentences and to "Changing the notes or a sheet" item
      2. An answer to a set's question (the doc's own, when its Answers cell is `yes`) is quoted
-     only once that set is marked `yes, attempted` (S7); until then it is cited by page and left
+     only once that set's own row says `attempted` (S7); until then it is cited by page and left
      out.
 4. **Rebuild** the notes page as `08-practice`'s "Changing the notes or a sheet" item 3 says (with
    plain-text notes, `notes/combined.md`); a hub whose `_build/CONVERT.md` lacks the `Unverified`
@@ -490,11 +581,13 @@ fresh session answers from STATUS, then runs step 7.5.
    section says with the untaken mocks' keys: its baseline (item 1) before the first write, its
    values as item 3 here says, and its compare (item 4) passed before any commit, a hit on a quoted
    value reworded by leaving the value out, its citation kept. Then that section's questions check
-   prints QUESTIONS OK (FB-191), a hit reworded the same way, before item 5's commit and
-   republish.
+   prints QUESTIONS OK (FB-191), `python3 -I <skill>/scripts/mock_leak.py --hub .`
+   run by the main session (the script builds its file list from MANIFEST.md's attempt
+   marks), a hit reworded the same way, before item 5's commit and republish.
 5. **Commit**, once: the material (its notes, fragment and page), its backbone headings, its
-   MANIFEST.md row and, in STATUS, `Unverified: <doc>, <section ids>, <date>` in place of the `Skip
-   asked` line, with any rewording logged by its part, never a value, as "Changing the notes or a
+   MANIFEST.md row (after item 2's undo, the answers file's row too, with the extracts and
+   solutions files that undo wrote, and the drop line out of STATUS) and, in STATUS,
+   `Unverified: <doc>, <section ids>, <date>` in place of the `Skip asked` line, with any rewording logged by its part, never a value, as "Changing the notes or a
    sheet" ends (each STATUS write checked as the pushback's). Then republish the notes page as that
    section's item 5 says, its version bumped, and take out the `Build running` and `Unverified
    add:` lines in a commit of their own.
@@ -557,4 +650,5 @@ published is republished, the `Build running` and `Unverified add:` lines are ou
 and, while a mock was untaken, the compare passed before that commit and the reply ended with the
 `/clear` line; or, stopped before item 5's commit, when the hub is as HEAD had it with both lines
 out; or, after a failed check or fence check, when nothing was added and both lines, if written,
-are out and committed. In each, `10-polish` step 7.5's patches and checks ran last.
+are out and committed; or, refused at item 1, when the `Skip asked` line names the refusal,
+committed. In each, `10-polish` step 7.5's patches and checks ran last.

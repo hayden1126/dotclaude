@@ -1,4 +1,4 @@
-<!-- exam-prep template cram-order.md.tmpl, baseline as of 2026-11-10; changes only via `12-retro`.
+<!-- exam-prep template cram-order.md.tmpl, baseline as of 2026-11-12; changes only via `12-retro`.
 08-practice step 7 fills it into practice/cram-order.md, dropping this comment, and
 cram_check.py checks it. It is a reading list into the published notes, ranked by points per
 minute (FB-157): it adds no new text. Every notes link is <notes URL>#<id>, the URL STATUS holds
@@ -7,7 +7,14 @@ names the Must-know lists, and cram_check.py runs with --plain). It is the one c
 renders its tiers, rows, Skip and Out of time lines into the notes page's exam-day map on every
 build (06-site step 4), and 08-practice step 7.4 republishes the page. Each row's depth label is its
 section's (S33), the label's words alone (Know cold, Use, Recognize), without the statement it
-rests on; cram_check.py refuses anything else. -->
+rests on; cram_check.py refuses anything else. A row that relies on earlier subsections ends in
+` needs: [§N.K](<notes URL>#<id>), ...` (FB-193), from the backbone's concept order; each need is a row
+above it or on the Read already line, which lists what the student says they have read (`nothing`
+when they haven't said), and cram_check.py refuses a need that is neither. A self-contained row
+names no needs. The map shows a row's needs after it; the Read already line stays in this file.
+The Tonight section is the exam-morning card (08-practice step 7, FB-158): each item cites the hub CLAUDE.md's
+Exam facts, and the sheet's item names the one sheet to print by its file, never as "mock sheet"
+or "final sheet". -->
 # Cram order: {{EXAM}}
 
 The night before {{EXAM}}: {{TOTAL}} minutes in {{TIERS}} tiers of reading, ranked by points per
@@ -17,16 +24,18 @@ thing to take from it.
 
 **Out of time?** Read only the Must-know lists: [§1]({{NOTES URL}}#sec-1-must-know), [§2]({{NOTES URL}}#sec-2-must-know).
 
+**Read already:** {{NOTHING, OR EACH SUBSECTION THE STUDENT SAYS THEY HAVE READ: [§N.K](<notes URL>#<id>), ...}}.
+
 ## Tier 1: {{TIER NAME}} ({{MINUTES}} min)
 
 1. [§{{N.K}} {{SECTION TITLE}}]({{NOTES URL}}#{{ID}}) ({{MINUTES}} min): {{DEPTH LABEL}}: {{THE ONE THING}}.
-2. [§{{N.K}} {{SECTION TITLE}}]({{NOTES URL}}#{{ID}}) ({{MINUTES}} min): {{DEPTH LABEL}}: {{THE ONE THING}}.
+2. [§{{N.K}} {{SECTION TITLE}}]({{NOTES URL}}#{{ID}}) ({{MINUTES}} min): {{DEPTH LABEL}}: {{THE ONE THING}}. needs: [§{{N.K}}]({{NOTES URL}}#{{ID}})
 
 {{ONE PER MOCK NOT TAKEN YET, THE HARDER SET LAST, EACH LINK ON ONE LINE: **Then the mock:**
 [<mock title>](<mock page URL>) (while the session is still applying a change to the notes or a
 sheet, start it once the session says the change is done), timed (<minutes> minutes), with the mock
-sheet only, cheatsheet/<exam-slug>-mock.pdf (no sheet: with no notes; when STATUS logs the mock
-sheet changed after it was printed: print it again first, or with the LaTeX engine compile it and
+sheet only, cheatsheet/<exam-slug>-mock.pdf (no sheet: with no notes; when STATUS logs that sheet
+changed after it was printed: print it again first, or with the LaTeX engine compile it and
 bring the PDF to the session first). Mark it against its own key, practice/mock-<slug>-key.md, then
 bring your misses to the session: it moves the sections they point at to just after this line, and builds the
 final sheet while you read on (no sheet: it only moves them).}}
@@ -39,9 +48,12 @@ final sheet while you read on (no sheet: it only moves them).}}
 
 ## Tonight
 
-- {{ONLY WHEN 07 FOUND THE SHEET IS COLLECTED WITH A NAME: Write your name on the cheat sheet
-  before you hand it in; it isn't printed on it.}}
-- {{EXAM}}: {{DATE, TIME AND LENGTH, FROM CLAUDE.md}}. Bring {{WHAT ITS RULES ALLOW: a calculator
-  or none, the sheet}}.
-- {{ONLY WITH A SHEET: Print the final sheet (cheatsheet/<exam-slug>-final.pdf; the mock sheet,
-  -mock.pdf, when no mock was taken) and pack it.}}
+Read this again on the exam morning.
+
+- **When:** {{EXAM}}, {{DATE, TIME AND LENGTH}} (CLAUDE.md, Exam facts).
+- **Where:** {{ROOM; WHERE IT IS SPLIT, YOURS BY LAST NAME}} (CLAUDE.md, Exam facts).
+- **Bring:** {{WHAT THE RULES LET YOU BRING: a calculator or none, the sheet, an ID card}} (CLAUDE.md, Exam facts).
+- **Banned:** {{WHAT THE RULES BAN}} (CLAUDE.md, Exam facts).
+- {{ONLY WITH A SHEET: **Your sheet:** print and pack <file> (<link>; printed: <yes or not yet>).
+  When it is collected with a name: Write your name and id on it before you hand it in; they
+  aren't printed on it. Otherwise: Nothing to write on it. (CLAUDE.md, Exam facts).}}

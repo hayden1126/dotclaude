@@ -2,6 +2,11 @@
   <h2><span class="n">§1</span> Counting</h2>
   <p>Counting asks how many objects fit a description. It builds on nothing earlier, and <a class="xref" href="#sec-2">§2 Graphs</a> uses it to count edges.</p>
   <h3 id="sec-1-sums">1.1 Sums of a range</h3>
+  <div class="concise"><ul>
+    <li><strong>Rule:</strong> the first n integers sum to \(\frac{n(n+1)}{2}\).</li>
+    <li><strong>Why:</strong> pairing the first term with the last gives pairs of equal sums.</li>
+    <li><strong>Trap:</strong> a range from a to b has \(b - a + 1\) terms, not \(b - a\).</li>
+  </ul></div>
   <p>The <strong>sum of the first n integers</strong> is \(\frac{n(n+1)}{2}\) <a class="slink">D1 p.4</a>. Pairing the first term with the last gives</p>
   \[ \sum_{i=1}^{n} i = \frac{n(n+1)}{2}. \]
   <div class="callout def"><div class="lab">Definition</div><p>A <strong>range</strong> is every integer from a to b, inclusive <a class="slink">D1 p.3</a>.</p></div>
@@ -29,6 +34,8 @@
   <div class="tbl-wrap"><table><thead><tr><th>Description</th><th>Rule</th><th>Count</th></tr></thead>
   <tbody><tr><td>a 3-letter code over 26 letters</td><td>product</td><td>\(26^3 = 17576\)</td></tr>
   <tr><td>a code of 1 or 2 digits</td><td>sum</td><td>\(10 + 100 = 110\)</td></tr></tbody></table></div>
+  <figure id="fig-1-slide"><img src="img/fig-1-slide.png" alt="The lecture slide's grid of six example descriptions, two rows of three boxes under a title bar" width="480" height="180">
+  <figcaption>Fig 1.2. The slide's six example descriptions, one rule each <a class="slink">D1 p.6</a>.</figcaption></figure>
   <div class="callout warn rv"><div class="lab">Pitfall</div><p>Adding cases that overlap counts their overlap twice; the sum rule needs <em>disjoint</em> cases.</p></div>
   <h3 id="sec-1-must-know">1.3 Must know</h3>
   <ul>

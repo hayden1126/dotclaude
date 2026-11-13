@@ -1,6 +1,6 @@
 # 06 Site
 
-Baseline as of 2026-11-10; changes only via `12-retro`.
+Baseline as of 2026-11-12; changes only via `12-retro`.
 
 The site is one long notes page, `_build/notes.html`, built from the verified notes and published
 as a private artifact (FB-110). Converters turn each notes file into an HTML fragment in parallel;
@@ -112,7 +112,9 @@ From the hub root:
    hides. A build never passes its
    `--no-long-jump`, which is for the skill's own tests. It finds
    Playwright in `_build/node_modules/`, the hub's `node_modules/` or npm's global root, or at the
-   package directory `EXAM_PREP_PLAYWRIGHT` names. With none, it says so and exits 2: install it
+   package directory `EXAM_PREP_PLAYWRIGHT` names, set from the hub CLAUDE.md's Tools line
+   (`00-intake` step 4; a hub without the line gets it the first time Playwright is found, so no
+   later session hunts again). With none, it says so and exits 2: install it
    once outside the hub's tracked files (`npm install playwright` in `_build/`, whose
    `node_modules/` and `package*.json` are gitignored), with `allowed_domains` registry.npmjs.org
    (a sandbox denial names any other host it needs). Its browser comes from the user's terminal:
@@ -127,7 +129,18 @@ rerun from step 1.
 ## Step 6: Publish
 
 - Publish `_build/notes.html` with the Artifact tool, private (FB-110), then check its sharing
-  setting (FB-118), and put the URL in STATUS.
+  setting (FB-118), and put the URL in STATUS. Every artifact's STATUS line, this one's and each
+  later one's (a sheet, a mock page, the watch list), records its owner account and its sharing
+  state beside the URL (`<URL> v2, owner <account>, private`), so a later session knows before
+  it tries whether it can republish there.
+- When the URL can't be updated (another account owns it, or the session has no write access to
+  it), publish a new private artifact instead, check its sharing as above, and lead the hand-off
+  with the new link, first in the message, said to replace the old one. In STATUS the new line
+  takes the URL's place, and the old URL stays on a line of its own marked `stale since <date>:
+  <why>`, so no session republishes there or sends the student to it (FB-118, L30).
+- To open a file or folder for the student (a screenshot, a PDF), on WSL run `explorer.exe
+  "$(wslpath -w <path>)"` with the sandbox off, since it starts a Windows program; its exit status
+  1 is normal, not a failure (L76).
 - Publish from the session that built the page. A republish from another session must first read
   the whole live copy, in chunks, and diff it against the build (FB-122, L30). If the
   auto-mode classifier refuses an Artifact call once, repeat the identical call once (L31).

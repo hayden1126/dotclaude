@@ -1,6 +1,6 @@
 # Lessons: tool and environment gotchas
 
-Baseline as of 2026-11-10; changes only via `12-retro`.
+Baseline as of 2026-11-12; changes only via `12-retro`.
 
 Each lesson was hit in a past run. Ids are stable (`L01`), struck through when retired, never
 renumbered. Evidence ids work as in `feedback-log.md`. The stage column says where a workflow
@@ -40,16 +40,17 @@ should warn about it.
 |---|---|---|---|---|
 | L20 | 06 | chrome-devtools MCP on WSL2 times out, needs an explicit page id, gets stuck on resize and can't reach a sandboxed localhost server. | Playwright headless from a script (`verify_page.mjs`), pages opened as `file://`. | A1.G8, A2.G2, B4.G7 |
 | L21 | 06 | Headless Chromium inside the Bash sandbox ignores `HTTPS_PROXY`, so MathJax from the CDN silently never loads (`MathJax.startup` undefined, no error). | Pass the proxy with its credentials to `chromium.launch`, and give the command `allowed_domains` for cdnjs.cloudflare.com, fonts.googleapis.com and fonts.gstatic.com. | B1.G1, B4.G2 |
-| L22 | 06 | An ES module ignores `NODE_PATH`, so `import 'playwright'` fails outside a project with `node_modules`. | `verify_page.mjs` imports Playwright from an absolute path (`EXAM_PREP_PLAYWRIGHT`, else a probed install). | B4.G7 |
+| L22 | 00, 06 | An ES module ignores `NODE_PATH`, so `import 'playwright'` fails outside a project with `node_modules`, and each session that hunts for the install loses time. | `verify_page.mjs` imports Playwright from an absolute path (`EXAM_PREP_PLAYWRIGHT`, else a probed install); intake records that path on the hub CLAUDE.md's Tools line, so no later session hunts for it. | B4.G7, I1.G3, I2.G12, I3.G3 |
 | L23 | 06 | A full-page screenshot of a tall `pre` produced an unusable 720 by 20914 image. | Screenshot the element. | B3.G11 |
 | L24 | 06 | The Google Fonts link was missing, so every font silently fell back. | `verify_page.mjs` checks that the declared families loaded. | A1.G4 |
 | L25 | 06 | `scrollIntoView` on a rail link scrolls the page as well and cancels a smooth anchor jump in flight, in WebKit only; headless Chromium passes. | Scroll the rail element itself (CHASSIS C1); `verify_page.mjs` runs the long jump in WebKit. | E1.C12, E1.G13, D1.C19 |
+| L26 | 06 | Chrome inside a light-scheme parent frame (the artifact host) paints white behind a framed page's transparent scrollbar track, whatever the page's `color-scheme`; a page checked standalone hides it. | An opaque page track (CHASSIS C2), and theme chrome tested inside a light-scheme parent iframe; `verify_page.mjs` checks the track in both themes. | I3.C9, I3.G10, I2.C32, J1.C5, J1.C6, J1.C7, J1.C9, J1.C10, J1.G6 |
 
 ## Publishing
 
 | Id | Stage | Lesson | Fix | Evidence |
 |---|---|---|---|---|
-| L30 | 06 | Republishing an artifact from a session that didn't publish it is refused until the session reads the whole live copy, which exceeds the Read tool's 25k-token cap (read in chunks); an identical resend is refused as a duplicate. | Publish from the session that builds the page. Otherwise read the live copy in chunks, diff it against the local build, then publish. | A2.G3, A3.G2, B3.G3, B4.G13 |
+| L30 | 06 | Republishing an artifact from a session that didn't publish it is refused until the session reads the whole live copy, which exceeds the Read tool's 25k-token cap (read in chunks); an identical resend is refused as a duplicate. A URL another account owns, or one the session has no write access to, can't be updated at all. | Publish from the session that builds the page. Otherwise read the live copy in chunks, diff it against the local build, then publish. A URL that can't be updated gets a new private artifact, its link first in the hand-off, the old URL marked stale in STATUS (`06-site` step 6). | A2.G3, A3.G2, B3.G3, B4.G13, I3.C6, I2.C29, I2.C32, I2.G1, I2.G2, I3.G5 |
 | L31 | 06 | An auto-mode classifier hiccup can refuse an Artifact call once. | Repeat the identical call once. | B3.G4, A1.G9 |
 
 ## Sandbox, git and shell
@@ -67,6 +68,7 @@ should warn about it.
 | L48 | all | Edits that carry LaTeX break in heredocs and `perl` (escapes, multibyte glyphs). | Use the Edit tool, with an assert-before-write script for bulk changes. | A1.G10 |
 | L49 | all | A blanket em-dash strip rewrote headings. | Review a mechanical rewrite's diff on headings and ids. | A1.G11 |
 | L71 | 00 | `cp` from the skill's templates folder is refused: the skill folder is a symlink outside the hub, and Claude Code's permission check reads `cp`'s source through it as a write target. | Copy with `cat <src> > <dest>` (hard rule 12). | dry run (2026-10-20) |
+| L76 | 00, 06 | On WSL a file or folder opens for the student only through a Windows program, which the sandbox can't start, and `explorer.exe` exits 1 even when the window opens. | `explorer.exe "$(wslpath -w <path>)"` with the sandbox off; its exit status 1 is normal. | I1.C3, I1.G12, I2.C21, I2.G6 |
 
 ## Content generation
 
@@ -90,3 +92,12 @@ should warn about it.
 | Id | Stage | Lesson | Fix | Evidence |
 |---|---|---|---|---|
 | L70 | 01 | If the Ed API token stops working, a dedicated Chrome profile driven over CDP can fetch the same JSON API from a logged-in page. Not built in v1. | Build it only when the token path fails. | brief (Ed adapter) |
+
+## Videos
+
+| Id | Stage | Lesson | Fix | Evidence |
+|---|---|---|---|---|
+| L72 | 08 | A shell loop that reads its list from stdin (`while read`) loses the rest of the list to a `yt-dlp` or `ffmpeg` it runs, which reads the same stdin. | Give the child `< /dev/null` (WATCH W36). | I1.G4, I1.G5, I1.G6, I1.G7, I3.G7 |
+| L73 | 08 | Auto-captions come as `en` or `en-GB`, so asking for `en` alone misses some, and caption fetches are rate-limited. | `--sub-langs "en.*,en"`, and pace the fetches, one at a time with a pause (WATCH W37). | I1.G4, I1.G5, I1.G6, I1.G7, I3.G7 |
+| L74 | 08 | `yt-dlp` with no JavaScript runtime installed warns, and some formats it offers are AV1, which a local `ffmpeg` may not decode. | Request H.264 (`-S vcodec:h264`) (WATCH W38). | I1.G4, I1.G5, I1.G6, I1.G7, I3.G7 |
+| L75 | 08 | A storyboard-frame parser that drops a byte per image corrupts every frame. | Parse the frames byte-exact, and check that one frame opens before judging any (WATCH W39). | I1.G4, I1.G5, I1.G6, I1.G7, I3.G7 |
