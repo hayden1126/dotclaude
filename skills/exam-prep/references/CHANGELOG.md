@@ -159,8 +159,9 @@ evidence ids.
     answers, names sections on a paged doc, pages on an unpaged one or a section with no block
     (`NO KEY`, `UNREAD KEY`, `KEY NAMES NO DOC`, `KEY NAMES ITS OWN DOC`, `KEY WITHOUT ANSWERS`,
     `SECTIONS KEY ON A PAGED DOC`, `PAGES KEY ON AN UNPAGED DOC`, `KEY SECTION NOT FOUND`); a
-    locator naming a key section followed by nothing, a character that is no letter or digit, or
-    `Q` and a digit is key material (`Key formulas` under `sections: Key` is not). It warns on an
+    locator naming a key section followed, after any spaces, by nothing, a character that is no
+    letter or digit, or `Q` and a digit is key material (`Key formulas` under `sections: Key` or
+    `Marking scheme 2` is not). It warns on an
     `Answer:` line in a solved doc's extract, and `extract_check.py --parts` feeds `05-verify`'s
     PARTS (FB-100). A set's attempt is recorded in that set's own row only, `no, attempted
     YYYY-MM-DD` (no key of its own) or `yes, attempted YYYY-MM-DD` (a doc holding its own key);

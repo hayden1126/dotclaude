@@ -227,6 +227,31 @@ class QuestionsCheckFiles(unittest.TestCase):
                 self.assertTrue(phrase in flat, (name, phrase))
 
 
+class KeySectionRule(unittest.TestCase):
+    """A `sections:` key's name followed by a space then a letter or digit (`Key formulas` under
+    `sections: Key`, `Marking scheme 2`) is no key section: extract_check.py's key_section()
+    strips the spaces first. A rule worded "followed by a character that is no letter or digit"
+    reads a space as such a character, so every prose site says "after any spaces" (round 16)."""
+
+    SITES = ("templates/MANIFEST.md.tmpl", "references/CHANGELOG.md", "workflows/02-extract.md")
+    RULE = "followed, after any spaces, by nothing,"
+
+    def test_each_site_says_after_any_spaces(self):
+        for rel in self.SITES:
+            with open(os.path.join(SKILL, rel), encoding="utf-8") as f:
+                flat = " ".join(f.read().split())
+            self.assertIn(self.RULE, flat, rel)
+
+    def test_no_prose_site_reads_a_space_as_the_break(self):
+        for rel, text in files(SKILL):
+            if rel.startswith("scripts" + os.sep):
+                continue
+            flat = " ".join(text.split())
+            for m in re.finditer("no letter or digit", flat):
+                before = flat[max(0, m.start() - 80):m.start()]
+                self.assertIn("after any spaces", before, (rel, before))
+
+
 class Privacy(unittest.TestCase):
     def test_no_denylisted_string(self):
         if not os.path.exists(DENYLIST):

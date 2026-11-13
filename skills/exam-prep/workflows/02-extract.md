@@ -167,8 +167,8 @@ STATUS).
      only cites, and the closing `Coverage:` line, aside);
    - `AN ANSWERS PAGE IN AN EXTRACT: ... move it to _build/solutions/<name>.md`: a page block of
      an answers doc on an answers page: any page of a separate answers file, or a key page or key
-     section its Key cell names (a locator that is a key section's name followed by nothing, a
-     character that is no letter or digit, or `Q` and a digit, included);
+     section its Key cell names (a locator that is a key section's name followed, after any
+     spaces, by nothing, a character that is no letter or digit, or `Q` and a digit, included);
 
    `SOLUTION IN AN EXTRACT` holds for any extract block, a lecture's too, when its `Solution [`
    or `**Solution...**` line cites a solved or answers doc; and the lines above a file's first

@@ -69,10 +69,10 @@ Topic cuts: {{none | one line each:}}
   - `sections: Marking scheme, Answers`: a source without pages, a Word file or a slide deck,
     whose key is the sections or slides with exactly those locators (`### [PE3 Marking scheme]
     ...`; a deck's slides as `sections: #/5, #/6`); a block whose locator is such a name
-    followed by a character that is no letter or digit (`Marking scheme (continued)`, `Marking
-    scheme: Q2`, `#/5/0`) or by `Q` and a digit (`Marking scheme Q2`) is key material too, and
-    `Key formulas` under `sections: Key` is not. A paged doc fails it (`SECTIONS KEY ON A
-    PAGED DOC`).
+    followed, after any spaces, by nothing, a character that is no letter or digit (`Marking
+    scheme (continued)`, `Marking scheme: Q2`, `#/5/0`), or `Q` and a digit (`Marking scheme Q2`)
+    is key material too, and `Key formulas` under `sections: Key` or `Marking scheme 2` is not.
+    A paged doc fails it (`SECTIONS KEY ON A PAGED DOC`).
   - `extract_check.py` fails an in-scope Answers `yes` row with an empty Key cell (`NO KEY`),
     any other wording (`UNREAD KEY`), and a filled Key cell on a row whose Answers isn't `yes`
     (`KEY WITHOUT ANSWERS`). A row on a STATUS `Unverified:` line solves nothing until verified.
