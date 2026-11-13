@@ -95,6 +95,10 @@ stem of one is a block of that row, as in an extract. It fails, naming the file 
   `Coverage:` line aside; AN ANSWERS PAGE IN AN EXTRACT, a block of a separate answers file, or a
   key page's or key section's block of a doc with its own key, naming its home (above; this
   extract's own solutions file when it is one, or when the block has no home).
+- in either directory: ANSWERS FILE ID ON A QUESTION, a question block (a part's or a stem's)
+  labelled with a separate answers file's id (`[HW1S Q1 stem]`, `[HW1S Q1a]`): it is told to take
+  the id of the set it solves (`[HW1 Q1 stem]`, or `[<set> Q1 stem]` when its Key names several),
+  and gets no other failure (answers_question()).
 - the lines before a file's first block header (its `# ...` title, `Sources:` and `Every page
   image was viewed.` lines pass): in an extract, a `Solution [` or `**Solution:**` line fails as
   SOLUTION IN AN EXTRACT and an answers cite as CITES AN ANSWERS PAGE, and in a file holding a
@@ -780,6 +784,20 @@ def answers_block(doc, loc, row):
     return f"a key page of {doc}, as its MANIFEST.md Key cell names it"
 
 
+def answers_question(m, rows):
+    """ANSWERS FILE ID ON A QUESTION's text for a question block (a part's or a stem's) whose doc
+    is a separate answers file (a `for` key), or None. Such a block has no home of its own, so it
+    is told the set's id: the one set its Key names, else a `<set>` placeholder."""
+    doc, q = m.group("doc"), m.group("q")
+    row = rows.get(doc)
+    if not q or key_of(row) != "for":
+        return None
+    sets = sorted(row["key"]["docs"] - {doc})
+    label = sets[0] if len(sets) == 1 else "<set>"
+    return (f"ANSWERS FILE ID ON A QUESTION: [{doc} {q}] names the answers file {doc}; label it "
+            f"with the set it solves ([{label} {q}])")
+
+
 def preamble(lines):
     """The indices of a file's lines before its first block header (all of them in a file with
     none), its closing line aside."""
@@ -865,6 +883,11 @@ def solutions_check(root, rows, idle=frozenset()):
         for start, end, m in sections(lines):
             doc, loc = m.group("doc"), locator(m)
             q = m.group("q")
+            misnamed = answers_question(m, rows)
+            if misnamed:
+                out.append(f"{rel}:{start + 1}: {misnamed}")
+                bad = True
+                continue
             if q and PART.fullmatch(q):
                 have.add((doc, q))
                 at.setdefault((doc, q), (rel, start + 1, name))
@@ -921,6 +944,10 @@ def solutions_check(root, rows, idle=frozenset()):
                 if w:
                     out.append(w)
     parts, stems = solution_blocks(sols)
+    # A question block labelled with an answers file's id fails ANSWERS FILE ID ON A QUESTION
+    # alone (below), not as a part or a stem.
+    parts = {k: v for k, v in parts.items() if key_of(rows.get(k[0])) != "for"}
+    stems = [s for s in stems if key_of(rows.get(s[2])) != "for"]
     for key, found in sorted(parts.items()):
         doc, q = key
         rel, n = found[0][:2]
@@ -958,6 +985,11 @@ def solutions_check(root, rows, idle=frozenset()):
     # named fails, since the questions check would never read it.
     for rel, lines in sols:
         for start, _, m in sections(lines):
+            misnamed = answers_question(m, rows)
+            if misnamed:
+                out.append(f"{rel}:{start + 1}: {misnamed}")
+                bad = True
+                continue
             home = block_home(m, rows, sethomes)
             if not home:
                 continue

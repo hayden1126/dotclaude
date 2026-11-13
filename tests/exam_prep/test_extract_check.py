@@ -2014,5 +2014,49 @@ class SolutionsFiles(unittest.TestCase):
         code, out = self.check()
         self.assertEqual(code, 0, out)
 
+    def test_a_question_block_labelled_with_the_answers_files_id_fails(self):
+        # r17-1 #3: [HW1S Q1 stem] in a solutions file failed NO HOME FILE "extract HW1S first",
+        # and in an extract AN ANSWERS PAGE IN AN EXTRACT sent it into the same loop. One message
+        # now says to label it with the set's id, wherever it sits.
+        stem = "### [HW1S Q1 stem] Setup\nSolution [HW1S p.1]: f = 42 throughout.\n"
+        part = "### [HW1S Q1a] Max flow\nSolution [HW1S p.1]: 42\n"
+        for loc, text in (("Q1 stem", stem), ("Q1a", part)):
+            fix = (f"ANSWERS FILE ID ON A QUESTION: [HW1S {loc}] names the answers file HW1S; "
+                   f"label it with the set it solves ([HW1 {loc}])\n")
+            with self.subTest(loc, where="solutions"):
+                self.write("_build/solutions/hw1.md", SOLVED + text)
+                code, out = self.check()
+                self.assertEqual(code, 1, out)
+                self.assertIn(f"_build/solutions/hw1.md:6: {fix}", out)
+                for other in ("NO HOME FILE", "NO SUCH PART", "WRONG SOLUTIONS FILE"):
+                    self.assertNotIn(other, out)
+            with self.subTest(loc, where="extract"):
+                self.write("_build/solutions/hw1.md", SOLVED)
+                self.write("_build/extract/notes.md", text)
+                code, out = self.check()
+                self.assertEqual(code, 1, out)
+                self.assertIn(f"_build/extract/notes.md:1: {fix}", out)
+                self.assertNotIn("AN ANSWERS PAGE IN AN EXTRACT", out)
+                self.remove("_build/extract/notes.md")
+        # An answers file solving several sets can't say which: the label holds a placeholder.
+        self.write("MANIFEST.md", SOL_MANIFEST.replace("| for HW1 |", "| for HW1 and HW2 |")
+                   + "| HW2 | `sources/hw2.pdf` | 1 | in | no | | yes | |\n")
+        self.write("_build/pages/HW2/p-001.png", "")
+        self.write("_build/extract/hw2.md", "### [HW2 p.1] Homework 2\n")
+        self.write("_build/solutions/hw1.md", SOLVED + stem)
+        code, out = self.check()
+        self.assertEqual(code, 1, out)
+        self.assertIn("_build/solutions/hw1.md:6: ANSWERS FILE ID ON A QUESTION: [HW1S Q1 stem] "
+                      "names the answers file HW1S; label it with the set it solves "
+                      "([<set> Q1 stem])\n", out)
+        # Its twin: the stem labelled with the set's id, beside the set's extract, passes.
+        self.write("MANIFEST.md", SOL_MANIFEST)
+        self.remove("_build/extract/hw2.md")
+        self.write("_build/extract/hw1.md", CLEAN.replace(
+            "### [HW1 Q1a]", "### [HW1 Q1 stem] Setup\nPages: [HW1 p.1]\n### [HW1 Q1a]"))
+        self.write("_build/solutions/hw1.md", SOLVED + stem.replace("HW1S Q1", "HW1 Q1"))
+        code, out = self.check()
+        self.assertEqual(code, 0, out)
+
 if __name__ == "__main__":
     unittest.main()
