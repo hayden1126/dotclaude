@@ -193,6 +193,14 @@ class Privacy(unittest.TestCase):
                          if t.lower() in low]
         self.assertEqual(hits, [])
 
+    def test_code_cites_a_decision_by_its_id(self):
+        # Round 8: a script's comment recorded a decision as "(the student's call, <date>)", a
+        # personal record in a public repo; a decision is cited by its feedback-log id.
+        dated = re.compile(r"the student's call,\s*\d{4}-\d{2}-\d{2}", re.I)
+        hits = [rel for rel, text in files(SKILL)
+                if rel.endswith((".py", ".mjs", ".sh")) and dated.search(text)]
+        self.assertEqual(hits, [])
+
 
 if __name__ == "__main__":
     unittest.main()

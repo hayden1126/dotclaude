@@ -132,17 +132,27 @@ class Skeleton(unittest.TestCase):
         self.assertEqual(r.returncode, 1)
         self.assertIn("FAIL  D1 p.4 worked example", r.stdout)
 
-    def test_the_parts_grep_counts_every_solution_line_form(self):
+    def test_the_parts_count_counts_every_marker_qonly_cuts(self):
+        # Round 8: the documented count was a grep for `Solution [`, so a qualified marker
+        # (`**Solution (Q1):**`, `Solution to Q1d [...]:`) that qonly.py cuts went uncounted and
+        # PARTS came out short. The count is now qonly.py's own.
         extract = os.path.join(self.tmp.name, "_build", "extract")
         os.makedirs(extract)
+        with open(os.path.join(self.tmp.name, "MANIFEST.md"), "w") as f:
+            f.write("| Doc id | File | Pages | Scope | Answers | Notes |\n|---|---|---|---|---|---|\n"
+                    "| HW1 | `sources/hw1.pdf` | 2 | in | no | homework |\n"
+                    "| HW1S | `sources/hw1s.pdf` | 2 | in | yes | solutions to HW1 |\n")
         with open(os.path.join(extract, "hw.md"), "w") as f:
             f.write("### [HW1 Q1a] a\nSolution [HW1S p.1]: 3\n### [HW1 Q1b] b\n"
                     "- Solution [HW1S p.1]: 4\n### [HW1 Q1c] c\n  * Solution [HW1S p.2]: 5\n"
-                    "See the Solution [HW1S p.2] above.\n")
+                    "See the Solution [HW1S p.2] above.\n### [HW1 Q1d] d\n"
+                    "Solution to Q1d [HW1S p.2]: 6\n### [HW1 Q1e] e\n**Solution (Q1e):** 7\n")
         with open(os.path.join(TEMPLATES, "verify-selftest.py"), encoding="utf-8") as f:
-            cmd = next(l.strip() for l in f if "grep" in l and "Solution" in l)
-        r = subprocess.run(["bash", "-c", cmd], cwd=self.tmp.name, capture_output=True, text=True)
-        self.assertEqual(r.stdout.strip(), "3", r.stderr)
+            cmd = next(l.strip() for l in f if "qonly.py --parts" in l)
+        skill = os.path.dirname(TEMPLATES)
+        r = subprocess.run(["bash", "-c", cmd.replace("<skill>", skill)], cwd=self.tmp.name,
+                           capture_output=True, text=True)
+        self.assertEqual(r.stdout.strip(), "5", r.stderr)
 
     # ---- example generator ----
 

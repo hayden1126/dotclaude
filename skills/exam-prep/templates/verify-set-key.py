@@ -59,8 +59,23 @@ STEM = re.compile(r"^###\s+\[[A-Za-z0-9_.-]+\s+Q\d[\w.]* stem\]")
 QUESTION = re.compile(r"^#+\s*\[(?P<doc>[A-Za-z0-9_.-]+)\s+Q\d")
 HEADING = re.compile(r"^#{1,3}\s")
 FENCE = re.compile(r"^\s*(`{3,}|~{3,})(.*)$")
-# A line that starts the block's next field ends a wrapped Shape line.
-FIELD = re.compile(r"^(?:\*\*|[-*+]\s|Solution \[|Pages:)")
+# qonly.py's solution markers, every form it cuts (its SOLUTION, BRACKETED, BOLD and LOOSE), mirrored
+# here since a hub's copy of this file can't find the skill's scripts: keep the two in step. The
+# word (`Solution`, `Official` or `Worked solution`, `Answer`, `Answer key`, `Key`), a qualifier that
+# names a part (`(Q1)`, `to Q1a`, `for part (a)`, `, all parts`), then a cite, a colon, bold's close
+# or the line's end. Read without MANIFEST, so wider than qonly.py's: `Answer [<doc> <loc>]:` counts
+# whatever <doc> is.
+LABEL = r"\(?(?:\d+(?:\.\d+)*[a-z]{0,2}(?:\([a-z0-9]{1,4}\))?|[ivx]{2,4}|[a-z])\)?"
+LABELS = LABEL + r"(?:(?:\s*(?:,|&|-|\u2013|\band\b|\bto\b)\s*|\s+)" + LABEL + r"){0,5}"
+PART_WORD = r"(?:part|problem|question|exercise)s?\b"
+QUAL = (r"(?:\s*\((?:(?:Q|" + PART_WORD + r")\s*)?" + LABELS + r"\)"
+        r"|\s+(?:to|for)\s+(?:all\s+parts|Q\s*" + LABELS + r"|" + PART_WORD + r"\s*" + LABELS
+        + r"|\(" + LABELS + r"\))"
+        r"|\s*,\s*(?:all\s+parts|Q\s*" + LABELS + r"|" + PART_WORD + r"\s*" + LABELS + r"))")
+MARKER = (r"[-*>#\s]*(?:\*\*)?(?:(?:official|worked)\s+)?(?:solution|answer(?:\s+key)?|key)s?\b"
+          r"(?:" + QUAL + r"){0,3}(?:\*\*)?\s*(?:\[|:|\*\*|$)")
+# A line that starts the block's next field, or a solution marker, ends a wrapped Shape line.
+FIELD = re.compile(r"^(?:\*\*|[-*+]\s|Pages:|" + MARKER + r")", re.I)
 DOC_ID = re.compile(r"[A-Za-z0-9_.-]+")
 PART_ID = re.compile(r"Q\d[\w.]*")
 SHAPE = re.compile(r"^(?:[-*+]\s+)?\*\*Shape(?::\*\*|\*\*:)(.*)$")

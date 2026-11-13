@@ -12,9 +12,10 @@ notes cite (`HW1 Q2c [HW1S p.3]`), so a FAIL points at the page to read. An offi
 reference can't compute (a proof, an explanation) is a `skip` with its shape. An `example` checks
 a worked example the course itself shows (a slide, a reading): it isn't an official part, but it
 tests the reference before any solutions are out. PARTS is the number of official answer parts
-the extracts hold:
+the extracts hold, one per solution marker qonly.py cuts (every form it reads, not only
+`Solution [<doc> <loc>]:`), printed from the hub root by:
 
-  grep -hE '^[-*[:space:]]*Solution \[' _build/extract/*.md | wc -l
+  python3 -I <skill>/scripts/qonly.py --parts
 
 It passes only when its checks and skips name exactly PARTS distinct parts, none twice: a
 self-test that checks three of forty answers proves little. With no check and no example it
@@ -25,7 +26,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))  # -I leaves the script dir out
 
-PARTS = None  # ---- Fill in: the official answer parts the extracts hold (the grep above).
+PARTS = None  # ---- Fill in: the official answer parts the extracts hold (qonly.py --parts).
 FAILS = []
 RUN = []
 SKIPPED = []

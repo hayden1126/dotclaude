@@ -22,7 +22,12 @@ line), and passes the copy qonly.py wrote; a marker with a short qualifier (`Sol
 [...]:`, `**Solution (Q1):**`, `Answer [<answers doc> ...]:`) cuts, while `Answer the following [HW1 p.2]:`
 and starter code don't; a line no marker cuts that cites an answers page, whatever its wording,
 makes a copy due and fails the check by file and line; a closing line may carry detail after its
-flagged count."""
+flagged count. Round 8: the qualified and loose-word markers (`Worked solution`, `Answer`, `Key`)
+cut only in a question part of a doc with solutions, and a qualifier must name a part, so lecture
+text such as `**Solutions to recurrences** are unique.` cuts nothing; extract_check.py warns on a
+cutting marker off the brief's form and on a question part no marker cuts; `qonly.py --parts`
+counts the markers it cuts; a cite's pages are read in every form (two pages, an en dash, `P.`,
+none) and question pages across extracts."""
 import contextlib
 import importlib.util
 import io
@@ -585,7 +590,9 @@ class QOnly(unittest.TestCase):
                 code, out = self.check()
                 self.assertEqual(code, 1, out)
                 self.assertIn("_build/extract/hw1.md:6: CITES AN ANSWERS PAGE", out)
-                self.assertNotIn("hw1.md:10:", out)  # the decorated marker there cuts
+                # The decorated marker there cuts: a warning (off the brief's form), no failure.
+                self.assertNotIn("_build/extract/hw1.md:10: CITES", out)
+                self.assertIn("warning: _build/extract/hw1.md:10: a solution marker not in", out)
         # A same-file Answers `yes` doc: a cite of its key page in a question part fails; its
         # question pages don't.
         self.write("MANIFEST.md", MANIFEST + PE_ROW)
@@ -631,7 +638,13 @@ class QOnly(unittest.TestCase):
         self.assertEqual(qonly.due(text, rows), (False, text))
         self.write("_build/extract/d1.md", text)
         code, out = self.check()
-        self.assertNotIn("d1.md", out)
+        # Only the warning that no marker cuts anything in the part (round 8's backstop).
+        self.assertEqual([l for l in out.splitlines() if "d1.md" in l],
+                         ["warning: _build/extract/d1.md:1: [HW1 Q1a] is a question part of a "
+                          "doc with solutions, yet no solution marker cuts anything in it; if its "
+                          "block holds a solution, start it `Solution [<doc> <loc>]:` and rerun "
+                          "qonly.py (an official solution that skips the part, or one on a key "
+                          "page, needs nothing)"])
         for line in ("solution = memo[i - 1]", "solution.cache[k - 1]:", "solution (x) = [a b]"):
             self.assertFalse(qonly.BRACKETED.match(line), line)
 
@@ -649,6 +662,149 @@ class QOnly(unittest.TestCase):
         for line in ("Coverage: 4/5 statements; 3 blocks; 2 of 3 branches",
                      "Coverage: 4/5 statements; 3 blocks; 2 of 3 branches: unreadable"):
             self.assertEqual(qonly.closing(["### [D3 p.2] x\n", "y\n", line + "\n"]), set(), line)
+
+    # ---- round 8 ----
+
+    HW2_ROW = ("| HW2 | `sources/hw2.pdf` | 1 | in | yes | yes | homework with solutions; "
+               "solutions to HW2 |\n")
+    HW2 = ("### [HW2 Q1] Path\nPages: [HW2 p.1]\n\"Find a shortest path.\" (5 points)\n"
+           "Worked solution [HW2 p.1]: s, a, t, length 7.\n"
+           "Coverage: p.1; 1 blocks; 0 image only; 0 flagged unreadable.\n")
+    # Lecture lines shaped like a qualified marker: none names a part.
+    LECTURE_LINES = ("**Solutions to recurrences** are unique.", '- **Solution set:** "x < 3"',
+                     "**Solution concepts**", '- Solution set [L3 p.5]: "the feasible region"')
+
+    def test_lecture_text_shaped_like_a_qualified_marker_cuts_nothing(self):
+        # Round 8, finding 1: `**Solutions to recurrences** are unique.` in a lecture page block
+        # read as the bold marker with a qualifier, so the copy lost the line and what followed.
+        text = '### [HW1 p.2] a page\n**Solutions to recurrences** are unique.\n"no answer here"\n'
+        self.write("_build/extract/d1.md", text)
+        self.qonly()
+        self.assertFalse(os.path.exists(os.path.join(self.root, "_build", "q-only", "d1.md")))
+        rows = extract_check.manifest_rows(os.path.join(self.root, "MANIFEST.md"))
+        qonly = load("qonly")
+        for line in self.LECTURE_LINES:
+            # Neither in a lecture block nor in a question part of a doc with solutions.
+            for head in ("### [D1 p.2] a page\n", "### [HW1 Q1a] x\nPages: [HW1 p.1]\n"):
+                with self.subTest(line=line, head=head):
+                    text = head + line + "\nmore\n"
+                    self.assertEqual(qonly.due(text, rows), (False, text))
+        # A qualified marker in a lecture block (no question part, no solutions) cuts nothing:
+        # only the strict forms do there.
+        text = "### [D1 p.2] a page\n**Solution (Q1):** the idea\nmore\n"
+        self.assertEqual(qonly.due(text, rows), (False, text))
+        text = "### [D1 p.2] a page\n**Solution:** the idea\nmore\n"
+        self.assertEqual(qonly.due(text, rows)[1], "### [D1 p.2] a page\n")
+
+    def test_an_off_form_solution_in_a_doc_with_solutions_is_cut(self):
+        # Round 8, finding 2: a same-file Answers `yes` doc's `Worked solution [HW2 p.1]:` cites
+        # its own question page, so no marker read it and no cite flagged it: no copy, and the
+        # extract held the answer.
+        self.write("MANIFEST.md", MANIFEST + self.HW2_ROW)
+        self.write("_build/pages/HW2/p-001.png", "")
+        self.write("_build/extract/hw2.md", self.HW2)
+        self.qonly()
+        body = self.read("_build/q-only/hw2.md").partition("\n")[2]
+        self.assertNotIn("length 7", body)
+        self.assertIn('"Find a shortest path." (5 points)\n', body)
+        code, out = self.check()
+        self.assertEqual(code, 0, out)
+        # Not the canonical form: a warning names its line.
+        self.assertIn("warning: _build/extract/hw2.md:4: a solution marker not in the "
+                      "`Solution [<doc> <loc>]:` form", out)
+        # `**Answer:**` with no cite, in a question part of a doc paired with an answers file.
+        rows = extract_check.manifest_rows(os.path.join(self.root, "MANIFEST.md"))
+        qonly = load("qonly")
+        for mark in ("**Answer:** 42", "Answer: 42", "**Key:** 42", "Worked solution: 42",
+                     "**Answer (a):** 42", "Key [HW1S p.1]: 42", "Answer key, part (a): 42"):
+            with self.subTest(mark):
+                text = "### [HW1 Q1a] x\nPages: [HW1 p.1]\nWrite f.\n" + mark + "\nmore\n"
+                due, body = qonly.due(text, rows)
+                self.assertTrue(due)
+                self.assertNotIn("42", body)
+                self.assertIn("Write f.", body)
+
+    def test_a_question_part_no_marker_cuts_warns(self):
+        # Round 8, the backstop for a solution with no marker at all: each question part of a doc
+        # with solutions that no marker cuts is a warning by file and line.
+        self.write("MANIFEST.md", MANIFEST + self.HW2_ROW)
+        self.write("_build/pages/HW2/p-001.png", "")
+        self.write("_build/extract/hw2.md", self.HW2.replace(
+            "Worked solution [HW2 p.1]: s, a, t, length 7.", "The path s, a, t has length 7."))
+        self.qonly()
+        code, out = self.check()
+        self.assertEqual(code, 0, out)
+        self.assertIn("warning: _build/extract/hw2.md:1: [HW2 Q1] is a question part of a doc "
+                      "with solutions, yet no solution marker cuts anything in it", out)
+        self.assertNotIn("hw1.md:", out)  # both its parts have a marker
+        self.write("_build/extract/hw2.md", self.HW2)
+        self.qonly()
+        self.assertNotIn("hw2.md:1:", self.check()[1])
+
+    def test_parts_counts_every_marker_qonly_cuts(self):
+        # Round 8, finding 3: the self-test's PARTS grep saw only `Solution [`, so qualified
+        # markers went uncounted. `qonly.py --parts` counts what qonly.py cuts.
+        self.write("_build/extract/hw1.md", REPRO_A)
+        self.write("_build/extract/hw1b.md",
+                   "### [HW1 Q2a] x\nPages: [HW1 p.2]\n\"Do it.\"\n**Solution (Q2a):** 3\n"
+                   "### [HW1 Q2b] y\nPages: [HW1 p.2]\n\"Do it.\"\n**Answer:** 4\n"
+                   "### [HW1 Q2c] z\nPages: [HW1 p.2]\n\"Do it.\"\n"
+                   "### [HW1S p.2] Solutions, continued\nSolution [HW1S p.2]: 5\n"
+                   "### [D1 p.2] a page\n**Solutions to recurrences** are unique.\n")
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            code = load("qonly").main(["--parts", "--root", self.root])
+        self.assertEqual(code, 0, out.getvalue())
+        # REPRO_A: 2; hw1b: Q2a, Q2b and the answers file's line; d1: none.
+        self.assertEqual(out.getvalue(), "5\n")
+
+    def test_the_answers_cite_reads_every_page_and_locator_form(self):
+        # Round 8, finding 5: a cite with two pages, an en dash, a capital P or no page at all
+        # read as no answers cite, and so did a section cite of an answers file with no note.
+        qonly = load("qonly")
+        rows = extract_check.manifest_rows(os.path.join(self.root, "MANIFEST.md"))
+        rows.update({"PE1": {"answers": True, "answers_for": {"PE1"}},
+                     "HW3S": {"answers": True, "answers_for": set()}})
+        qpages = {"PE1": {1, 2}}
+        for loc in ("p.2, p.3", "p.2–3", "P.3", "Key", "pp. 2-3"):
+            self.assertTrue(qonly.answers_cite("PE1", loc, rows, qpages), loc)
+        for loc in ("p.2", "p.1-2", "P.1, p.2", "Q1", "Q1a"):
+            self.assertFalse(qonly.answers_cite("PE1", loc, rows, qpages), loc)
+        self.assertTrue(qonly.answers_cite("HW3S", "Problem 1", rows, qpages))
+        self.assertFalse(qonly.answers_cite("HW1", "p.1", rows, qpages))
+
+    def test_an_answer_word_in_question_text_cuts_nothing(self):
+        # Round 8, finding 6: `Answer in the table [PE1 p.2]:` on a question page of a same-file
+        # Answers `yes` doc read as the Answer marker and dropped the question.
+        self.write("MANIFEST.md", MANIFEST + PE_ROW)
+        rows = extract_check.manifest_rows(os.path.join(self.root, "MANIFEST.md"))
+        text = ('### [PE1 Q1] Trace\nPages: [PE1 p.1-2]\n"Trace a search from s."\n'
+                "Answer in the table [PE1 p.2]:\n| step | queue |\n**Solution:** s, a, b\n")
+        body = load("qonly").due(text, rows)[1]
+        self.assertIn("Answer in the table [PE1 p.2]:\n| step | queue |\n", body)
+        self.assertNotIn("s, a, b", body)
+
+    def test_question_pages_count_across_extracts(self):
+        # Round 8, finding 7: a lecture extract citing a question page of PE1, whose parts are in
+        # pe1.md, failed as citing an answers page: question pages were read per extract.
+        self.write("MANIFEST.md", MANIFEST + PE_ROW)
+        for page in (1, 2, 3):
+            self.write(f"_build/pages/PE1/p-{page:03d}.png", "")
+        self.write("_build/extract/pe1.md", PE)
+        self.write("_build/extract/d1.md",
+                   '### [HW1 p.2] a page\n"no answer here"\nThe graph is on [PE1 p.2].\n')
+        self.qonly()
+        code, out = self.check()
+        self.assertEqual(code, 0, out)
+        self.assertNotIn("d1.md", out)
+        self.assertFalse(os.path.exists(os.path.join(self.root, "_build", "q-only", "d1.md")))
+        # Its key page still counts as answers.
+        self.write("_build/extract/d1.md",
+                   '### [HW1 p.2] a page\n"no answer here"\nThe key is on [PE1 p.3].\n')
+        self.qonly()
+        code, out = self.check()
+        self.assertEqual(code, 1, out)
+        self.assertIn("_build/extract/d1.md:3: CITES AN ANSWERS PAGE", out)
 
     def test_the_marker(self):
         solution = load("qonly").SOLUTION

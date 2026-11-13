@@ -161,7 +161,7 @@ UNRENDERED = re.compile(r"[*`\[\]\\]|(?<!\w)_|_(?!\w)|<[A-Za-z/!?]")
 # backlog's K, CHASSIS's C). Markup, FB and a C id right after CHASSIS are refused. A bare S, L,
 # K or C id, after "rule" too, only warns (RULE_ID_WARN): a course writes a state (S1), an
 # inductor (L1), a lecture (L3), a capacitor or a case (C1) so, and "by the product rule (C3)"
-# is course text (the student's call, 2026-11-12); a wrong refusal mid-exam costs more than a
+# is course text (FB-095); a wrong refusal mid-exam costs more than a
 # stray id left on the page.
 TOOL_PREFIX = "antml" + ":"
 TOOL_TAGS = {"invoke", "parameter", "content"}

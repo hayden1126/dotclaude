@@ -284,6 +284,10 @@ class ExtractCheck(unittest.TestCase):
                       "1 UNREADABLE", out)
         self.assertIn("_build/extract/D3.md:3: UNREADABLE flag still open", out)
         self.assertNotIn("D3.md:4:", out)
+        # Round 8: stage 02 runs unattended, so the fix it names is a re-read, never a question.
+        self.assertIn("re-read it at 300 dpi on a crop (02-extract step 3.2) and replace the flag "
+                      "with the value", out)
+        self.assertNotIn("ask the student", out)
         # Once the flag is cleared, the closing line alone fails nothing.
         self.extract("D3.md", FULL["D3.md"] + "Coverage: D3 pp.2-4; 2 blocks; 0 image only; "
                      "0 flagged unreadable (p.3 read from the slide's notes).\n")
