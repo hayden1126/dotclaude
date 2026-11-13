@@ -399,16 +399,16 @@ class Template(unittest.TestCase):
     def test_a_scroller_with_an_id_survives_an_answer_that_moves_it(self):
         # "Drop it" removes the stats strip, so every later child of <main> moves up one place.
         box = 'style="height: 200px; overflow: auto"><div style="height: 2400px"></div>'
-        pane = (f'<main>${{page}}<section {box}</section><div class="plain" {box}</div>'
+        pane = (f'<main>${{page}}<div class="first" {box}</div><div class="plain" {box}</div>'
                 f'<div id="pane" {box}</div>')
         tab = self.open([(MAIN_OPEN, pane)])
         doc = 'document.getElementById("app").contentDocument'
-        tab.evaluate(f'{doc}.querySelector("section").scrollTop = 300; {doc}.getElementById("pane").scrollTop = 500')
+        tab.evaluate(f'{doc}.querySelector(".first").scrollTop = 300; {doc}.getElementById("pane").scrollTop = 500')
         tab.evaluate(FRAMES_JS)
         self.click(tab, question(2), "Drop it")
         self.assertEqual(tab.evaluate(f'{doc}.getElementById("pane").scrollTop'), 500, "found by its id")
         self.assertEqual(tab.evaluate(f'{doc}.querySelector(".plain").scrollTop'), 0,
-                         "the section's old place now holds a div: it isn't given the section's scroll")
+                         "the first scroller's old place now holds another div: it isn't given that scroll")
         self.assertEqual(self.errors(tab), [])
 
     def test_a_scroll_cut_short_by_a_shorter_render_comes_back_in_full(self):

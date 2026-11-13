@@ -312,20 +312,21 @@ let shownView = null, savedScroll = null, restoring = false;
 const viewKey = () => `${state.frame.label}\n${state.screen ?? ""}`;
 
 // Where an element sits, from its nearest id or the root, so a reload finds the same scroller. Each
-// step keeps its tag: an answer that adds or drops an earlier sibling then finds nothing, not the
-// wrong element. A scroller with an id is found wherever it moves.
+// step keeps its tag and class, so when an answer adds or drops an earlier sibling, the shifted path
+// finds nothing rather than an element of another kind. Two alike siblings can still trade places;
+// a scroller with an id is found wherever it moves.
 function scrollPath(el) {
   const steps = [];
-  for (; el.parentElement && !el.id; el = el.parentElement) steps.unshift([[...el.parentElement.children].indexOf(el), el.tagName]);
+  for (; el.parentElement && !el.id; el = el.parentElement) steps.unshift([[...el.parentElement.children].indexOf(el), el.tagName, el.getAttribute("class")]);
   return JSON.stringify([el.parentElement ? el.id : null, steps]);
 }
 
 function scrollTarget(doc, path) {
   const [id, steps] = JSON.parse(path);
   let el = id ? doc.getElementById(id) : doc.documentElement;
-  for (const [i, tag] of steps) {
+  for (const [i, tag, cls] of steps) {
     el = el?.children[i];
-    if (el?.tagName !== tag) return null;
+    if (el?.tagName !== tag || el.getAttribute("class") !== cls) return null;
   }
   return el;
 }

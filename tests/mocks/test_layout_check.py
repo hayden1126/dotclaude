@@ -533,8 +533,14 @@ class LivePage(TemporaryPages):
         pair_group = '  { label: "Pair", options: ["Comfortable", "Compact"] },\n'
         page = self.page([(CONTROLS_OPEN, CONTROLS_OPEN + extra_groups(1) + short_group + pair_group)])
         tab = self.open(page, 1905, 800)
+        # The row's fit, measured here, not read from the shell, whose names are private to it: one
+        # line, nothing past the row's right edge.
         state = """(() => {
           const top = document.querySelector(".m-top");
+          const rowFits = () => {
+            const groups = [...top.querySelectorAll(".m-ctl")], first = groups[0];
+            return top.scrollWidth <= top.clientWidth && groups.every((g) => g.offsetTop < first.offsetTop + first.offsetHeight);
+          };
           const on = [...top.classList].filter((c) => c.startsWith("m-fit-")).sort();
           const fits = rowFits();
           let neededLast = true;
