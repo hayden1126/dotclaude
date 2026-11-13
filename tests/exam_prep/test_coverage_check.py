@@ -7,8 +7,9 @@ a stray digit in a note maps nothing, a cell that doesn't parse fails, a target 
 `skip (why)` or a subsection the backbone defines, and no blocks at all fails.
 
 The figure floor (STYLE S11): a section marked `Diagram-taught: yes` names a figure on its Figures
-line; once one section carries the line every section must; a backbone with none (written before
-the rule) passes with one WARN naming 10-polish's figure pass."""
+line; a section with no such line (written before the rule) passes with a WARN naming 10-polish's
+figure pass, whether or not other sections carry it (a reopened hub's extended backbone, FB-015),
+and a backbone with none gets one WARN in all; two lines or a value other than yes or no fails."""
 import contextlib
 import importlib.util
 import io
@@ -296,14 +297,63 @@ class FigureFloor(unittest.TestCase):
                       warns[0])
         self.assertIn("10-polish figure pass", warns[0])
 
-    def test_a_section_without_the_line_fails_when_others_carry_it(self):
+    def test_a_section_without_the_line_warns_when_others_carry_it(self):
+        # A hub reopened for the next exam extends its backbone: its new sections carry the line,
+        # its old ones don't. Failing them stopped the reopened build at stage 03 (FB-015).
         self.backbone(FLOOR.replace("- Diagram-taught: no\n", ""))
         code, out = self.run_check()
+        self.assertEqual(code, 0, out)
+        self.assertNotIn("§2:", out)
+        warns = self.err.getvalue().splitlines()
+        self.assertEqual(len(warns), 1, warns)
+        self.assertIn("coverage_check: WARN: §2: no `Diagram-taught: yes|no` line", warns[0])
+        self.assertIn("10-polish figure pass", warns[0])
+
+    def test_a_reopened_hubs_old_section_warns_and_the_new_one_is_held(self):
+        old_new = """# Backbone
+
+## §1 Old (`sec-1`, file `notes/01-old.md`, full)
+
+| § | Title | id | Sources | Practice | How it's tested |
+|---|---|---|---|---|---|
+| 1.1 | Stages | `sec-1-stages` | D1 pp.1-9 | | trace |
+
+- Figures: none
+
+## §2 New (`sec-2`, file `notes/02-new.md`, full)
+
+| § | Title | id | Sources | Practice | How it's tested |
+|---|---|---|---|---|---|
+| 2.1 | Sizes | `sec-2-sizes` | D9 p.3 | | count |
+
+- Figures: `fig-2-x`
+- Diagram-taught: yes (D9 p.3)
+
+## Coverage matrix
+
+| Source block range | → | Subsection |
+|---|---|---|
+| D1 pp.1-9 | | 1.1 |
+"""
+        self.backbone(old_new)
+        code, out = self.run_check()
+        self.assertEqual(code, 0, out)
+        warns = self.err.getvalue().splitlines()
+        self.assertEqual(len(warns), 1, warns)
+        self.assertIn("WARN: §1: no `Diagram-taught: yes|no` line", warns[0])
+        self.assertIn("10-polish figure pass", warns[0])
+        # The new section is still held to the floor.
+        self.backbone(old_new.replace("- Figures: `fig-2-x`", "- Figures: none"))
+        code, out = self.run_check()
         self.assertEqual(code, 1, out)
-        self.assertIn("§2: no `Diagram-taught: yes|no` line, which the backbone's other sections "
-                      "carry", out)
-        self.assertNotIn("§1:", out)
-        self.assertEqual(self.err.getvalue(), "")
+        self.assertIn("§2: Diagram-taught: yes, but its Figures line names no `fig-` id", out)
+
+    def test_two_diagram_taught_lines_fail(self):
+        self.backbone(FLOOR.replace("- Diagram-taught: no\n",
+                                    "- Diagram-taught: no\n- Diagram-taught: yes\n"))
+        code, out = self.run_check()
+        self.assertEqual(code, 1, out)
+        self.assertIn("§2: 2 Diagram-taught lines; a section has one", out)
 
     def test_a_value_other_than_yes_or_no_fails(self):
         self.backbone(FLOOR.replace("- Diagram-taught: no\n", "- Diagram-taught: maybe\n"))

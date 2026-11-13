@@ -26,9 +26,12 @@ other locator (`### [C1 main.py]`, or `Q3C`, which isn't a part) is mapped only 
 
 The figure floor (STYLE S11): each `## §N` section of the backbone carries a `- Diagram-taught:
 yes|no` line beside its `- Figures:` line, and a section marked `yes` (its slides teach it through
-diagrams) must name at least one `fig-` id on its Figures line. Once any section carries the line,
-every section must. A backbone with none at all was written before the rule: it passes, with one
-WARN line on stderr naming 10-polish's figure pass, which adds the lines.
+diagrams) must name at least one `fig-` id on its Figures line. A section with no such line was
+written before the rule (a hub reopened for the next exam extends its backbone, so its old
+sections lack the line while the new ones carry it, FB-015): it passes, with a WARN line on stderr
+naming 10-polish's figure pass, which adds the lines. A backbone with none at all gets one such
+WARN for the whole backbone; otherwise each section lacking the line gets its own. Two lines in a
+section, a value other than yes or no, or a `yes` with no figure fails.
 
 Exit 1 when a block is unmapped, a row's cell doesn't parse, a target isn't a subsection, a line
 looks like a block header but isn't one, the extracts hold no blocks (or a file holds none), or a
@@ -196,7 +199,7 @@ def matrix(backbone):
 def figure_floor(backbone):
     """([problems], [warnings]) for the figure floor: each `## §N` section's `- Diagram-taught:`
     line and, when it says yes, a `fig-` id on its `- Figures:` line (a Figures line may wrap onto
-    indented lines)."""
+    indented lines). A section with no such line is a warning, never a problem (FB-015)."""
     heads = list(SECTION_HEAD.finditer(backbone))
     found, bad = {}, []
     for i, head in enumerate(heads):
@@ -218,10 +221,12 @@ def figure_floor(backbone):
         found[head.group(1)] = (taught, figures)
     if not any(taught for taught, _ in found.values()):
         return [], [PRE_S11] if found else []
+    warnings = []
     for num, (taught, figures) in found.items():
         if not taught:
-            bad.append(f"§{num}: no `Diagram-taught: yes|no` line, which the backbone's other "
-                       "sections carry (03-backbone step 5)")
+            warnings.append(f"§{num}: no `Diagram-taught: yes|no` line: a section written before "
+                            "the figure floor (STYLE S11, FB-015), so it isn't held to it; a "
+                            "10-polish figure pass adds the line and the figure")
             continue
         if len(taught) > 1:
             bad.append(f"§{num}: {len(taught)} Diagram-taught lines; a section has one")
@@ -232,7 +237,7 @@ def figure_floor(backbone):
         elif word.group(1) == "yes" and not FIG_ID.search(figures):
             bad.append(f"§{num}: Diagram-taught: yes, but its Figures line names no `fig-` id: a "
                        "section its slides teach through diagrams leads with a figure (STYLE S11)")
-    return bad, []
+    return bad, warnings
 
 
 def covered(row, m):
