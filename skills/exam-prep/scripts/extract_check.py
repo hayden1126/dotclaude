@@ -38,30 +38,44 @@ row and `no, attempted ...` still isn't.
 Key says where an Answers `yes` doc's answers are, read whole (trimmed, any case; read_key()):
 - empty or `-`: no key, as an Answers `no` row has (KEY WITHOUT ANSWERS otherwise).
 - `for HW1, HW2 and HW3` (ids joined by `,`, `&`, `and` or `, and`): a separate answers file
-  solving those docs; each must be a doc id in MANIFEST (KEY NAMES NO DOC).
+  solving those docs; each must be a doc id in MANIFEST (KEY NAMES NO DOC), and none its own
+  (KEY NAMES ITS OWN DOC: a doc holding its own key says where; meanwhile every block and cite of
+  it reads as answers, failing closed).
 - `p.N` or `pp. 7-9, 11` (items N or N-M, hyphen or en dash, ascending, joined as above; a joined
-  item may restate `p.`): the doc holds its own key on those pages.
+  item may restate `p.`): the doc holds its own key on those pages. A row whose File doesn't end
+  in .pdf and whose Pages isn't a number (a Word file, a reveal deck) has no pages for its
+  locators to name, so it fails PAGES KEY ON AN UNPAGED DOC.
 - `inline`: the doc holds its own key, each solution under its question; no key pages.
 - `sections: Marking scheme, Answers` (names joined by `,`): a source without pages holds its own
   key in the sections whose block locator is one of the names (any case, runs of whitespace as
-  one). A row whose File ends in .pdf or whose Pages is a number fails SECTIONS KEY ON A PAGED
-  DOC, and a named section with no block in any solutions file fails KEY SECTION NOT FOUND.
+  one), or one of them followed by a space and `Q` (`Marking scheme Q1`) or by a comma (`Marking
+  scheme, part 2`); `Key formulas` under `sections: Key` is no key section. A deck's solution
+  slides are named by fragment (`sections: #/5, #/6`). A row whose File ends in .pdf or whose
+  Pages is a number fails SECTIONS KEY ON A PAGED DOC, and a named section with no block in any
+  solutions file fails KEY SECTION NOT FOUND.
 - anything else fails UNREAD KEY, and the row's other key checks are left out.
 Solved docs: the docs a `for` key names, and every doc whose own key is pages, `inline` or
-`sections:`. Answers pages (answers_cite()): every block and page of a `for` answers file (but a
-doc its own list names); the key pages; the key sections. Nothing else of a self-answering doc is
-answers: its cover, rules, formula sheet or a "Key formulas" section stays in the extract. Extract
-agents keep every answer out of _build/extract/<name>.md and write it to _build/solutions/<name>.md,
-one `### [<doc> Q1a]` block per question part of a solved doc holding a `Solution [<doc> <loc>]:
-...` line or the line `No official solution.`; a part's block sits in the solutions file named as
-the extract holding the part's question block. An answers file's own page or section blocks may
-sit in any solutions file (its agent writes _build/solutions/<answers file name>.md). It fails,
-naming the file and line:
+`sections:`. Answers pages (answers_cite()): every block and page of a `for` answers file; the
+key pages; the key sections. Nothing else of a self-answering doc is answers: its cover, rules,
+formula sheet or a "Key formulas" section stays in the extract. Extract agents keep every answer
+out of _build/extract/<name>.md and write it to _build/solutions/<name>.md, one `### [<doc> Q1a]`
+block per question part of a solved doc holding a `Solution [<doc> <loc>]: ...` line or the line
+`No official solution.`; a part's block sits in the solutions file named as the extract holding
+the part's question block (either one, when two extracts hold it). Official text a question's
+parts share goes in a stem block, `### [<doc> Q3 stem]`, in that same solutions file. An answers
+file's own page or section blocks may sit in any solutions file (its agent writes
+_build/solutions/<answers file name>.md). One whose `for` key names two or more docs is read by
+no question check there, so each of its page or section blocks holds only the line
+`(transcribed under the sets' blocks)`, blank lines, `(blank)`, `(image only: ...)` entries,
+`UNREADABLE:` flags and `(illegible at 300 dpi: ...)` values (SHARED_OK); its official text goes
+under each set's stem or part blocks. It fails, naming the file and line:
 - NO SOLUTION BLOCK: a question part of a solved doc with a block in an extract and none in any
   solutions file.
 - in a solutions file: a part block naming a part no extract has (NO SUCH PART), a part with two
   blocks (TWO SOLUTIONS BLOCKS), a part block holding neither form (EMPTY SOLUTIONS BLOCK), a part
-  block in a solutions file other than its extract's (WRONG SOLUTIONS FILE).
+  block in a solutions file other than its extract's (WRONG SOLUTIONS FILE), a line of a
+  multi-set answers file's page or section block that SHARED_OK refuses (SHARED ANSWERS PAGE
+  HOLDS TEXT).
 - in an extract: SOLUTION IN AN EXTRACT, a bracketed `Solution [<doc> <loc>]` or bold
   `**Solution:**` line, fenced or not, in a block of a solved doc, or in any block (a lecture's
   too) when a cite on it names a solved doc or an answers doc; CITES AN ANSWERS PAGE, a line
@@ -81,7 +95,8 @@ first block of a file holding one), for a person to read: on a loose `Solution:`
 Solution` heading, `Solutions:`), and on an answer line, one starting (after list or quote marks)
 `Answer:`, `Answers:`, `Ans:`, `Final answer:`, `*Solution*:` or `Solution (<cite>):` with more than
 blanks, underscores, dots or an ellipsis (an answer blank) after it. It warns too on a solutions
-block for a stem (each part still needs its own).
+block for a stem while one of its parts (`Q3a`, `Q3.1`, not `Q31`) has no solutions block of its
+own, or no part of it has a question block.
 
 A doc that STATUS.md names on a line starting `Unverified: <doc>,` (material added at the
 student's request without an extract, FB-013) is reported as unverified while the files count
@@ -132,9 +147,11 @@ SCOPE_SLIDES = re.compile(r"slides\s+#/(\d+)\s*-\s*(?:#/)?(\d+)")
 # UNREAD KEY rather than being read in part, since a joiner a parser stops at would drop a solved
 # doc or a key page with exit 0.
 # - `for <id>( <join> <id>)*`, a join being `,`, `&`, `and` or `, and`: a separate answers file.
-#   Every id must be a doc id in MANIFEST (KEY NAMES NO DOC).
+#   Every id must be a doc id in MANIFEST (KEY NAMES NO DOC), and none the row's own (KEY NAMES
+#   ITS OWN DOC).
 # - `p.N`, `pp. <list>` (items N or N-M, hyphen or en dash, ascending, joined as above; a joined
-#   item may restate `p.`, as in `p.3 and p.4`): the doc's own key pages.
+#   item may restate `p.`, as in `p.3 and p.4`): the doc's own key pages, on a paged doc only
+#   (PAGES KEY ON AN UNPAGED DOC).
 # - `inline`: the doc's own key, each solution under its question; no key page.
 # - `sections: <name>(, <name>)*`: a source without pages; its key is the blocks whose locator is
 #   one of the names (any case, runs of whitespace as one).
@@ -204,6 +221,17 @@ PREAMBLE_OK = re.compile(r"^(?:#\s|Sources:|Every page image was viewed\.)")
 OPENER = re.compile(r"^ {0,3}(?P<mark>`{3,}(?=[^`]*$)|~{3,})")
 CLOSER = re.compile(r"^ {0,3}(?P<mark>`{3,}|~{3,})[ \t]*$")
 DIRS = ("extract", "solutions")
+# The lines a page or section block of a multi-set answers file (its `for` key names two or more
+# docs) may hold, each whole: `(transcribed under the sets' blocks)`, a blank line, `(blank)`, an
+# `(image only: ...)` entry, an `UNREADABLE:` flag or an `(illegible at 300 dpi: ...)` value. Its
+# agent writes those blocks to _build/solutions/<answers file name>.md, which no question check
+# reads, so its official text goes under each set's stem or part block instead.
+SHARED = "(transcribed under the sets' blocks)"
+# `UNREADABLE:` is matched as written, so a lower-case `unreadable:` line, which no flag count
+# reads, is text.
+SHARED_OK = re.compile(r"\s*(?:" + re.escape(SHARED) + r"|\(blank\)"
+                       r"|(?i:\(image only\b(?:[^()]|\([^()]*\))*\))|UNREADABLE:.*"
+                       r"|(?i:\(illegible at 300 dpi:\s*[^)\s][^)]*\)))?\s*")
 
 
 def numbers(text):
@@ -415,22 +443,33 @@ def question_docs(extracts):
             if m.group("q")}
 
 
+def key_section(loc, names):
+    """Whether a page-less locator is key material under a `sections:` key's names (read_key()):
+    one of the names whole (norm()), or a name followed by a space and `Q` (`Marking scheme Q1`,
+    a part of the key) or by a comma (`Marking scheme, part 2`). Another name that starts with a
+    key name (`Key formulas` under `sections: Key`) is not."""
+    loc = " ".join(loc.split())
+    return norm(loc) in names or any(
+        re.match(r"(?i:" + re.escape(written) + r")(?: Q|\s*,)", loc) for written in names.values())
+
+
 def answers_cite(doc, loc, rows):
     """Whether a `[<doc> <loc>]` cite or block locator points into answers: any of an answers
-    file whose `for` key names other docs only; for a doc with its own key, one naming a key page
-    (`pp. 7-9`) or a key section (`sections: Marking scheme`, matched whole by norm()). Nothing
+    file (a `for` key; one naming its own doc fails KEY NAMES ITS OWN DOC, and every block and
+    cite of it reads as answers meanwhile, failing closed); for a doc with its own key, one naming
+    a key page (`pp. 7-9`) or a key section (`sections: Marking scheme`, key_section()). Nothing
     else of such a doc is answers (its cover, rules, formula sheet, a "Key formulas" section), nor
     anything of a row whose key is missing or unread (it fails NO KEY or UNREAD KEY)."""
     row = rows.get(doc) or {}
     form = key_of(row)
     key = row.get("key") or {}
     if form == "for":
-        return doc not in key["docs"]
+        return True
     pages = loc_pages(loc)
     if form == "pages":
         return bool(pages & key["pages"])
     if form == "sections":
-        return not pages and norm(loc) in key["names"]
+        return not pages and key_section(loc, key["names"])
     return False
 
 
@@ -644,8 +683,8 @@ def check(root, doc, row, b):
 
 def solution_blocks(sols):
     """{(doc, part): [(file, line number, holds a `Solution [` line, holds either form)]} for each
-    question part's block in the solutions files, and [(file, line number, header)] for each
-    stem's block."""
+    question part's block in the solutions files, and [(file, line number, doc, stem)] for each
+    stem's block (`Q3 stem`)."""
     parts, stems = {}, []
     for rel, lines in sols:
         for start, end, m in sections(lines):
@@ -653,7 +692,7 @@ def solution_blocks(sols):
             if not q:
                 continue
             if not PART.fullmatch(q):
-                stems.append((rel, start + 1, f"[{m.group('doc')} {q}]"))
+                stems.append((rel, start + 1, m.group("doc"), q))
                 continue
             body = lines[start + 1:end]
             has = any(SOLVED.match(line) for line in body)
@@ -835,9 +874,33 @@ def solutions_check(root, rows):
                 out.append(f"{r}:{k}: EMPTY SOLUTIONS BLOCK: [{doc} {q}] holds neither a "
                            f"`Solution [<doc> <loc>]: ...` line nor the line `{NO_SOLUTION}`")
                 bad = True
-    for rel, n, head in stems:
-        out.append(f"warning: {rel}:{n}: a solutions block for the stem {head}: each part still "
-                   "needs its own block")
+    for rel, n, doc, stem in stems:
+        # A stem's block holds the official text its parts share; it warns only while one of its
+        # parts (`Q3a`, `Q3.1`, not `Q31`) lacks a block of its own, or no part has a question
+        # block.
+        base = stem.split()[0]
+        mine = [k for k in have if k[0] == doc and k[1].startswith(base)
+                and not k[1][len(base):len(base) + 1].isdigit()]
+        if not mine or any(k not in parts for k in mine):
+            out.append(f"warning: {rel}:{n}: a solutions block for the stem [{doc} {stem}]: each "
+                       "part still needs its own block")
+    # A multi-set answers file's page or section blocks sit in a solutions file no question check
+    # reads, so they hold no official text (SHARED_OK).
+    shared = {doc for doc, row in rows.items() if row.get("kind") in ("in", "concepts")
+              and key_of(row) == "for" and len(row["key"]["docs"]) > 1}
+    for rel, lines in sols:
+        ends = closing(lines)
+        for start, end, m in sections(lines):
+            doc = m.group("doc")
+            if doc not in shared or m.group("q"):
+                continue
+            for i in range(start + 1, end):
+                if i in ends or SHARED_OK.fullmatch(lines[i].rstrip("\r\n")):
+                    continue
+                out.append(f"{rel}:{i + 1}: SHARED ANSWERS PAGE HOLDS TEXT: a page block of {doc}, "
+                           f"which solves several sets, holds only \"{SHARED}\"; put this under "
+                           "its set's stem or part block in _build/solutions/<set>.md")
+                bad = True
     for key in sorted(have):
         doc, q = key
         if doc in named and key not in parts:
@@ -862,11 +925,20 @@ def key_check(doc, row, rows, qdocs, keyed):
     if form == "unread":
         return [f"{doc}: UNREAD KEY: \"{key['cell']}\" isn't a Key form: write {KEY_FORMS}"]
     if form == "for":
-        return [f"{doc}: KEY NAMES NO DOC: \"{word}\" in its Key cell is no doc id in MANIFEST.md"
-                for word in sorted(key["docs"] - set(rows))]
+        out = [f"{doc}: KEY NAMES NO DOC: \"{word}\" in its Key cell is no doc id in MANIFEST.md"
+               for word in sorted(key["docs"] - set(rows))]
+        if doc in key["docs"]:
+            out.append(f"{doc}: KEY NAMES ITS OWN DOC: \"for\" names the docs an answers file "
+                       "solves; a doc holding its own key uses \"pp. N-M\", \"inline\" or "
+                       "\"sections: <name>\"")
+        return out
     out = []
+    paged = row["file"].lower().endswith(".pdf") or row["pages"].isdigit()
+    if form == "pages" and not paged:
+        out.append(f"{doc}: PAGES KEY ON AN UNPAGED DOC: use \"sections: <name>, <name>\" or "
+                   "\"inline\"")
     if form == "sections":
-        if row["file"].lower().endswith(".pdf") or row["pages"].isdigit():
+        if paged:
             out.append(f"{doc}: SECTIONS KEY ON A PAGED DOC: use \"pp. N-M\" or \"inline\"")
         else:
             out += [f"{doc}: KEY SECTION NOT FOUND: no block [{doc} {written}] in "
