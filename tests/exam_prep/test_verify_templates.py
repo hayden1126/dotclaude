@@ -8,6 +8,7 @@ official part; the example generator replaces its output only on a run that succ
 the backbone's worked examples exactly, so a failed run keeps the last good output; and the
 sibling import works under -I."""
 import os
+import re
 import subprocess
 import tempfile
 import unittest
@@ -27,6 +28,28 @@ SUM = ('    from reference import total\n'
        '    row(1, total([4]))\n'
        '    row(2, total([4, 5]))')
 GOOD = "# good output\n"
+
+
+class BaselineDate(unittest.TestCase):
+    def test_a_changed_template_moves_its_baseline_date(self):
+        # Round 9: verify-selftest.py and verify-set-key.py changed in round 8 under a baseline
+        # dated 2026-10-20, and 11-next-exam's reopen refreshes a hub's copy by that date. A
+        # template's baseline is never older than the last commit that changed it. Skipped
+        # without git history (a copy of the skill outside its repo).
+        env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+        for name in sorted(os.listdir(TEMPLATES)):
+            if not name.endswith(".py"):
+                continue
+            path = os.path.join(TEMPLATES, name)
+            r = subprocess.run(["git", "-C", REPO, "log", "-1", "--format=%as", "--", path],
+                               capture_output=True, text=True, env=env)
+            if r.returncode or not r.stdout.strip():
+                self.skipTest("no git history for the templates")
+            with open(path, encoding="utf-8") as f:
+                head = f.read(2000)
+            m = re.search(r"baseline as of (\d{4}-\d{2}-\d{2})", head)
+            self.assertTrue(m, name)
+            self.assertGreaterEqual(m.group(1), r.stdout.strip(), name)
 
 
 class Skeleton(unittest.TestCase):

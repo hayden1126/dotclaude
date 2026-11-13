@@ -168,7 +168,8 @@ class MarkerMirrorTest(unittest.TestCase):
         qonly = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(qonly)
         mine = template()
-        for name in ("LABEL", "LABELS", "PART_WORD", "QUAL"):
+        # Round 9: the marker word list was inlined here and compared with nothing.
+        for name in ("LABEL", "LABELS", "PART_WORD", "QUAL", "PREFIX", "WORDS"):
             self.assertEqual(getattr(mine, name), getattr(qonly, name), name)
         for line in ("Solution to Q1a [HW1S p.1]: 42", "**Solution (Q1):** 42", "Answer: 42",
                      "> **Official solutions, all parts:** 42", "Worked solution [HW2 p.1]: 7",

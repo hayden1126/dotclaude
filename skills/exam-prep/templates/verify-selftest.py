@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 r"""Self-test: the reference must reproduce every official solution before anything uses it.
 
-exam-prep template verify-selftest.py, baseline as of 2026-10-20; changes only via `12-retro`.
+exam-prep template verify-selftest.py, baseline as of 2026-11-12; changes only via `12-retro`.
 Copy it to _build/verify/selftest.py and fill the marked parts. Run from the hub root:
 
   python3 -I _build/verify/selftest.py      exit 0 only when every check passes
@@ -12,8 +12,9 @@ notes cite (`HW1 Q2c [HW1S p.3]`), so a FAIL points at the page to read. An offi
 reference can't compute (a proof, an explanation) is a `skip` with its shape. An `example` checks
 a worked example the course itself shows (a slide, a reading): it isn't an official part, but it
 tests the reference before any solutions are out. PARTS is the number of official answer parts
-the extracts hold, one per solution marker qonly.py cuts (every form it reads, not only
-`Solution [<doc> <loc>]:`), printed from the hub root by:
+the extracts hold, as qonly.py counts them (each question part's first solution marker in any
+form it cuts, not only `Solution [<doc> <loc>]:`, and each `Solution [<doc> <loc>]` line of a key
+page; never a lecture's worked example), printed from the hub root by:
 
   python3 -I <skill>/scripts/qonly.py --parts
 
