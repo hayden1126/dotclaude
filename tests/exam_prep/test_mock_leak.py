@@ -737,6 +737,10 @@ class HubQuestions(unittest.TestCase):
         rc, out, err = self.bare_hub()
         self.assertEqual((rc, out, err), (0, "QUESTIONS OK: 2 pages checked against 1 question "
                                              "files\n", ""))
+        # A finished exam's archived sheet (cheatsheet/<exam-slug>/) is frozen and isn't read.
+        self.write("cheatsheet/exam-1/exam-1-final.tex", f"Recall that {KEY_TEXT}.\n")
+        self.assertEqual(self.bare_hub()[:2], (0, "QUESTIONS OK: 2 pages checked against 1 "
+                                                  "question files\n"))
         os.remove(os.path.join(self.root, "notes", "sec1.md"))
         os.rmdir(os.path.join(self.root, "notes"))
         self.assertEqual(self.bare_hub()[:2], (0, "QUESTIONS OK: 1 pages checked against 1 "

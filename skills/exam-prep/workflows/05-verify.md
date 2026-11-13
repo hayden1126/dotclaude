@@ -148,7 +148,8 @@ order (`08-practice`) get the same audit when they exist.
   stays `yes` and never records an attempt, since it may solve several sets.
   The main session runs it from `<root>`, since reviewers never open `practice/`:
   `python3 -I <skill>/scripts/mock_leak.py --hub .`. It checks every page under `notes/` and
-  `cheatsheet/` (the sheets once `07-cheatsheet` writes them), so no page is passed by hand
+  the sheets directly in `cheatsheet/` (once `07-cheatsheet` writes them; a finished exam's
+  frozen archive, `cheatsheet/<exam-slug>/`, isn't read), so no page is passed by hand
   either. It reads those attempt
   marks and the extracts and builds its own file list, so no file is passed by hand: the question files
   hold the unattempted sets' official text (each such set's extracts and solutions files, and a

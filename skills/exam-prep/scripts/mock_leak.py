@@ -74,9 +74,10 @@ table header it doesn't know, which gives no rows, among them), --hub with --que
 --allow, or an unattempted set with neither a block in any extract nor rendered text (`no file
 holds <doc>, an unattempted set: ...; render it (01-ingest) or extract it, then rerun`). It can't
 be combined with the other forms. With no --pages, the pages are every file under the hub's
-notes/ and cheatsheet/ that a directory stands for above (each folder when it exists), so a cheat
-sheet that rebuilds an unattempted set's setup fails as a notes page does; neither existing is bad
-usage (`no page found`). --pages names the pages instead (the tutor checks one passage file).
+notes/ that a directory stands for above, and the files directly in cheatsheet/ (each folder when
+it exists; cheatsheet/<exam-slug>/ is a finished exam's frozen archive and isn't read), so a cheat
+sheet that rebuilds an unattempted set's setup fails as a notes page does; no page is bad usage
+(`no page found`). --pages names the pages instead (the tutor checks one passage file).
 Stdlib only, plus extract_check.py from this directory (loaded by its path) for --hub."""
 import bisect
 import html
@@ -511,6 +512,18 @@ QUESTIONS_USAGE = ("usage: mock_leak.py --questions <file or dir>... [--allow <f
 HUB_PAGES = ("notes", "cheatsheet")
 
 
+def hub_pages(root):
+    """--hub's default pages: notes/ whole, and only the files directly in cheatsheet/, since its
+    subfolders (cheatsheet/<exam-slug>/) are finished exams' archives, frozen, which no fix may
+    edit."""
+    notes, sheets = (os.path.join(root, d) for d in HUB_PAGES)
+    out = [notes] if os.path.isdir(notes) else []
+    if os.path.isdir(sheets):
+        out += sorted(os.path.join(sheets, f) for f in os.listdir(sheets)
+                      if f.endswith(SUFFIXES) and os.path.isfile(os.path.join(sheets, f)))
+    return out
+
+
 def extract_check():
     """extract_check.py from this script's own directory, loaded by its path: under `python3 -I`
     that directory isn't on sys.path."""
@@ -550,7 +563,7 @@ def hub_main(root, page_paths):
     if not os.path.isfile(os.path.join(root, "MANIFEST.md")):
         raise Usage(f"no MANIFEST.md in {os.path.abspath(root)}")
     if not page_paths:
-        page_paths = [p for p in (os.path.join(root, d) for d in HUB_PAGES) if os.path.exists(p)]
+        page_paths = hub_pages(root)
     pages = load(page_paths)
     if not pages:
         raise Usage("no page found")

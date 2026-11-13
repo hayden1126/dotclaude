@@ -651,8 +651,8 @@ The products, each one the hub has:
      page's checks, and its leak check while a mock is untaken).
 4. **The checks.** When the notes or a sheet changed, `05-verify` step 5's questions check
    prints QUESTIONS OK (FB-191): `python3 -I <skill>/scripts/mock_leak.py --hub .`, run from
-   `<root>` by the main session; it reads every page under `notes/` and `cheatsheet/` (a LaTeX
-   sheet as its `.tex`), and builds its file list from MANIFEST.md's attempt marks
+   `<root>` by the main session; it reads every page under `notes/` and the sheets directly in
+   `cheatsheet/` (a LaTeX sheet as its `.tex`; a finished exam's frozen archive isn't read), and builds its file list from MANIFEST.md's attempt marks
    (`extract_check.py --leak-files` prints it, for when a hit needs explaining) and prints
    `QUESTIONS OK: no unattempted set` when there is none. An exit 2 checked nothing: fix what
    it names as `05-verify` step 5 says (MANIFEST.md, or a set to render or extract) and rerun.
