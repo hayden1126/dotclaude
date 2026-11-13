@@ -490,9 +490,10 @@ happens:
 unchecked, its values quoted from the source and never computed, under an `Unverified` banner, off
 every sheet, out of the mocks and the cram order's reading rows, and out of `09`'s walk-throughs and
 quizzes while its STATUS line stands) and about how long "A source added" would take for this
-source. Then commit `Skip asked: <file>, <date>, pushback
-given` in STATUS (while a mock is untaken, after `08-practice` step 4's STATUS check with the
-untaken mocks' keys, as every STATUS write then), and wait, writing no notes. The full path, if
+source. For an unattempted set, or an answers file that solves one, the pushback says instead
+that the skip isn't open to it (the addition's item 1 refuses it) and offers "A source added".
+Then commit `Skip asked: <file>, <date>, pushback given` in STATUS (while a mock is untaken,
+after `08-practice` step 4's STATUS check with the untaken mocks' keys, as every STATUS write then), and wait, writing no notes. The full path, if
 they take it, is "A source added" from its step 1. The line goes when the source is in: in "A
 source added"'s closing commit (step 5), or in the addition's commit, which puts the `Unverified:`
 line in its place. It goes too on the student's word that the source won't be added (logged), and
@@ -515,7 +516,14 @@ fresh session answers from STATUS, then runs step 7.5.
    `_build/extract/` and `_build/solutions/`. Then check as "A source added" step 1 does: `05-verify`
    done (and `06-site` with a page), no `Build running` line, the hub free, the tree clean but for `_build/logs/` and
    `practice/tutor/`; note `git rev-parse HEAD`. A check that fails is told to the student, and
-   the addition waits for it. Pick the doc's id now: a `pending` row's file keeps that row's id,
+   the addition waits for it. Then the doc itself: this path takes a lecture, a reading or a set
+   the student has attempted, and refuses an unattempted set (a past exam or practice set the
+   student hasn't attempted, its MANIFEST.md Answers cell, as item 2 writes it, without
+   `attempted`) or an answers file that solves one, since its notes would quote an unattempted
+   set, which the questions check blocks, and that check needs the set extracted. A refused
+   doc goes to "A source added", which extracts it: tell the student so, write nothing, and the
+   addition ends there, the `Skip asked` line kept until that path's closing commit. Pick the
+   doc's id now: a `pending` row's file keeps that row's id,
    and any other gets a new one as `01-ingest` gives (none reused); it is `<doc>` from here on, in its MANIFEST.md row and both STATUS lines, and the id
    `extract_check.py` reads. Then add `Build running: <date>` and `Unverified add: <doc>, started
    <date>` to STATUS and commit them (hard rule 1: while they stand a `09-tutor` tab keeps its
@@ -529,8 +537,8 @@ fresh session answers from STATUS, then runs step 7.5.
    Key cells as the template's legend says, its Notes what the source is, then `;` and who put it
    in scope (a staff post, or the student's word, quoted). A `pending` row's file rewrites that
    row as `01-ingest` step 5 does; when STATUS holds a `Pending set dropped: <doc>` line
-   (`01-ingest` step 3), `01-ingest` step 5's undo runs here too, the one extract this path
-   makes: the set
+   (`01-ingest` step 3; the set is an attempted one, as item 1 requires), `01-ingest` step 5's undo
+   runs here too, the one extract this path makes: the set
    back in the answers file's Key cell and its pages back in that file's Scope, then the set and
    the answers file extracted in one wave (`02-extract` step 1, its check included), since the
    restored pages are official solutions and have their home only in the solutions files. The
@@ -563,9 +571,7 @@ fresh session answers from STATUS, then runs step 7.5.
    value reworded by leaving the value out, its citation kept. Then that section's questions check
    prints QUESTIONS OK (FB-191), `python3 -I <skill>/scripts/mock_leak.py --hub .`
    run by the main session (the script builds its file list from MANIFEST.md's attempt
-   marks; `<doc>` is checked against its rendered text, extracted or not, while it is an
-   unattempted set or an answers file that solves one), a hit reworded the same way, before item
-   5's commit and republish.
+   marks), a hit reworded the same way, before item 5's commit and republish.
 5. **Commit**, once: the material (its notes, fragment and page), its backbone headings, its
    MANIFEST.md row (after item 2's undo, the answers file's row too, with the extracts and
    solutions files that undo wrote, and the drop line out of STATUS) and, in STATUS,

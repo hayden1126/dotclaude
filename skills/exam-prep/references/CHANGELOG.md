@@ -195,18 +195,18 @@ evidence ids.
   - FB-191 and FB-056: the questions check reads the sheets too: `mock_leak.py --hub .` takes no
     page and reads every page under `notes/` and the files directly in `cheatsheet/` (a finished
     exam's frozen archive, `cheatsheet/<exam-slug>/`, is skipped), so `07-cheatsheet` runs it
-    before a sheet is published or printed and a change to a sheet reruns it; an unattempted set
-    with no extract (a source added unverified) is checked against its rendered text, and one
-    with neither extract nor rendered text exits 2, as does a missing or unreadable MANIFEST.md;
-    `09-tutor` checks a held passage alone (`--pages _build/held-check.md`) before offering it
-    back (round 18 review).
-  - FB-191 and FB-056: the questions check always reads the rendered text of every unattempted
-    set and of every answers file that solves one (`_build/text/<doc>/`, or a deck's own source
-    file), extracted or not, so an answers file added late and not yet extracted (`09-tutor` step
-    6, `11-next-exam`'s unverified path) is checked; a doc whose only source is thin rendered text
-    (a scanned PDF), or a deck or other source with no rendered text and nothing extracted, makes
-    it exit 2 until it is extracted. `05-verify` and `08-practice` list every exit 2 cause with its
-    fix, `no page found` and a page that isn't UTF-8 among them (round 19 review).
+    before a sheet is published or printed and a change to a sheet reruns it; a missing or
+    unreadable MANIFEST.md makes it exit 2; `09-tutor` checks a held passage alone (`--pages
+    _build/held-check.md`) before offering it back (round 18 review).
+  - FB-191 and FB-056: the questions check requires an extract: it reads extracts and solutions
+    files only, and an unattempted set with no block in any extract, or an answers file that
+    solves one with no block in any solutions file, makes it exit 2 (`no file holds <DOC>, ...;
+    extract it, then rerun`), so `09-tutor` step 6 extracts late official solutions before the
+    next check. `11-next-exam`'s "A source added unverified", which can't extract, refuses an
+    unattempted set or an answers file that solves one and sends it to "A source added"; it still
+    takes lectures, readings and attempted sets. `05-verify` and `08-practice` list every exit 2
+    cause with its fix: MANIFEST.md, a file the check reads that isn't UTF-8 (named), `no page
+    found` and a set with nothing extracted (round 19 and 20 reviews).
   - FB-056: an answers file solves only in-scope sets: a Key cell `for ...` naming a `pending`,
     `reserved` or `out` set fails `KEY NAMES A SET NOT IN SCOPE`, fixed by dropping the set from
     the cell and cutting its pages from the answers file's Scope, or by giving the answers file

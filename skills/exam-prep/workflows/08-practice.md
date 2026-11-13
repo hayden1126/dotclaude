@@ -655,10 +655,10 @@ The products, each one the hub has:
    `cheatsheet/` (a LaTeX sheet as its `.tex`; a finished exam's frozen archive isn't read), and builds its file list from MANIFEST.md's attempt marks
    (`extract_check.py --leak-files` prints it, for when a hit needs explaining) and prints
    `QUESTIONS OK: no unattempted set` when there is none. An exit 2 checked nothing: fix what
-   it names as `05-verify` step 5 says and rerun (MANIFEST.md; `no page found`, with no notes and
-   no sheet yet; a page that isn't UTF-8, saved again as UTF-8; or a set or its answers file to
-   extract, its rendered text thin, a scanned PDF's, or missing, as for a deck with nothing
-   extracted).
+   it names as `05-verify` step 5 says and rerun (MANIFEST.md; a file it reads that isn't UTF-8,
+   named in the message: an extract or solutions file rewritten as UTF-8, a page or a sheet
+   saved again as UTF-8; `no page found`, with no notes and no sheet yet; or an unattempted set,
+   or an answers file that solves one, with nothing extracted: extract it).
    A hit is reworded with fresh numbers and setup (S7) and repeats from item 2. While a mock is untaken, also
    the leak compare: run item 1 again and compare the hit lines with the baseline's (count them,
    since every hit on the notes reads "(the page)" and a second copy of an answer adds one). A new

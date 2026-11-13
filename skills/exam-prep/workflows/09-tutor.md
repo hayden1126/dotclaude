@@ -418,6 +418,9 @@ sets gets its own agent, which writes, for each set, one solutions file beside e
 holds the set's blocks (a deck split over two extracts may need two), and one for its own pages,
 while
 each set's own agent writes only its extract.
+Both run before the next questions check (`05-verify` step 5), so no patch dispatches between
+them: once the row names an unattempted set, the check exits 2 (`no file holds <DOC>, ...`)
+until the solutions files hold the answers file's blocks.
 Then `05-verify`, "Official solutions that arrive late", which adds them to the self-test and
 diffs every answer against the notes and any `practice/tutor/` values file. That
 check shows answers: the self-test's new lines show in the edit, a failing line prints both values,

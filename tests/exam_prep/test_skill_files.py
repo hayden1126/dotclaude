@@ -299,6 +299,37 @@ class QuestionsCheckFiles(unittest.TestCase):
                       "agent reads it, the check's run deletes it, and a session that finds one "
                       "left behind (a run cut short) deletes it before anything else.", flat)
 
+    def test_the_check_requires_an_extract(self):
+        """Round 20 dropped rendered text as an input: the check reads extracts and solutions
+        files only, and a set or an answers file with nothing extracted exits 2. 05 and 08 list
+        that cause with the others, and no workflow says the check reads rendered text."""
+        for name in ("05-verify.md", "08-practice.md"):
+            flat = self.flat(name)
+            for phrase in ("MANIFEST.md", "isn't UTF-8, named in the message", "`no page found`",
+                           "or an answers file that solves one, with nothing extracted"
+                           if name == "08-practice.md" else
+                           "or an answers file that solves one, has nothing extracted"):
+                self.assertIn(phrase, flat, (name, phrase))
+        self.assertIn("`no file holds <DOC>, ...; extract it, then rerun`",
+                      self.flat("05-verify.md"))
+        for name in sorted(os.listdir(os.path.join(SKILL, "workflows"))):
+            flat = self.flat(name)
+            for old in ("rendered text, extracted or not", "thin rendered text",
+                        "its rendered text thin", "checked against its rendered text"):
+                self.assertNotIn(old, flat, (name, old))
+
+    def test_the_unverified_path_refuses_an_unattempted_set(self):
+        """11's "A source added unverified" can't extract, so its item 1 refuses an unattempted
+        set or an answers file that solves one and sends it to "A source added" (round 20)."""
+        flat = self.flat("11-next-exam.md")
+        path = flat.split("## A source added unverified", 1)[1]
+        check = path.split("1. **Check and fence.**", 1)[1].split("2. **Ingest**", 1)[0]
+        for phrase in ("this path takes a lecture, a reading or a set the student has attempted",
+                       "refuses an unattempted set", "or an answers file that solves one",
+                       "which the questions check blocks",
+                       'A refused doc goes to "A source added", which extracts it'):
+            self.assertIn(phrase, check)
+
 
 class KeySectionRule(unittest.TestCase):
     """A `sections:` key's name followed by a space then a letter or digit (`Key formulas` under
