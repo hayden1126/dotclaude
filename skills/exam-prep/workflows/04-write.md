@@ -18,9 +18,11 @@ link id (FB-054); a wiring pass then joins the files single-threaded (FB-091).
   all of it; S14 to S32 are the wording rules a cold reader needs (FB-030, FB-072 to FB-089), and
   S33 (each subsection's depth label) and S34 (the concise box that opens it) are the two each
   subsection carries before its text.
-- The backbone holds its figure shortlist (`03-backbone` step 5: in the build, logged in STATUS
-  for the student's later review; run alone, shown to them), and each section carries its
-  `Diagram-taught` line.
+- The backbone holds its figure shortlist (`03-backbone` step 5.4: logged in STATUS while the
+  build's `Build running` line or `11-next-exam`'s source path's stands; run alone without one,
+  or in a `10-polish` figure pass, shown to the student), and each section carries its
+  `Diagram-taught` line: `yes`, `no`, or `pre-S11` for a section written before the widened S11
+  (FB-015).
 
 ## Step 2: Plan the writers
 

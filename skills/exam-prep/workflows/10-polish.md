@@ -23,13 +23,15 @@ from then on, in the cram night's session (`08-practice` step 8, its one tab), b
 | Redundancy | an idea stated more often than S6 allows (FB-171) | the main session | the sections the student names |
 | Scope | every product a scope change touches (FB-180) | the main session | the whole hub |
 | Box | subsections with no concise box (S34, FB-094) or no Depth line (S33) | the main session | every section, or the ones the student names |
-| Figure | mechanisms with no figure, and sections with no `Diagram-taught` line (S11, FB-115) | the main session, by `03-backbone` step 5's sweep | every section, or the ones the student names |
+| Figure | mechanisms with no figure, and sections with no `Diagram-taught` line or a `pre-S11` one (S11, FB-115) | the main session, by `03-backbone` step 5's sweep | every section, or the ones the student names |
 
 The box and figure passes bring a hub built before S34 or the widened S11 up to them, a reopened
 hub's old sections among them (`11-next-exam` otherwise leaves those as written). Two build
 warnings name them (FB-015): a cram order with no S33 depth label on any row (`cram_check.py` and
-`assemble.py` warn `PRE_S33`) gets its labels in a box pass, and a backbone section with no
-`Diagram-taught` line (`coverage_check.py` warns) gets its line in a figure pass.
+`assemble.py` warn `PRE_S33`) gets its labels in a box pass, and a backbone section marked
+`Diagram-taught: pre-S11` (a reopened hub's older sections, which `11-next-exam` marks), or a
+backbone with no `Diagram-taught` line at all (`coverage_check.py` warns on either), gets `yes`
+or `no` in a figure pass, which replaces the `pre-S11`.
 
 A direct instruction that names its edit, what and where ("add the cost caveat to §4.6 and where
 §3 first gives the cost"), is an approved list of one, the pass `edit`: skip steps 3 and 4, but
@@ -172,7 +174,8 @@ step 1 says.
   takes its label from its subsection's Depth line, once that line exists.
 - **Figure.** The main session alone, as `03-backbone` step 5 runs: the mechanism sweep over the
   named sections' notes and their slides' diagrams (their extract blocks and page images), each
-  candidate kept or cut with its reason; each section marked `Diagram-taught: yes` or `no`; and
+  candidate kept or cut with its reason; each section marked `Diagram-taught: yes` or `no` (in
+  place of any `pre-S11`); and
   the kept rows not yet drawn as the proposed shortlist, each with its kind (static, step-through,
   slide image). A figure the section already has counts toward its floor.
 
@@ -192,8 +195,8 @@ step 1 says.
    apply. While a mock is untaken, the log's leak check passes first. Then show the report in the
    message itself (hard rule 11). A figure pass's report is the proposed shortlist with its cut
    rows, one line each: the student sees it before any figure is built (FB-062), as `03-backbone`
-   step 5 does when run alone; a build's `Figure shortlist:` STATUS line comes out once this pass
-   is approved.
+   step 5.4 says for a figure pass; STATUS's `Figure shortlist:` line (it keeps one) comes out
+   once this pass is approved.
 4. The student answers with a rank, numbers, "your recommendation" or a scope; text they add to an
    item is shown again before it goes in (while a mock is untaken, from the log once it passes).
    Log the answer and commit.
@@ -203,8 +206,9 @@ step 1 says.
 **A box or figure pass applies through writers**, in place of item 3's one-fix edits: the new
 text is the notes' own, so it is written the way the build writes it. Item 2's baseline comes
 first, as for any pass. For a figure pass the main session then adds to the backbone the Mechanism
-sweep table, each section's `Diagram-taught` line and the approved shortlist rows (after which
-`coverage_check.py` exits 0 with no warning), and crops each approved slide image into
+sweep table, each covered section's `Diagram-taught` line (`yes` or `no`, in place of any
+`pre-S11`) and the approved shortlist rows (after which `coverage_check.py` exits 0 with no
+warning for the sections this pass covered), and crops each approved slide image into
 `_build/img/` (`04-write` step 4.5, its `.gitignore` line added first when the hub lacks it). Then one writer per section file, spawned at once from the
 "Write" brief's "Polish variant", each changing only its own file: a box pass adds the
 approved boxes (S34) and missing Depth lines and changes nothing else; a figure pass adds the

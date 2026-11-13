@@ -124,8 +124,10 @@ evidence ids.
     checks it on both (I3.C9, I3.G10, I2.C32, J1.C5, J1.C6, J1.C7, J1.C9, J1.C10, J1.G6).
   - FB-111: every section's own dark-mode highlight band, set by `assemble.py` (J1.C11, I3.C9).
   - FB-015: a check new to the skill passes an existing hub's form with a warning naming the pass
-    that upgrades it: a cram order with no depth labels or a backbone with no `Diagram-taught`
-    lines builds with a WARN (I3.C8, I3.G8, J1.G5, I1 (section 2)).
+    that upgrades it: a cram order with no depth labels, a backbone with no `Diagram-taught`
+    lines, or a backbone section marked `Diagram-taught: pre-S11` (a reopened hub's older
+    sections, which `11-next-exam` marks and `10-polish`'s figure pass sets) builds with a WARN
+    (I3.C8, I3.G8, J1.G5, I1 (section 2)).
   - FB-123: citation codes now match their MANIFEST.md row in any case, silently, the source key
     keeping the row's spelling (I3.C8).
   - FB-056: question-only copies of the extracts with solutions (`qonly.py`, `02-extract` step
@@ -183,9 +185,10 @@ evidence ids.
     box pass, the briefs), and S18 reworded "Concise, never
     compressed" (I1.C10, I3.C3, J1.C4, I2.C13, I2.C14, I2.C15, I1.C24).
   - FB-062, FB-115 and FB-125: STYLE S11 widened to diagram first, `03-backbone` step 5's sweep
-    and `Diagram-taught` lines (its shortlist logged in STATUS whenever a `Build running` line
-    stands, the build's or `11-next-exam`'s source path's, and shown to the student only when run
-    alone without one, offered at `08-practice` step 8's opening or, after `Stage 08 built`, at
+    and `Diagram-taught` lines (its shortlist logged in STATUS as one `Figure shortlist:` line,
+    and the whole of it in `_build/logs/figures.md`, while the build's or `11-next-exam`'s source
+    path's `Build running` line stands, and shown to the student when run alone or in a
+    `10-polish` figure pass, offered at `08-practice` step 8's opening or, after `Stage 08 built`, at
     the source path's step 5 report), intake's and
     PLAN.md's Figures default (a step-through for every drilled trace), `coverage_check.py`'s
     figure floor, CONVERT's slide-image figure (its crops in `_build/img/`, gitignored as renders

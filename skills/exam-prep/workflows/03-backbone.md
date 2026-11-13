@@ -60,7 +60,11 @@ sweep, then a cut (STYLE S11).
    slide diagram is cut freely, since the slides' diagrams are candidates, not a quota.
 2. **Diagram-taught.** Mark each section `Diagram-taught: yes` when its slides teach it through
    diagrams (cite them), else `no`, on the line beside its Figures line. A `yes` section keeps at
-   least one figure and leads with it.
+   least one figure and leads with it. An older section this run doesn't sweep (a reopened hub's,
+   or one `11-next-exam`'s source path leaves as written) that has no line gets
+   `- Diagram-taught: pre-S11` (FB-015): `coverage_check.py` passes it with a warning naming
+   `10-polish`'s figure pass, which sets `yes` or `no`, while a section with no line at all fails
+   once any section carries one.
 3. **The shortlist.** Every kept row becomes a row of the Figure shortlist, saying why prose isn't
    enough, and its kind: `static` (drawn as SVG), `step-through` (each trace of a drilled
    procedure, fed later by the checker's data, FB-117) or `slide image` (a slide's own picture,
@@ -69,16 +73,19 @@ sweep, then a cut (STYLE S11).
    shortlist table, and STATUS points there; each figure is also on its section's Figures line.
    Every backticked id in the backbone is in the registry `linkcheck.py` checks, so a figure
    dropped later loses both its shortlist row and its Figures line.
-4. **The student's adds and cuts.** Whenever a `Build running` line stands (the build, or
-   `11-next-exam`'s "A source added to this exam", which runs this stage under its own), nothing is
+4. **The student's adds and cuts.** While the build's `Build running` line stands, or
+   `11-next-exam`'s "A source added to this exam" runs this stage under its own, nothing is
    asked (hard rule 1, and while a mock is untaken the student has looked away), and the
-   figures are built from the shortlist as it stands: write the shortlist and its cut rows, one
-   line each, to `_build/logs/figures.md`, and add `Figure shortlist: <N> kept, <M> cut, for the
-   student to review (_build/logs/figures.md)` to STATUS as a judgment call (hard rule 10).
-   `08-practice` step 8's opening offers it; after `Stage 08 built`, when that opening has passed,
-   the source path's step 5 report to the student offers it instead. The student's adds and cuts
-   go in by a `10-polish` figure pass. Run alone, which means with no `Build running` line, on
-   request with the student present, show the shortlist and
+   figures are built from the shortlist as it stands: write the backbone's whole shortlist and
+   the Mechanism sweep's cut rows, one line each, to `_build/logs/figures.md`, in place of any
+   earlier run's (so a source path's run doesn't leave only its new sections there), and put
+   `Figure shortlist: <N> kept, <M> cut, for the student to review (_build/logs/figures.md)` in
+   STATUS as a judgment call (hard rule 10), in place of any `Figure shortlist:` line already
+   there (STATUS keeps one). `08-practice` step 8's opening offers it; after `Stage 08 built`,
+   when that opening has passed, the source path's step 5 report to the student offers it
+   instead. The student's adds and cuts go in by a `10-polish` figure pass. Run alone, which
+   means with no `Build running` line, on request with the student present, or as a `10-polish`
+   figure pass (which runs this step under its own `Build running` line), show the shortlist and
    the cut rows, one line each, before any figure is built (FB-062), and apply what they add or
    cut.
 
@@ -119,7 +126,9 @@ but isn't one.
 ## Done when
 
 `coverage_check.py` exits 0 (every block mapped, every diagram-taught section with its figure);
-every id is in the registry; every section this run writes has its Diagram-taught line (an older
-section without one only warns, FB-015) and the backbone holds the
-figure shortlist (logged in STATUS while a `Build running` line stands, shown to the student when run alone without one); every practice question part has its How it's tested row; `examples.py` exits 0, or PLAN.md's Checker line says nothing in the course
+every id is in the registry; every section this run writes has its Diagram-taught line, and every
+older section without one is marked `pre-S11` (step 5.2, FB-015); the backbone holds the figure
+shortlist (logged in STATUS as one `Figure shortlist:` line while the build's or the source
+path's `Build running` line stands, shown to the student when run alone or in a `10-polish`
+figure pass); every practice question part has its How it's tested row; `examples.py` exits 0, or PLAN.md's Checker line says nothing in the course
 is computable; and the backbone is committed.
