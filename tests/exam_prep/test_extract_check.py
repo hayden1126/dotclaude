@@ -2058,5 +2058,117 @@ class SolutionsFiles(unittest.TestCase):
         code, out = self.check()
         self.assertEqual(code, 0, out)
 
+
+class LeakFiles(unittest.TestCase):
+    """`--leak-files` (r17, Hayden 2026-11-13): the questions check's file list, from the same
+    homes the solutions check computes, so the workflows run one command instead of naming files
+    by hand. An unattempted set's extracts and home solutions files, and a multi-set answers
+    file's own file while any set it names is unattempted, are `questions`; every other extract
+    is `allow`."""
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.root = tmp.name
+        self.write("MANIFEST.md", SOL_MANIFEST
+                   + "| D1 | `sources/d1.pdf` | 2 | in | no | | yes | lecture |\n")
+        self.write("_build/extract/hw1.md", CLEAN)
+        self.write("_build/solutions/hw1.md", SOLVED)
+        self.write("_build/extract/d1.md", "### [D1 p.1] Flows\n### [D1 p.2] Cuts\n")
+
+    def write(self, rel, text):
+        path = os.path.join(self.root, rel)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(text)
+
+    def leak(self):
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            code = extract_check.main(["--root", self.root, "--leak-files"])
+        return code, out.getvalue()
+
+    def manifest(self, extra="", hw1="no", key="for HW1"):
+        self.write("MANIFEST.md", SOL_MANIFEST.replace("| 1 | in | no |", f"| 1 | in | {hw1} |")
+                   .replace("| for HW1 |", f"| {key} |")
+                   + "| D1 | `sources/d1.pdf` | 2 | in | no | | yes | lecture |\n" + extra)
+
+    def test_an_unattempted_sets_files_are_questions_and_every_other_extract_is_allowed(self):
+        self.assertEqual(self.leak(), (0, "allow _build/extract/d1.md\n"
+                                          "questions _build/extract/hw1.md\n"
+                                          "questions _build/solutions/hw1.md\n"))
+        # A stray block of the set in a lecture's extract makes that extract and its solutions
+        # file questions too (the r17 repro: [HW1 p.1] in l3.md made solutions/l3.md a home).
+        self.write("_build/extract/l3.md", "### [D1 p.2] Cuts\n### [HW1 p.1] Homework 1\n")
+        self.write("_build/solutions/l3.md", "### [HW1S p.1] Solutions\n\"Q1a: 42\"\n")
+        self.assertEqual(self.leak(), (0, "allow _build/extract/d1.md\n"
+                                          "questions _build/extract/hw1.md\n"
+                                          "questions _build/extract/l3.md\n"
+                                          "questions _build/solutions/hw1.md\n"
+                                          "questions _build/solutions/l3.md\n"))
+
+    def test_an_attempted_set_is_left_out_and_none_unattempted_prints_nothing(self):
+        for mark in ("no, attempted 2026-11-01", "No, Attempted 2026-11-01"):
+            with self.subTest(mark):
+                self.manifest(hw1=mark)
+                self.assertEqual(self.leak(), (0, ""))
+        # Fail closed: a mark in any other form isn't one, and an `Unverified:` line exempts
+        # nothing.
+        for mark in ("no (attempted soon)", "not attempted"):
+            with self.subTest(mark):
+                self.manifest(hw1=mark)
+                self.assertIn("questions _build/extract/hw1.md", self.leak()[1])
+        self.manifest()
+        self.write("STATUS.md", "Unverified: HW1, Q1, 2026-11-10\n")
+        self.assertIn("questions _build/solutions/hw1.md", self.leak()[1])
+
+    def test_an_attempted_sets_solutions_file_is_not_listed(self):
+        self.manifest(hw1="no, attempted 2026-11-01",
+                      extra="| HW2 | `sources/hw2.pdf` | 1 | in | no | | yes | |\n")
+        self.write("_build/extract/hw2.md", "### [HW2 Q1a] Flow\nPages: [HW2 p.1]\n")
+        self.write("_build/solutions/hw2.md", "### [HW2 Q1a] Flow\nNo official solution.\n")
+        self.assertEqual(self.leak(), (0, "allow _build/extract/d1.md\n"
+                                          "allow _build/extract/hw1.md\n"
+                                          "questions _build/extract/hw2.md\n"
+                                          "questions _build/solutions/hw2.md\n"))
+        # A file serving both sets is listed (fail closed).
+        self.write("_build/extract/hw1.md", CLEAN + "### [HW2 p.1] Homework 2\n")
+        self.assertIn("questions _build/solutions/hw1.md", self.leak()[1])
+
+    def test_a_multi_set_answers_file_is_listed_while_any_set_it_solves_is_unattempted(self):
+        hw2 = "| HW2 | `sources/hw2.pdf` | 1 | in | {} | | yes | |\n"
+        self.write("_build/extract/hw2.md", "### [HW2 Q1a] Flow\nPages: [HW2 p.1]\n")
+        self.write("_build/solutions/hw1s.md", "### [HW1S p.1] Solutions\n\"Q1a (HW2): 7\"\n")
+        self.manifest(hw1="no, attempted 2026-11-01", key="for HW1 and HW2",
+                      extra=hw2.format("no"))
+        out = self.leak()[1]
+        self.assertIn("questions _build/solutions/hw1s.md\n", out)
+        self.assertIn("allow _build/extract/hw1.md\n", out)
+        self.manifest(hw1="no, attempted 2026-11-01", key="for HW1 and HW2",
+                      extra=hw2.format("no, attempted 2026-11-02"))
+        self.assertEqual(self.leak(), (0, ""))
+
+    def test_a_self_keyed_doc_and_a_question_block_make_a_set(self):
+        self.manifest(extra="| PE1 | `sources/pe1.pdf` | 3 | in | yes | p.3 | yes | |\n"
+                            "| R2 | `sources/r2.pdf` | 1 | in | no | | yes | recitation |\n")
+        self.write("_build/extract/pe1.md", PE)
+        self.write("_build/extract/r2.md", "### [R2 Q1] Trace\nPages: [R2 p.1]\n")
+        self.write("_build/solutions/hw1.md", SOLVED)
+        out = self.leak()[1]
+        self.assertIn("questions _build/extract/pe1.md\n", out)
+        self.assertIn("questions _build/extract/r2.md\n", out)
+        self.manifest(hw1="no, attempted 2026-11-01",
+                      extra="| PE1 | `sources/pe1.pdf` | 3 | in | yes, attempted 2026-11-01 | p.3 "
+                            "| yes | |\n| R2 | `sources/r2.pdf` | 1 | in | no, attempted "
+                            "2026-11-01 | | yes | |\n")
+        self.assertEqual(self.leak(), (0, ""))
+
+    def test_no_manifest_exits_2(self):
+        os.remove(os.path.join(self.root, "MANIFEST.md"))
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            self.assertEqual(self.leak(), (2, ""))
+        self.assertIn("no MANIFEST.md", err.getvalue())
+
 if __name__ == "__main__":
     unittest.main()

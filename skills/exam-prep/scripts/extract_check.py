@@ -1,8 +1,9 @@
 #!/usr/bin/python3 -I
 """Check stage 02's extracts and solutions files against MANIFEST.md, from the hub root.
 
-  extract_check.py [--root DIR]           check; exit 0 or 1
-  extract_check.py --parts [--root DIR]   print the self-test's PARTS and exit 0
+  extract_check.py [--root DIR]                check; exit 0 or 1
+  extract_check.py --parts [--root DIR]        print the self-test's PARTS and exit 0
+  extract_check.py --leak-files [--root DIR]   print the questions check's files and exit 0
 
 MANIFEST's table is read by its header names (Doc id, File, Pages, Scope, Answers, Key, Notes;
 any other column, such as the optional By, is ignored); with no Doc id, File or Scope column it
@@ -33,7 +34,8 @@ in a solutions file covers pages that way but counts as no block of its doc.
 Answers is read as `yes` when the cell starts with `yes`. The tutor's attempt mark lives in each
 set's own row (`no, attempted YYYY-MM-DD`, or `yes, attempted YYYY-MM-DD` for a doc with its own
 key), and a separate answers file's row stays `yes`; so `yes, attempted ...` is still an answers
-row and `no, attempted ...` still isn't.
+row and `no, attempted ...` still isn't. The mark is read only in those forms, at the cell's start
+(any case; ATTEMPTED): any other wording leaves the set unattempted.
 
 Key says where an Answers `yes` doc's answers are, read whole (trimmed, any case; read_key()):
 - empty or `-`: no key, as an Answers `no` row has (KEY WITHOUT ANSWERS otherwise).
@@ -138,7 +140,19 @@ for a doc id MANIFEST lacks, or for an `out` row, are warnings.
 `--parts` prints the number of question-part blocks in the solutions files holding a `Solution
 [<doc> <loc>]` line (the self-test's PARTS, verify-selftest.py); an answers file's page blocks and
 a `No official solution.` block never count. With no MANIFEST.md it exits 2 as the check does, so
-a wrong root never reads as 0 parts. Stdlib only, plus reveal_slice.py from this directory."""
+a wrong root never reads as 0 parts.
+
+`--leak-files` prints the files the questions check (mock_leak.py --hub, which calls
+leak_files()) reads, one line each, `questions <path>` or `allow <path>`, the path relative to
+the root, sorted by path, each once. The unattempted sets are the in-scope question sets (named
+by an in-scope answers row's `for` key, holding their own key, or with a question block in an
+extract) whose own Answers cell lacks the attempt mark; an `Unverified:` line exempts none.
+`questions`: every extract holding any block of an unattempted set, every existing home
+solutions file of one (the homes above), and each multi-set answers file's own
+_build/solutions/<doc id lower>.md, when it exists, while any set it names is unattempted; a file
+serving an attempted set too is still listed. `allow`: every other extract. With no unattempted
+set it prints nothing; it exits 0, 2 with no MANIFEST.md, 1 on a MANIFEST.md it can't read.
+Stdlib only, plus reveal_slice.py from this directory."""
 import argparse
 import contextlib
 import importlib.util
@@ -184,6 +198,10 @@ KEY_PAGES = re.compile(r"pp?\.\s*" + KEY_REF + r"(?:" + KEY_JOIN + r"(?:pp?\.\s*
                        re.I)
 KEY_SECTIONS = re.compile(r"sections:\s*(?P<list>[^,\[\]]+(?:,[^,\[\]]+)*)", re.I)
 KEY_FORMS = ('"for HW1, HW2", "pp. 7-9, 11", "inline" or "sections: Marking scheme, Answers"')
+# The tutor's attempt mark at the start of a set's Answers cell: `no, attempted YYYY-MM-DD` or
+# `yes, attempted YYYY-MM-DD`, any case. Any other wording (`not attempted`, `no (attempted
+# soon)`) is no mark, so the set stays unattempted (fail closed).
+ATTEMPTED = re.compile(r"\s*(?:yes|no)\s*,\s*attempted\b", re.I)
 NOTE_RANGE = re.compile(r"\bpp\.\s*\d|\bp\.\s*\d+\s*-\s*\d")
 KINDS = ("in", "concepts", "reserved", "pending", "out")
 EN_DASH = chr(0x2013)
@@ -296,7 +314,8 @@ def read_key(cell):
 
 
 def manifest_rows(path):
-    """{doc id: {"file", "pages", "scope", "kind", "answers", "key"}} for every row of the table,
+    """{doc id: {"file", "pages", "scope", "kind", "answers", "attempted", "key"}} for every row
+    of the table, `attempted` whether its Answers cell starts with the attempt mark (ATTEMPTED),
     `key` read_key()'s reading of its Key cell. Columns are found by their header names, so an
     older MANIFEST with fewer columns reads (with no Key column, every Key cell is empty)."""
     rows, cols = {}, None
@@ -326,6 +345,7 @@ def manifest_rows(path):
             rows[cells[0]] = {"file": cell("file").strip("`"), "pages": cell("pages"),
                               "scope": scope, "kind": word,
                               "answers": cell("answers").lower().startswith("yes"),
+                              "attempted": bool(ATTEMPTED.match(cell("answers"))),
                               "key": read_key(cell("key"))}
     return rows
 
@@ -1066,6 +1086,51 @@ def key_check(doc, row, rows, qdocs, keyed, homes):
     return out
 
 
+def unattempted(rows, extracts):
+    """The question sets the student hasn't attempted, sorted: each in-scope doc that an in-scope
+    answers row's `for` key names, that holds its own key, or that has a question block in an
+    extract, whose own Answers cell lacks the attempt mark (ATTEMPTED). An `Unverified:` line
+    exempts none (fail closed)."""
+    inscope = {doc for doc, row in rows.items() if row["kind"] in ("in", "concepts")}
+    sets = question_docs(extracts) & inscope
+    for doc in inscope:
+        row = rows[doc]
+        if key_of(row) == "for":
+            sets |= row["key"]["docs"] & inscope
+        elif own_key(row):
+            sets.add(doc)
+    return sorted(doc for doc in sets if not rows[doc]["attempted"])
+
+
+def leak_files(root, rows=None):
+    """(unattempted(), [(kind, path)]) for the questions check (mock_leak.py --hub), each path
+    relative to root, sorted by path, each once. `questions`: every extract holding any block of
+    an unattempted set (set_homes()), every existing home solutions file of one, and each
+    multi-set answers file's own _build/solutions/<doc id lower>.md, when it exists, while any set
+    it names is unattempted; a file serving an attempted set too is listed (fail closed).
+    `allow`: every other extract. With no unattempted set the list is empty. `rows` is
+    manifest_rows() (read from root's MANIFEST.md when None; it raises as that does)."""
+    if rows is None:
+        rows = manifest_rows(os.path.join(root, "MANIFEST.md"))
+    extracts = files(root, "extract")
+    sets = unattempted(rows, extracts)
+    if not sets:
+        return sets, []
+    homes = set_homes(extracts)
+    questions = set()
+    for doc in sets:
+        for name in homes.get(doc, ()):
+            questions.add(f"_build/extract/{name}")
+            questions.add(f"_build/solutions/{name}")
+    for doc, row in rows.items():
+        if key_of(row) == "for" and len(row["key"]["docs"]) > 1 and row["key"]["docs"] & set(sets):
+            questions.add(f"_build/solutions/{doc.lower()}.md")
+    questions = {p for p in questions if os.path.isfile(os.path.join(root, p))}
+    allow = {rel for rel, _ in extracts} - questions
+    listed = [("questions", p) for p in questions] + [("allow", p) for p in allow]
+    return sets, sorted(listed, key=lambda item: item[1])
+
+
 def unverified(root):
     """Doc ids STATUS.md's `Unverified:` lines name; none when it can't be read (fail closed)."""
     try:
@@ -1082,6 +1147,9 @@ def main(argv=None):
     p.add_argument("--parts", action="store_true",
                    help="print the number of question parts whose solutions block holds a "
                         "`Solution [` line (the self-test's PARTS) and exit")
+    p.add_argument("--leak-files", action="store_true",
+                   help="print the questions check's files, `questions <path>` or `allow <path>` "
+                        "per line (nothing with no unattempted set), and exit")
     args = p.parse_args(argv)
     manifest = os.path.join(args.root, "MANIFEST.md")
     if not os.path.exists(manifest):
@@ -1089,6 +1157,15 @@ def main(argv=None):
         return 2
     if args.parts:
         print(parts_count(args.root))
+        return 0
+    if args.leak_files:
+        try:
+            _, listed = leak_files(args.root)
+        except ValueError as e:
+            print(f"extract_check: {e}", file=sys.stderr)
+            return 1
+        for kind, path in listed:
+            print(f"{kind} {path}")
         return 0
     try:
         rows = manifest_rows(manifest)
