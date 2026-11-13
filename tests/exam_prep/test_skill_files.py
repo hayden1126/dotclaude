@@ -252,6 +252,37 @@ class KeySectionRule(unittest.TestCase):
                 self.assertIn("after any spaces", before, (rel, before))
 
 
+class HomeRule(unittest.TestCase):
+    """Round 16: a set's home solutions file is the one beside each extract holding any block of
+    that set, a page, section or slide block included, so a deck split into parts keeps a key
+    slide beside the part holding it; a block whose set no extract holds fails NO HOME FILE.
+    02-extract, the MANIFEST legend and the Extract brief state the rule, and 02's step 3 gives
+    the failure with its message and AN ANSWERS PAGE IN AN EXTRACT's home and why."""
+
+    RULE = ("A set's home is the solutions file beside each extract holding any block of that set "
+            "(a page, section or slide block counts, not only a question part's)")
+    SITES = ("workflows/02-extract.md", "templates/MANIFEST.md.tmpl", "templates/agent-briefs.md")
+    NO_HOME = ("`NO HOME FILE: [<doc> <loc>] has no home: no extract holds a block of <SET>; "
+               "extract <SET> first`")
+
+    @staticmethod
+    def flat(rel):
+        with open(os.path.join(SKILL, rel), encoding="utf-8") as f:
+            return " ".join(f.read().split())
+
+    def test_each_site_states_the_rule(self):
+        for rel in self.SITES:
+            self.assertIn(self.RULE, self.flat(rel), rel)
+
+    def test_step_3_fails_a_block_with_no_home(self):
+        flat = self.flat("workflows/02-extract.md")
+        step3 = flat.split("## Step 3", 1)[1].split("## Step 4", 1)[0]
+        self.assertIn(self.NO_HOME, step3)
+        self.assertIn("`AN ANSWERS PAGE IN AN EXTRACT: [<doc> <loc>] is ...; move it to "
+                      "_build/solutions/<name>.md, <why>`", step3)
+        self.assertIn("(`NO HOME FILE`)", flat.split("## Done when", 1)[1])
+
+
 class QuotingRule(unittest.TestCase):
     """A set's official solution is quoted only once that set is attempted and, when its answers
     file solves several sets, once every set that file solves is attempted. 04-write, STYLE S7

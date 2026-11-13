@@ -147,7 +147,9 @@ evidence ids.
     write several files, and no file is written by two agents). Every solutions block has one home
     file: a set's part or stem blocks beside its extract, an answers file's page or section blocks
     in the one set's file it solves or, when it solves several, in its own file, and a self-keyed
-    doc's key blocks beside its own extract. MANIFEST.md gets a Key column, which
+    doc's key blocks beside its own extract; a set's home is the file beside each extract holding
+    any block of it, a page, section or slide block included, and a block whose set no extract
+    holds fails `NO HOME FILE`. MANIFEST.md gets a Key column, which
     `01-ingest` writes after looking at the file and `extract_check.py` reads whole: `for HW1,
     HW2` for a separate answers file, `pp. 7-9, 11` or `p.N`, `inline`, or `sections: Marking
     scheme, Answers` for a source without pages, whose key sections are the blocks with exactly
