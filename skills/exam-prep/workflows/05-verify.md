@@ -30,8 +30,8 @@ derivations.
   are what test the reference. `python3 -I _build/verify/selftest.py` must print `ALL PASS` with
   every part covered once before anything uses the reference.
 - A FAIL means a convention the reference doesn't model yet or a misread extract: fix that. An
-  expected value changes only when a 300 dpi re-read of its page shows the extract misread it
-  (fix the extract too), or when the official answer itself is wrong (an erratum, logged in
+  expected value changes only when a 300 dpi re-read of its page shows the extract or solutions
+  file misread it (fix that file too), or when the official answer itself is wrong (an erratum, logged in
   STATUS and in the backbone's Conventions block). Never change one to match the checker.
 - Worked examples come from `<skill>/templates/verify-examples.py`, copied to
   `_build/verify/examples.py` (`03-backbone`, step 7). It writes `examples.out.md` and replaces

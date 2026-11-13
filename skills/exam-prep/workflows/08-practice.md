@@ -68,8 +68,10 @@ section and the type it asks), its type and topic.
   Weight the sections by that statement when it gives weights, else evenly, and say which in the
   plan.
 - Quote each cloned question's text in the plan, its question part only, from its extract. The
-  writers read no source file: a homework's extract holds its solutions under each question, and
-  a file MANIFEST.md marks `Answers: yes` never reaches them (hub CLAUDE.md).
+  writers read the extracts of the sets they clone, which hold no answer, and no source file or
+  solutions file: a homework's source file holds its solutions beside the questions,
+  `_build/solutions/` holds them alone, and a file MANIFEST.md marks `Answers: yes` never reaches
+  them (hub CLAUDE.md).
 - Clones are at exam difficulty with fresh numbers, plus one harder set, its own mock, flagged as
   harder than the exam (FB-155), unless PLAN.md's priority order drops it for time.
 - True or false: for each statement the source tests, list the adjacent variants (swap the
