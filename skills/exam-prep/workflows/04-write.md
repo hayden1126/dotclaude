@@ -94,8 +94,9 @@ The main session runs these, since delegated agents can't run scripts (L07):
    backbone broke its brief: undo that and say so in STATUS).
 2. `grep -n TODO-VERIFY notes/*.md`: copy the list into STATUS for `05-verify`.
 3. `grep -nE '\b(T[0-9]+|Tree [A-Z])\b' notes/*.md` for coined example labels (S17). Check each
-   hit against `_build/extract/`: a label the course's own sources use (T1 for a transaction in a
-   database course) is the course's term and stays (S25); rename only labels the notes invented.
+   hit against `_build/extract/` and `_build/solutions/`: a label the course's own sources use
+   (T1 for a transaction in a database course) is the course's term and stays (S25); rename only
+   labels the notes invented.
 4. `grep -n "$(printf '\342\200\224')" notes/*.md` for em dashes (S10): fix every hit.
 5. Each slide-image marker (`grep -n 'FIG fig-[^:]*: slide image of' notes/*.md`): the main
    session crops that region of the cited page image (`_build/pages/<doc>/p-NNN.png`) into

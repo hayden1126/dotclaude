@@ -309,7 +309,8 @@ build is this build's end, not a stage's.
 1. **Check.** As `10-polish` step 1 says: `05-verify` done (and `06-site` with a page), no `Build
    running` line, the hub free, and whether a mock is untaken. While one is, `08-practice` step 8's
    fence binds this session and every agent it spawns: searches only in `notes/`, `cheatsheet/`,
-   `_build/frag/` and `_build/extract/`, nothing opened under `practice/` but
+   `_build/frag/`, `_build/extract/` and `_build/solutions/` (an answer-blind brief keeps
+   `_build/solutions/` out of its own scope), nothing opened under `practice/` but
    the cram order (and 08 step 8's one exception, its step 4's rerun clause), never `_build/verify/mock_key.py` or
    `_build/mock-plan.md`; each brief it spawns keeps its own scope and adds: nothing opened under
    `practice/`, no `_build/verify/mock_key.py` or `_build/mock-plan.md`, and no search over the hub
@@ -342,8 +343,8 @@ build is this build's end, not a stage's.
 4. **Build**, for that source only. While a mock is untaken, the student looks away from this window
    from here to step 5's look-back: tell them first to come back when a reply's only line asks for
    `/clear`, and to type it before reading anything above that line. The MANIFEST.md change first,
-   then `01-ingest` steps 1 to 3, `02-extract` (its step 3.4's `qonly.py` run included, so a new
-   set with solutions has its question-only copy before any agent reads it), then `03-backbone`
+   then `01-ingest` steps 1 to 3, `02-extract` (a new set with solutions gets its solutions file
+   there, from the agent that writes its extract), then `03-backbone`
    and `04-write` placing and
    writing the new material as rows 03 and 04 of "The build on a reopened hub" do: new sections
    after the last, or a subsection before an old section's Must know, with their ids,
@@ -432,9 +433,9 @@ read).
   rows the change added, or changed from a row reading `Rendered: no` at `<sha>` (MANIFEST.md on
   disk against `git show <sha>:MANIFEST.md`, before anything is restored; a row the change didn't
   touch keeps its renders): each file `git diff --name-only <sha>` names, and each untracked file
-  under `notes/`, `_build/extract/`, `_build/frag/` and `_build/verify/` (`git status --porcelain
-  --untracked-files=all`), all but `_build/logs/` and `practice/tutor/`, which a tutor tab may
-  write; and each crop in `_build/img/` a slide-image FIG marker on disk names for one of those doc
+  under `notes/`, `_build/extract/`, `_build/solutions/`, `_build/frag/` and `_build/verify/`
+  (`git status --porcelain --untracked-files=all`), all but `_build/logs/` and `practice/tutor/`,
+  which a tutor tab may write; and each crop in `_build/img/` a slide-image FIG marker on disk names for one of those doc
   ids (`grep -n 'FIG fig-[^:]*: slide image of <doc> ' notes/*.md`: the marker's id is the
   crop's file name). Then, on their go, `git restore --source=<sha> --staged --worktree -- <each
   listed tracked file>`, which also takes a file `<sha>` lacks out of the index and off the disk; `rm` each
@@ -494,8 +495,8 @@ fresh session answers from STATUS, then runs step 7.5.
    reply's only line asks for /clear, and type it before reading anything above that line.` The
    student stays away until the look-back (item 6), and `08-practice` step 8's fence binds this
    session: it opens no untaken mock's key, `practice/mock-values-key.md` or
-   `_build/verify/mock_key.py`, and searches only `notes/`, `cheatsheet/`, `_build/frag/` and
-   `_build/extract/`. Then check as "A source added" step 1 does: `05-verify`
+   `_build/verify/mock_key.py`, and searches only `notes/`, `cheatsheet/`, `_build/frag/`,
+   `_build/extract/` and `_build/solutions/`. Then check as "A source added" step 1 does: `05-verify`
    done (and `06-site` with a page), no `Build running` line, the hub free, the tree clean but for `_build/logs/` and
    `practice/tutor/`; note `git rev-parse HEAD`. A check that fails is told to the student, and
    the addition waits for it. Pick the doc's id now, a new one as `01-ingest` gives (none reused):

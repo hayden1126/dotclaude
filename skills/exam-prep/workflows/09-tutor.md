@@ -22,8 +22,9 @@ picks it up.
   exists and STATUS records no attempt of it (`08-practice` step 8.2 records each one, its misses
   or none). While one is, `08-practice` step 8's rules bind the tutor: it opens no untaken mock's
   key, `practice/mock-values-key.md` or `_build/verify/mock_key.py`, and keeps every search inside
-  `notes/`, `cheatsheet/`, `_build/frag/` and `_build/extract/` (which hold no mock), but for Step
-  5.5.4's grep of `practice/cram-order.md`; every STATUS write is followed by that stage's STATUS check with the untaken mocks' keys
+  `notes/`, `cheatsheet/`, `_build/frag/`, `_build/extract/` and `_build/solutions/` (which hold
+  no mock), but for Step 5.5.4's grep of `practice/cram-order.md`; every STATUS write is followed
+  by that stage's STATUS check with the untaken mocks' keys
   (its step 4's opening); every notes or sheet change runs its "Changing the notes or a sheet"; a
   one-line sheet addition goes where its step 8 says (Step 5.2); and the next-step line stays as it
   stands.
@@ -39,17 +40,19 @@ picks it up.
     unless its official solutions are extracted (Step 3), and so does a part that needs the
     reference extended;
   - it makes no fresh true-or-false statement, keeps every search inside `notes/`, `cheatsheet/`,
-    `_build/frag/` and `_build/extract/`, and never opens `_build/mock-plan.md`:
+    `_build/frag/`, `_build/extract/` and `_build/solutions/`, and never opens
+    `_build/mock-plan.md`:
     before any mock file exists, the plan already holds the mocks' questions and their variants;
   - it reads `notes/`, `cheatsheet/` and `_build/frag/` as committed, never from
     disk: the build edits them in place, and from 08's step 2 commits a change only once its leak
     compare passes (`08-practice`'s "Changing the notes or a sheet", item 4), so a line on disk may
     state a mock's answer. Search them with `git grep -n -e <phrase> HEAD -- notes/ cheatsheet/
     _build/frag/`, and read a passage with `git show HEAD:<path> | sed -n
-    '<from>,<to>p'`. `_build/extract/` is searched and read
-    from disk with the Grep and Read tools, whose output stays folded (Step 3): a part's block holds
-    its solution; but not a file `git status --short -- _build/extract/` lists, which a
-    build's `02-extract` is still writing (`11-next-exam`'s builds too);
+    '<from>,<to>p'`. `_build/extract/` and `_build/solutions/` are searched and read from disk
+    with the Grep and Read tools, whose output stays folded (Step 3): a part's block in
+    `_build/solutions/` holds its solution; but not a file
+    `git status --short -- _build/extract/ _build/solutions/` lists, which a build's `02-extract`
+    is still writing (`11-next-exam`'s builds too);
   - it dispatches no patch: one the student approves waits under `## Pending patches` in the log
     (Step 5.3), a one-line sheet addition marked `sheet line`, and the build session never
     dispatches one either (it can't show the student a change or ask them); official
@@ -103,8 +106,9 @@ Settle it before the first part:
 - A taken mock: its key, `practice/mock-<slug>-key.md`. An untaken mock is never walked through:
   it is a timed rehearsal (`08-practice` step 8.1).
 - A set whose official solutions are extracted (MANIFEST.md marks their file `Answers: yes`, with
-  `solutions to <doc>` in its Notes): the solution under each part's block in `_build/extract/`
-  (its `Solution [` line, or any marker `qonly.py` cuts).
+  `solutions to <doc>` in its Notes, or the set's own row `Answers: yes` with no note, a past exam
+  with its key): the part's block in `_build/solutions/<name>.md`, its `Solution [` line and the
+  working under it. A block reading `No official solution.` sends the part to the next source.
 - Any other set, with a checker: its values from the reference, before the first part (hard rule 3),
   once `selftest.py` prints `ALL PASS` (`05-verify` step 1) and no build runs (Step 1). Copy
   `<skill>/templates/verify-set-key.py` to `_build/verify/set_key.py` once, add the set's doc id to
@@ -131,8 +135,9 @@ Settle it before the first part:
 - A part left to the notes (a proof, a justification), and every part when PLAN.md's Checker line
   says nothing is computable: the rule or method the notes state, cited, and the rubric.
 
-A `reserved` set belongs to a later exam: never open it. Read an extract, a key or a values file
-by its path with the Read tool, and search only extracts, with the Grep tool (a search over
+A `reserved` set belongs to a later exam: never open it. Read an extract, a solutions file, a key
+or a values file by its path with the Read tool, and search only extracts and solutions files,
+with the Grep tool (a search over
 `practice/` returns untaken mocks' key lines): their output stays folded on the student's screen,
 where a shell command prints it; and say nothing of a part's answer before the student's
 attempt. A failing self-test check prints the official answer it expected, so every `selftest.py`
@@ -398,9 +403,10 @@ change itself waits for Step 5.5.7.
 
 During a build (Step 1) this waits for the build's end, as a line under the log's `##
 Waiting checks`. Run `01-ingest` for the file (its MANIFEST.md row `Answers: yes`, `solutions to
-<doc>` in Notes) and `02-extract` for the set again with its solutions, one agent, so each lands
-under its part. Then `05-verify`, "Official solutions that arrive late", which adds them to the
-self-test and diffs every answer against the notes and any `practice/tutor/` values file. That
+<doc>` in Notes) and `02-extract` for the set again with its solutions, one agent, which writes
+the pair: the extract, and the solutions file with each solution under its part's block id.
+Then `05-verify`, "Official solutions that arrive late", which adds them to the self-test and
+diffs every answer against the notes and any `practice/tutor/` values file. That
 check shows answers: the self-test's new lines show in the edit, a failing line prints both values,
 and STATUS records what was wrong; so does 02's fix of a flagged solution line (its step 3.2), in
 an edit. For a set the student hasn't attempted in full both wait, as a line under the log's `##

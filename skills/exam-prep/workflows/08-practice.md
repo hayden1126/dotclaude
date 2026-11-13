@@ -91,9 +91,9 @@ The plan holds no answer: the writers read it.
 ## Step 3: Write the mocks
 
 1. One writer per mock file, from `<skill>/templates/agent-briefs.md`, section "Mock writer",
-   all spawned at once (each writes only its own file), its `{{Q-ONLY FILES}}` slot filled with
-   the question-only copies under `_build/q-only/` (`02-extract` step 3.4, FB-056) of the sets its rows of
-   the plan clone.
+   all spawned at once (each writes only its own file), its `{{EXTRACT FILES}}` slot filled with
+   the extracts under `_build/extract/` (which hold no answer, FB-056) of the sets its rows of the
+   plan clone.
 2. From the hub root, per mock, `python3 -I <skill>/scripts/mockpage.py practice/mock-<slug>.md
    --out _build/mock-<slug>.html`. It refuses any line off the format and names it: fix each,
    and rerun until it writes the page.
@@ -268,9 +268,9 @@ Then:
    OK: the student reads the cram order before the mocks, so a row that states a mock's answer
    is reworded.
 3. A fresh reviewer audits it from the Review brief's "Audit" variant (`05-verify` step 4,
-   FB-105), its `{{Q-ONLY FILES}}` slot filled as that step says: every row's one thing against the section it links. A finding on a row is fixed in
-   the cram order; one on the notes goes through "Changing the notes or a sheet". Then 1 and 2
-   again.
+   FB-105), its `{{EXTRACT FILES}}` slot filled as that step says: every row's one thing against
+   the section it links. A finding on a row is fixed in the cram order; one on the notes goes
+   through "Changing the notes or a sheet". Then 1 and 2 again.
 4. **Rebuild and republish the notes page** (K02). The cram order is published at the top of the
    notes page: `assemble.py` renders the map's cram block from `practice/cram-order.md` on every
    build and opens the map (`06-site` step 4), so the page needs no edit of its own. Run "Changing
@@ -435,7 +435,8 @@ a taken mock's, never an untaken one's, `practice/mock-values-key.md` or `_build
 (they hold every mock's answers; the one exception is step 4's rerun clause, which prints a taken
 mock's section of the values file alone, and step 8.1's key recheck writer opens them in its own
 worktree), and keeps every search inside `notes/`, `cheatsheet/`,
-`_build/frag/` and `_build/extract/` (which hold no mock), and `practice/cram-order.md`, which
+`_build/frag/`, `_build/extract/` and `_build/solutions/` (which hold no mock), and
+`practice/cram-order.md`, which
 step 7.2 keeps free of answers: one over the hub root prints key lines. The writer `09-tutor` step
 5 dispatches (the "Notes patch" brief) makes the change of "Changing the notes or a sheet" item 2,
 but in the cram order, which the main session fixes at the merge (`09-tutor` step 5.5.4), and, for

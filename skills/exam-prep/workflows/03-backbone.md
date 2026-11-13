@@ -10,13 +10,14 @@ session alone and fixed before any writer starts (FB-060, FB-054). The output is
 
 ## Step 1: Read every extract
 
-The main session reads all of `_build/extract/`, every staff item in the Ed digest (a convention
-such as a tie-break may be tagged `scope` or `format`, not only `hint`) and the practice
-questions. When an extract got something wrong, re-check it on the page image, then fix it in the
-extract itself (writers read the extracts), list it at the top of the backbone, and carry it into
-the checker. Read MANIFEST.md's topic cuts too: under the backbone's Conventions block, one line per
-cut, naming the subsections it reaches and what of it stays in scope (04-write banners the material
-it takes out). A cut first seen in the Ed digest during the build goes under MANIFEST.md's Topic
+The main session reads all of `_build/extract/` and `_build/solutions/` (a set's conventions
+show in its official solutions; the backbone quotes none of their answers), every staff item in
+the Ed digest (a convention such as a tie-break may be tagged `scope` or `format`, not only
+`hint`) and the practice questions. When an extract or a solutions file got something wrong,
+re-check it on the page image, then fix it in that file itself (writers read both), list it at
+the top of the backbone, and carry it into the checker. Read MANIFEST.md's topic cuts too: under
+the backbone's Conventions block, one line per cut, naming the subsections it reaches and what of
+it stays in scope (04-write banners the material it takes out). A cut first seen in the Ed digest during the build goes under MANIFEST.md's Topic
 cuts too, logged in STATUS as a judgment call.
 
 ## Step 2: Order by concept

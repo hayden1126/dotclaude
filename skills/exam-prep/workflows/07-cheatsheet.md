@@ -40,9 +40,9 @@ Review view instead ("Tag the review" below).
    does in a question (trace this, compute that, justify a label, prove), each block under its
    topic (FB-141), one line per item. Split them across the sides.
 2. Scan for gaps twice, in order (FB-136). Load the delegation skill first, and spawn from
-   `<skill>/templates/agent-briefs.md`, section "Sheet gap scan", unnamed, its `{{Q-ONLY FILES}}`
-   slot filled with each question set's copy under `_build/q-only/` (`02-extract` step 3.4, FB-056) and
-   its `{{EXTRACT FILES}}` slot with the extracts of the sets that have no copy:
+   `<skill>/templates/agent-briefs.md`, section "Sheet gap scan", unnamed, its `{{EXTRACT FILES}}`
+   slot filled with each question set's extract under `_build/extract/`, which holds no answer
+   (FB-056):
    - by content: the content variant, one agent per two or three notes sections, all at once.
      Pick from their reports (step 3) into the outline;
    - then by question type: one agent, the question-type variant (answer templates, pros and
