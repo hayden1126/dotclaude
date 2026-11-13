@@ -609,7 +609,7 @@ The products, each one the hub has:
 | Each sheet | `cheatsheet/<exam-slug>-mock.html` and `-final.html` (or `.tex`), never a subfolder of `cheatsheet/` | a fact it copies changes, or a line is added |
 | The cram order | `practice/cram-order.md`, which `assemble.py` renders into the notes page's map (`06-site` step 4) | a row quotes the changed fact, or its tiers, rows or skip list change |
 | The watch list | `practice/videos.json`, `practice/videos.html` (PLAN.md's `Watch list: yes`) | a notes id a row links changes or goes, or a How it's tested line a row's tested line comes from (W27) changes |
-| The checks | the questions check (FB-191), and the leak compare | the questions check, on a change to the notes; the leak compare, on every change while a mock is untaken |
+| The checks | the questions check (FB-191), and the leak compare | the questions check, on a change to the notes or a sheet; the leak compare, on every change while a mock is untaken |
 
 1. **The baseline**, while a mock is untaken: step 4.5's command, run now, on the notes
    (`_build/notes.html`; plain-text notes: `notes/combined.md`) and on each sheet the student
@@ -649,9 +649,10 @@ The products, each one the hub has:
    - The watch list, once it exists, after the notes page's rebuild: the rows' ids and tested
      lines fixed in `practice/videos.json`, then "Watch list" item 6 (`videos.py` exits 0, the
      page's checks, and its leak check while a mock is untaken).
-4. **The checks.** When the notes changed, `05-verify` step 5's questions check prints QUESTIONS
-   OK (FB-191): `python3 -I <skill>/scripts/mock_leak.py --hub . --pages notes/*.md`, run from
-   `<root>` by the main session; the script builds its file list from MANIFEST.md's attempt marks
+4. **The checks.** When the notes or a sheet changed, `05-verify` step 5's questions check
+   prints QUESTIONS OK (FB-191): `python3 -I <skill>/scripts/mock_leak.py --hub .`, run from
+   `<root>` by the main session; it reads every page under `notes/` and `cheatsheet/` (a LaTeX
+   sheet as its `.tex`), and builds its file list from MANIFEST.md's attempt marks
    (`extract_check.py --leak-files` prints it, for when a hit needs explaining) and prints
    `QUESTIONS OK: no unattempted set` when there is none. A hit is
    reworded with fresh numbers and setup (S7) and repeats from item 2. While a mock is untaken, also

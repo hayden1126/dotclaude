@@ -321,7 +321,7 @@ At each set's end, its score in the reply and the log: verdicts right, and reaso
       page's rebuild, which renders the fixed row into the map (`06-site` step 4). A sheet's refit is the main session's (Step 7), and
       a LaTeX sheet is read as its `.tex` here; the student compiles it only at item 8, after the
       leak compare.
-   5. That section's item 4: the questions check when the stat named `notes/`,
+   5. That section's item 4: the questions check when the stat named `notes/` or `cheatsheet/`,
       and while a mock is untaken the leak compare with the baseline in
       `_build/logs/patch-baseline.txt`.
    6. A check in item 4 that fails, a questions hit or a new leak hit in item 5, a wording cut or an

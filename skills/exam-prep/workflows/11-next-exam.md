@@ -378,8 +378,8 @@ build is this build's end, not a stage's.
    source before the next attempt, from step 5's `done` line). The log marks each stage's end once
    its commit is made (`02 done`), each product's (`page done`, `sheets done`, `cram order done`),
    and `step 4 done` after the last. Before
-   `step 4 done`, that section's item 4 questions check prints QUESTIONS OK on the notes as they
-   now stand (FB-191), `python3 -I <skill>/scripts/mock_leak.py --hub . --pages notes/*.md` run
+   `step 4 done`, that section's item 4 questions check prints QUESTIONS OK on the notes and the sheets
+   as they now stand (FB-191), `python3 -I <skill>/scripts/mock_leak.py --hub .` run
    by the main session (the script builds its file list from MANIFEST.md's attempt marks, a new
    set's included), so
    step 5's republish carries no hit. With no mock untaken, a sheet's change is shown to the
@@ -545,8 +545,8 @@ fresh session answers from STATUS, then runs step 7.5.
    section says with the untaken mocks' keys: its baseline (item 1) before the first write, its
    values as item 3 here says, and its compare (item 4) passed before any commit, a hit on a quoted
    value reworded by leaving the value out, its citation kept. Then that section's questions check
-   prints QUESTIONS OK (FB-191), `python3 -I <skill>/scripts/mock_leak.py --hub . --pages
-   notes/*.md` run by the main session (the script builds its file list from MANIFEST.md's attempt
+   prints QUESTIONS OK (FB-191), `python3 -I <skill>/scripts/mock_leak.py --hub .`
+   run by the main session (the script builds its file list from MANIFEST.md's attempt
    marks), a hit reworded the same way, before item 5's commit and republish.
 5. **Commit**, once: the material (its notes, fragment and page), its backbone headings, its
    MANIFEST.md row and, in STATUS, `Unverified: <doc>, <section ids>, <date>` in place of the `Skip

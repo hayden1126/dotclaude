@@ -137,7 +137,7 @@ order (`08-practice`) get the same audit when they exist.
   `mock_key.py` reruns too (its step 4's rerun clause).
 - With no checker, a `TODO-VERIFY` a writer left anyway is replaced with the value its cited
   source gives, or the working that derives it.
-- Before anything is published, the questions check: check the notes against every set the
+- Before anything is published, the questions check: check the notes and sheets against every set the
   student hasn't attempted (FB-191), since a worked example has rebuilt a practice question's
   setup, and a gloss has named a practice step. Those sets, all read from MANIFEST.md: each
   question set (one an answers file's Key cell `for ...` names, a past exam holding its own
@@ -147,7 +147,9 @@ order (`08-practice`) get the same audit when they exist.
   student's word, `09-tutor` Step 7 when its last part is done. A separate answers file's row
   stays `yes` and never records an attempt, since it may solve several sets.
   The main session runs it from `<root>`, since reviewers never open `practice/`:
-  `python3 -I <skill>/scripts/mock_leak.py --hub . --pages notes/*.md`. It reads those attempt
+  `python3 -I <skill>/scripts/mock_leak.py --hub .`. It checks every page under `notes/` and
+  `cheatsheet/` (the sheets once `07-cheatsheet` writes them), so no page is passed by hand
+  either. It reads those attempt
   marks and the extracts and builds its own file list, so no file is passed by hand: the question files
   hold the unattempted sets' official text (each such set's extracts and solutions files, and a
   multi-set answers file's own file, its pages in full, while any set it solves is unattempted),
@@ -158,7 +160,7 @@ order (`08-practice`) get the same audit when they exist.
   a shared answers file's own file is a blocker like any other, even when the set it quotes is
   attempted: the notes quote an attempted set's official text only once every set its answers
   file solves is attempted.
-  Each hit names a notes line and a set's part, never the text. The Review view (`07-cheatsheet`)
+  Each hit names a page's line (a notes section or a sheet) and a set's part, never the text. The Review view (`07-cheatsheet`)
   only tags blocks of the notes, so this check covers it, and every later change runs it as
   `08-practice`'s "Changing the notes or a sheet" item 4 says, with this same command.
   A hit is a blocker: rewrite the passage with fresh numbers and a fresh setup (S7), and rerun
@@ -204,7 +206,7 @@ script (`08-practice`).
 `selftest.py` prints `ALL PASS` with every official part covered (or PLAN.md's Checker line says
 nothing is computable); no `TODO-VERIFY` is left; every blocker and major finding is applied or
 refuted with evidence in STATUS, and every minor one applied or logged there; `mock_leak.py
---hub . --pages notes/*.md` prints `QUESTIONS OK` on the notes, or `QUESTIONS OK: no unattempted
+--hub .` prints `QUESTIONS OK` on the notes, or `QUESTIONS OK: no unattempted
 set`, logged in STATUS (step 5);
 `linkcheck.py` exits
 0 (plain-text notes: references checked by hand); the fixes are committed.

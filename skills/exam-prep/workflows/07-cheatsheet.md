@@ -138,6 +138,15 @@ says: check each claim first, and fix every copy of a fact. Then step 4 again.
 
 ## Step 6: Ship
 
+- The questions check first (FB-191), before a sheet is published or printed: `05-verify` step
+  5's command, `python3 -I <skill>/scripts/mock_leak.py --hub .`, run from `<root>` by the main
+  session, reads every page under `notes/` and `cheatsheet/` (a LaTeX sheet as its `.tex`) and
+  prints QUESTIONS OK, or `QUESTIONS OK: no unattempted set`. A sheet copies only the notes, yet
+  it can still rebuild a question the student hasn't attempted: step 2's question-type scan
+  drafts a worked pattern per question type from the sets' extracts, and the final sheet's
+  mock-derived lines (FB-133) come from the attempts, not from the notes. A hit is a
+  blocker: reword the line with fresh numbers and a fresh setup (S7), then steps 4 and 5 for the
+  change, and rerun until it prints QUESTIONS OK. Log the result in STATUS.
 - The prune list (FB-146), last: `_build/logs/sheet-prune.md`, one line per block, its name, side and
   column, and the question type it serves (trace, compute, justify, a true or false, as the How
   it's tested table names them), or `none found` when no question type uses it. The student cuts
@@ -177,7 +186,8 @@ mock parts the held items would spoil, says to add them.
    moved. `diff` the two sheets: it shows the
    added items, what they replaced, the `--fs` line if it moved, any block moved between sides
    and wording cut at the floor, and nothing else.
-4. Print it; it isn't published.
+4. Step 6's questions check, which reads this sheet too; once it prints QUESTIONS OK, print the
+   sheet. It isn't published.
 
 ## After shipping
 
@@ -246,8 +256,8 @@ first); new ones go on PLAN.md's `Review view:` line and the view is rebuilt fro
    it, untag from the last ranked subsection up and rerun from item 3; once no `.rv` tag is left,
    new minutes on PLAN.md's `Review view:` line, asked or set and logged as this section's opening
    says, and rerun. `verify_page.mjs` checks and
-   shoots both views; look at the `-review` screenshots too. Since no text changes, `05-verify`
-   step 5's questions check needs no extra pages (FB-191), and there is no audit of copied text.
+   shoots both views; look at the `-review` screenshots too. Since no text changes, the questions
+   check (FB-191) has nothing new to read, and there is no audit of copied text.
 5. **Republish** the notes page to its same URL, as `06-site` step 6 says, its version bumped on
    its STATUS line as `08-practice`'s "Changing the notes or a sheet" item 5 does. Then commit and
    hand off as step 6 does for a sheet (the `Build running` line removed in that commit when this
@@ -258,7 +268,8 @@ first); new ones go on PLAN.md's `Review view:` line and the view is rebuilt fro
 
 `check_pdf.py` passes on each sheet with every warning judged; the audit's findings are applied;
 the page images look right, every figure's axes labelled and each index line where its block
-printed; the prune list is written and its `Sheet prune:` line is in STATUS; the
+printed; the questions check (step 6) prints QUESTIONS OK with the sheets in place, logged in
+STATUS; the prune list is written and its `Sheet prune:` line is in STATUS; the
 published sheet's URL is in STATUS (an HTML sheet); it is committed. Or, with no sheet allowed, the Review view when PLAN.md gives it minutes: tagged in the
 notes and the fragments, `fidelity.py`, `assemble.py` (within the minutes), `linkcheck.py --html`
 and `verify_page.mjs` passing, both views' screenshots seen, the notes page republished to its URL,

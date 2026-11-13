@@ -180,20 +180,23 @@ class WatchRules(unittest.TestCase):
 
 
 class QuestionsCheckFiles(unittest.TestCase):
-    """05-verify step 5 runs the questions check, and 08-practice's "Changing the notes or a
-    sheet" item 4, 10-polish and 11-next-exam (twice) run it again. Round 17 found the
-    hand-written file lists drifting from extract_check.py's home rule, so mock_leak.py now
-    builds the list itself (`--hub .`, from `extract_check.py --leak-files`): each site gives
-    the one command, and none lists a file by hand, a `_build/solutions/` path or a
-    `--questions` or `--allow` argument. 05-verify names `--leak-files` and the line printed
-    with no unattempted set."""
+    """05-verify step 5 runs the questions check, and 07-cheatsheet before a sheet is published
+    or printed, 08-practice's "Changing the notes or a sheet" item 4, 10-polish and
+    11-next-exam (twice) run it again. Round 17 found the hand-written file lists drifting from
+    extract_check.py's home rule, so mock_leak.py now builds the list itself (`--hub .`, from
+    `extract_check.py --leak-files`): each site gives the one command, and none lists a file by
+    hand, a `_build/solutions/` path or a `--questions` or `--allow` argument. Round 18 found
+    the sheets unchecked (`--pages notes/*.md`), so the command passes no page: it reads every
+    page under `notes/` and `cheatsheet/`, and 08's table row and item 4 run it on a change to
+    a sheet too. 05-verify names `--leak-files` and the line printed with no unattempted set."""
 
-    COMMAND = "python3 -I <skill>/scripts/mock_leak.py --hub . --pages notes/*.md"
-    SITES = {"05-verify.md": 1, "08-practice.md": 1, "10-polish.md": 1, "11-next-exam.md": 2}
-    # The round 14 to 16 wordings of the hand-written list.
+    COMMAND = "`python3 -I <skill>/scripts/mock_leak.py --hub .`"
+    SITES = {"05-verify.md": 1, "07-cheatsheet.md": 1, "08-practice.md": 1, "10-polish.md": 1,
+             "11-next-exam.md": 2}
+    # The round 14 to 16 wordings of the hand-written list, and round 17's notes-only pages.
     OLD = ("extract and own solutions file", "and its own solutions file",
            "each unattempted set's extract and its solutions file when it has one",
-           "one file per set", "exits 2 on a missing path")
+           "one file per set", "exits 2 on a missing path", "--pages notes/")
     HAND = ("_build/solutions/", "_build/extract/", "--questions", "--allow")
 
     @staticmethod
@@ -222,6 +225,19 @@ class QuestionsCheckFiles(unittest.TestCase):
     def test_no_workflow_passes_question_files(self):
         for name in sorted(os.listdir(os.path.join(SKILL, "workflows"))):
             self.assertNotIn("--questions", self.flat(name), name)
+            self.assertNotIn("--pages notes/", self.flat(name), name)
+
+    def test_a_sheet_change_runs_it(self):
+        flat = self.flat("08-practice.md")
+        self.assertIn("| the questions check, on a change to the notes or a sheet;", flat)
+        self.assertIn("4. **The checks.** When the notes or a sheet changed, `05-verify` step 5's "
+                      "questions check", flat)
+        sheet = self.flat("07-cheatsheet.md")
+        done = sheet.split("## Done when", 1)[1]
+        self.assertIn("the questions check (step 6) prints QUESTIONS OK with the sheets in place",
+                      done)
+        final = sheet.split("## The final sheet", 1)[1].split("## After shipping", 1)[0]
+        self.assertIn("Step 6's questions check", final)
 
     def test_the_first_site_names_the_list_and_the_empty_case(self):
         flat = self.flat("05-verify.md")

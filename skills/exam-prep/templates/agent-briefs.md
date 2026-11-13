@@ -843,7 +843,9 @@ decides what goes on.
   pattern, each only where the outline lacks it.}}
 - Answers: read no official answer. The extracts hold none; the official solutions live in
   {{ROOT}}/_build/solutions/, which you never open (FB-056). {{UNATTEMPTED: The student hasn't attempted
-  <those sets>: read their questions only, and propose nothing from their official answers. | ALL
+  <those sets>: read their questions only, propose nothing from their official answers, and
+  give a worked pattern fresh numbers and a fresh setup, never one of theirs: the sheet is
+  checked against their text before it ships. | ALL
   ATTEMPTED: drop this sentence.}}
 - Out of scope: nothing under {{ROOT}}/practice/ (the mock sheet holds nothing derived from the
   mock, and keys live there), nothing under {{ROOT}}/sources/ or {{ROOT}}/_build/solutions/, and
