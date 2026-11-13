@@ -183,16 +183,20 @@ class QuestionsCheckFiles(unittest.TestCase):
     """05-verify step 5 gives mock_leak.py's question files, and 08-practice's "Changing the
     notes or a sheet" item 4, 10-polish and 11-next-exam (twice) restate them. Each site names
     the same files in the same words: the unattempted sets' extracts and their existing
-    solutions files, never an attempted set's file or a multi-set answers file's own file (its
-    page blocks hold only a pointer line). The two sites that spell the paths say a set with no
-    official answers has no solutions file, since mock_leak.py exits 2 on a missing path."""
+    solutions files, plus a multi-set answers file's own file (its pages in full) while any set
+    it solves is unattempted, never an attempted set's own file. The two sites that spell the
+    paths say a set with no official answers has no solutions file, since mock_leak.py exits 2 on
+    a missing path, and name the answers file's own file by its doc id."""
 
-    SET = ("each unattempted set's extract and its solutions file when it has one, never an "
-           "attempted set's file or a multi-set answers file's own file")
+    SET = ("each unattempted set's extract and its solutions file when it has one, plus a "
+           "multi-set answers file's own file while any set it solves is unattempted; never an "
+           "attempted set's own file")
     SITES = {"05-verify.md": 1, "08-practice.md": 1, "10-polish.md": 1, "11-next-exam.md": 2}
     SPELLED = ("05-verify.md", "08-practice.md")
-    # The wording round 14 replaced, which passed a set's solutions file whether or not it exists.
-    OLD = ("extract and own solutions file", "and its own solutions file")
+    # The wording round 14 replaced, which passed a set's solutions file whether or not it exists,
+    # and round 15's, which left the multi-set answers file's own file out.
+    OLD = ("extract and own solutions file", "and its own solutions file",
+           "never an attempted set's file or a multi-set answers file's own file")
     CONTEXT = ("questions check", "--questions", "question files")
 
     @staticmethod
@@ -218,7 +222,8 @@ class QuestionsCheckFiles(unittest.TestCase):
         for name in self.SPELLED:
             flat = self.flat(name)
             for phrase in ("set with no official answers has", "`_build/solutions/<name>.md`",
-                           "`mock_leak.py` exits 2 on a missing path"):
+                           "`mock_leak.py` exits 2 on a missing path",
+                           "`_build/solutions/<doc id in lower case>.md`"):
                 self.assertTrue(phrase in flat, (name, phrase))
 
 

@@ -78,12 +78,15 @@ Spawn one `reviewer` per section file, all at once (FB-102), each from
 Each brief names the sets the student hasn't attempted (each one whose own MANIFEST.md row lacks
 `attempted`): the notes quote none of their official solutions, and a quote is a blocker. Its
 `{{SOLUTIONS FILES}}` slot names the solutions files that hold the
-blocks of the question parts and answers docs the section's extract blocks cite: for each part
-the coverage matrix maps into the section (`[HW1 Q2a]`) and each answers doc page its blocks cite
-(`[HW1S p.2]`), the file under `_build/solutions/` holding its `### [<id>]` block: for a part,
-its set's solutions file, `_build/solutions/<name>.md` under the set's extract name; for an
-answers page, the file found by block id (`grep -l -F '### [HW1S p.2]' _build/solutions/*.md`);
-or `none`. Its `{{ANSWER FILES}}` slot
+blocks of the question parts and answers docs the section's extract blocks cite, each block
+found in its home file (`02-extract`, "The solutions file"), never by a search across
+`_build/solutions/*.md`: for each part the coverage matrix maps into the section (`[HW1 Q2a]`),
+its set's solutions file, `_build/solutions/<name>.md` under the set's extract name, read with
+the stem block `### [HW1 Q2 stem]` before its parts when there is one; for each answers doc page
+its blocks cite (`[HW1S p.2]`), its answers file's home: the one set's file when the Key cell is
+`for <one doc>`, `_build/solutions/<doc id in lower case>.md` (`hws.md` for `HWS`) when the cell
+names several docs, or the file beside the doc's own extract for a doc holding its own key; or
+`none`. Its `{{ANSWER FILES}}` slot
 names each file MANIFEST.md marks `Answers: yes` that solves one of those parts: wording that
 tracks an official solution, its part's block in those solutions files, is a finding (FB-071),
 reworded from the slide or derived plainly in step 5. Findings come back ranked blocker, major,
@@ -144,17 +147,19 @@ order (`08-practice`) get the same audit when they exist.
   student's word, `09-tutor` Step 7 when its last part is done. A separate answers file's row
   stays `yes` and never records an attempt, since it may solve several sets.
   With no such set, skip the run and log `no unattempted set` in STATUS. Otherwise give, as
-  question files, each unattempted set's extract and its solutions file when it has one, never an
-  attempted set's file or a multi-set answers file's own file: the extract
-  `_build/extract/<name>.md`, and `_build/solutions/<name>.md` under the same `<name>` (one file
-  per set, so it holds that set's part and stem blocks alone) only when it exists. A set with no
-  official answers has no solutions file, and `mock_leak.py` exits 2 on a missing path. The
-  lecture extracts the notes cite are the allowed sources:
+  question files, each unattempted set's extract and its solutions file when it has one, plus a
+  multi-set answers file's own file while any set it solves is unattempted; never an attempted
+  set's own file: the extract `_build/extract/<name>.md`, and `_build/solutions/<name>.md` under
+  the same `<name>` (one file per set, so it holds that set's blocks alone) only when it exists,
+  and `_build/solutions/<doc id in lower case>.md` for each answers file whose Key cell names
+  several sets, one of them unattempted (it holds that file's pages in full, the shared setups
+  among them). A set with no official answers has no solutions file, and `mock_leak.py` exits 2
+  on a missing path. The lecture extracts the notes cite are the allowed sources:
   `python3 -I <skill>/scripts/mock_leak.py --questions <the unattempted sets' extracts and
-  existing solutions files> --allow <the lecture extracts> --pages notes/*.md`. A multi-set
-  answers file's own file adds nothing: its page blocks hold only the line `(transcribed under
-  the sets' blocks)`, since its agent puts every word of official text under a set's stem or
-  part block in that set's own file (`02-extract`, "The solutions file"). The main session runs
+  existing solutions files, and the shared answers files' own files> --allow <the lecture
+  extracts> --pages notes/*.md`. A hit from a shared answers file's own file is a blocker like
+  any other, even when the set it quotes is attempted: the notes quote an attempted set's
+  official text only once every set its answers file solves is attempted. The main session runs
   it, since reviewers never open `practice/`.
   Each hit names a notes line and a set's part, never the text. The Review view (`07-cheatsheet`)
   only tags blocks of the notes, so this check covers it, and every later change runs it as
@@ -176,8 +181,9 @@ order (`08-practice`) get the same audit when they exist.
 Extract them first, as `02-extract` step 1 says (hard rule 6), after `01-ingest` step 3 writes
 the answers file's Key cell: an answers file that solves one set shares that set's agent, which
 writes the pair again, its extract and `_build/solutions/<name>.md`; one that solves several sets
-gets its own agent, which writes each set's `_build/solutions/<name>.md` and
-`_build/solutions/<answers file name>.md` for its own pages, and each set's own agent then writes
+gets its own agent, which writes each set's part blocks in that set's `_build/solutions/<name>.md`
+and its own pages, in full, in `_build/solutions/<doc id in lower case>.md`, and each set's own
+agent then writes
 its extract again. Add them to the self-test (and rerun
 `extract_check.py --parts` for `PARTS`), diff every answer against the notes and any solved key,
 and record the verdict in STATUS by doc, page and part (`HW1S p.2, HW1 Q2a: matched`, `HW1S

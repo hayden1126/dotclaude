@@ -651,10 +651,11 @@ The products, each one the hub has:
      page's checks, and its leak check while a mock is untaken).
 4. **The checks.** When the notes changed, `05-verify` step 5's questions check prints QUESTIONS
    OK (FB-191): `mock_leak.py --questions` on the files that step passes, each unattempted set's
-   extract and its solutions file when it has one, never an attempted set's file or a multi-set
-   answers file's own file (`_build/extract/<name>.md`, and `_build/solutions/<name>.md` only
-   when it exists: a set with no official answers has none, and `mock_leak.py` exits 2 on a
-   missing path), the sets listed from MANIFEST.md, skipped when there is none, its
+   extract and its solutions file when it has one, plus a multi-set answers file's own file while
+   any set it solves is unattempted; never an attempted set's own file (`_build/extract/<name>.md`,
+   and `_build/solutions/<name>.md` only when it exists: a set with no official answers has none,
+   and `mock_leak.py` exits 2 on a missing path; plus `_build/solutions/<doc id in lower
+   case>.md` for such an answers file), the sets listed from MANIFEST.md, skipped when there is none, its
    `--allow` the lecture extracts the notes cite and its `--pages` the notes Markdown
    (`notes/*.md`). A hit is
    reworded with fresh numbers and setup (S7) and repeats from item 2. While a mock is untaken, also

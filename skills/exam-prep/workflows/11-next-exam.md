@@ -380,8 +380,8 @@ build is this build's end, not a stage's.
    and `step 4 done` after the last. Before
    `step 4 done`, that section's item 4 questions check prints QUESTIONS OK on the notes as they
    now stand (FB-191), on the files it names (each unattempted set's extract and its solutions
-   file when it has one, never an attempted set's file or a multi-set answers file's own file, a
-   new set's included), so
+   file when it has one, plus a multi-set answers file's own file while any set it solves is
+   unattempted; never an attempted set's own file; a new set's included), so
    step 5's republish carries no hit. With no mock untaken, a sheet's change is shown to the
    student before it is made (FB-137). While one is, every change to the notes or a sheet runs
    `08-practice`'s "Changing the notes or a sheet" with the untaken mocks' keys, its item 4
@@ -546,8 +546,8 @@ fresh session answers from STATUS, then runs step 7.5.
    values as item 3 here says, and its compare (item 4) passed before any commit, a hit on a quoted
    value reworded by leaving the value out, its citation kept. Then that section's questions check
    prints QUESTIONS OK (FB-191) on the files it names (each unattempted set's extract and its
-   solutions file when it has one, never an attempted set's file or a multi-set answers file's
-   own file), a hit reworded the same way, before item 5's commit and
+   solutions file when it has one, plus a multi-set answers file's own file while any set it
+   solves is unattempted; never an attempted set's own file), a hit reworded the same way, before item 5's commit and
    republish.
 5. **Commit**, once: the material (its notes, fragment and page), its backbone headings, its
    MANIFEST.md row and, in STATUS, `Unverified: <doc>, <section ids>, <date>` in place of the `Skip

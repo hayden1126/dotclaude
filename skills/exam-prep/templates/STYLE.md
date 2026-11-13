@@ -36,8 +36,10 @@ from later corrections. A retired rule is struck through and keeps its number. A
   steps and a bold **Result**. Their data and traces come from the checker (in a course with
   none, from the cited sources). On the page they are collapsible and closed by default. The
   notes quote a set's official solution only once that set's own MANIFEST row says `attempted`
-  (`no, attempted YYYY-MM-DD` or `yes, attempted YYYY-MM-DD`; an answers file's row stays `yes`);
-  the mock's key lives in its own quarantined file.
+  (`no, attempted YYYY-MM-DD` or `yes, attempted YYYY-MM-DD`; an answers file's row stays `yes`),
+  and, when its answers file solves several sets, once every set that file solves is attempted
+  (until then a hit from that file's own solutions file is a blocker like any other); the mock's
+  key lives in its own quarantined file.
 - **S8. Conventions.** Every convention an answer depends on is stated once, in the subsection the
   backbone names, and every use says which convention applies, with a link there. Example (a
   search course): the tie-break order; goal test at expansion or at generation; an explored set or
