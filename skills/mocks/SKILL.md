@@ -16,15 +16,24 @@ The shell is fixed. Design freedom goes into the render.
    - `render(state)` returns the full HTML of the screen, built from the project's own tokens, fonts and real screens.
    - `FRAMES` are the device sizes. The render sits in an iframe of that size, so its media queries see the frame's width.
    - `MODES` are the themes `render` honours through `state.mode`. One entry hides the Mode buttons.
-   - `QUESTIONS` holds each decision the mock exists to settle, with `options` that switch the render live.
-   - `CONTROLS` adds a button group to the top row for a choice that applies to the whole render.
+   - `SCREENS` are the screens the mock shows, as a top-row group; `render` gets `state.screen`. Leave it out, or give one entry, and the group hides.
+   - `QUESTIONS` holds each decision the mock exists to settle, with `options` that switch the render live. An optional `screens: [...]` lists where the question's subject shows: changing its answer jumps to the first listed screen when the current one isn't listed, and its box gets a "Shows on" row of buttons that jump to each.
+   - `CONTROLS` adds a button group to the top row for a choice that applies to the whole render. With `corner: true`, the group sits in the render's corner beside the zoom instead.
    - `ABOUT` is HTML for the intro and any secondary notes, such as swatches.
-3. **Inline everything** the render needs. A published page can't reach localhost. Inside `render`'s string, write `<\/script>`: a plain closing tag ends the page's own script.
+
+   The shell adds two pieces to every mock. The corner zoom has Fit, 100%, 200% and 300%; when the render scrolls, drag it to pan, and the scroll position holds while the frame and screen stay the same. The "Copy choices" button copies every pick as plain text, to paste back in chat.
+3. **Inline everything** the render needs. A published page can't reach localhost. Inside `render`'s string, write `<\/script>`: a plain closing tag ends the page's own script. Screenshots in a mock are lossless (PNG, or lossless WebP): lossy compression smears small UI text, and lossless costs only about 10% more on flat UI.
 4. **Run the check**, and fix what it reports until the last line is `LAYOUT_OK`:
    `python3 <skill dir>/scripts/layout_check.py <page>`
-   It runs inside the sandbox, clicks every control, and needs headless Chromium. Exit 2 means it couldn't judge the page: it says why, and for a missing browser how to install one. If the top row won't fit on one row, move a control into `QUESTIONS`. A `WARN` line names a control that changed nothing in the render: wire it into `render`, unless it only shows beside another option.
+   It runs inside the sandbox, clicks every control, and needs headless Chromium. Exit 2 means it couldn't judge the page: it says why, and for a missing browser how to install one. If the top row won't fit on one row, move a control to the corner (`corner: true`) or into `QUESTIONS`. A `WARN` line names a control that changed nothing in the render: wire it into `render`, unless it only shows beside another option. It may also mean an option that only shows on another screen: give that question `screens`.
 5. **Look at it** at laptop and phone frames before showing it. The check measures layout, not whether the render looks right.
 6. **Publish** it as a plain page: the Artifact tool's quickstart with intent `other`, then publish the file. Skip this only when asked to. The local copy stays either way: it is the source for every change.
+
+## Mocks built from files
+
+A big mock may keep its config and generated assets in separate files and splice them in with a script. Splice or slice between the `/* ==== MOCK CONFIG` and `/* ==== END OF MOCK CONFIG` markers, never at a `<script>` tag: a render's string can hold scripts of its own.
+
+To compare typefaces in place on real screens, read `<skill dir>/references/type-in-place.md`.
 
 ## With the Artifact tool and artifact-design
 
@@ -40,6 +49,8 @@ To save picks across viewers, add the `db` capability through `artifact-capabili
 
 - A Phone frame on a big window leaves a very wide questions column.
 - Fit stops at 100%, so a big monitor leaves space under the render. Larger would misstate the real size.
+- Zoom above 100% enlarges the paint and doesn't reflow the render: its media queries still see the frame's width.
+- Drag to pan starts after a few pixels of movement, and never on a link, button or field.
 - The switch to one screen goes by width alone, so a wide, very short window gets a small render.
 - Top-row buttons shrink to fit, below a touch target's size. Mocks are a desktop tool.
 - The check runs Chromium only, expects the page to open at Fit, and can't see published safe-area insets.
