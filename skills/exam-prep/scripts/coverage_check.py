@@ -316,7 +316,7 @@ def unmapped(root):
     total, missing = 0, []
     d = os.path.join(root, "_build", "extract")
     for name in sorted(os.listdir(d)) if os.path.isdir(d) else []:
-        if not name.endswith(".md"):
+        if not name.lower().endswith(".md"):
             continue
         with open(os.path.join(d, name), encoding="utf-8") as f:
             lines = f.read().splitlines()
