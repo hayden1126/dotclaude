@@ -12,8 +12,12 @@ What counts as an answer, by the extract format (02-extract, "Solutions in an ex
 - a solution: its marker line, `Solution [<doc> <locator>]: ...` (also `**Solution:**`, a
   `#### Solution` heading, either with a list or quote mark before it), through the end of its
   block: the next `### [<doc> <locator>]` header, the closing `Coverage:` line, or the end of the
-  file. A closed fence's lines don't end it; a fence still open at the next header, the
-  `Coverage:` line or the end of the file hides nothing (extract_check.py fails it).
+  file. A closed fence's lines don't end it. Fences are read as CommonMark reads them (fences()).
+  The bracketed marker, `Solution [<doc> <locator>]`, cuts wherever it sits, in a fence or not:
+  starter code never writes it. A looser marker (`**Solution:**`, a `# solution` comment) inside
+  a closed fence is code and cuts nothing, unless a fence anywhere in the file is still open at
+  the next header, the `Coverage:` line or the end of the file: then the pairing can't be
+  trusted, no fence exempts anything, and extract_check.py fails the extract.
 - a whole block of an answers file (MANIFEST's Answers `yes`) whose `solutions to <doc>` note
   names other docs only: all of it answers.
 - a page or section block of any other Answers `yes` doc (a past exam with its key, say), unless a
@@ -34,12 +38,20 @@ import sys
 
 SOLUTION = re.compile(r"^[-*>#\s]*(?:\*\*)?(?:official\s+)?solutions?\b(?:\*\*)?\s*(?:\[|:|\*\*|$)",
                       re.I)
+# The extract format's own marker (02-extract, the extract brief): `Solution [<doc> <locator>]`,
+# with a list or quote mark before it. It cuts even inside a fence.
+BRACKETED = re.compile(r"^[-*>#\s]*(?:\*\*)?(?:official\s+)?solutions?(?:\*\*)?\s*"
+                       r"\[[A-Za-z0-9_.-]+\s+[^\]\s][^\]]*\]", re.I)
 BLOCK = re.compile(r"^###\s+\[(?P<doc>[A-Za-z0-9_.-]+)\s+(?P<loc>[^\]]+)\]")
 QUESTION = re.compile(r"Q[\w.]+(?: stem)?")
 PAGE_LOC = re.compile(r"p\.(\d+)(?:-(\d+))?")
 PAGES_LINE = re.compile(r"^[-*\s]*Pages:(.*)")
 CITE = re.compile(r"\[(?P<doc>[A-Za-z0-9_.-]+)\s+pp?\.\s*(?P<page>\d+)(?:\s*-\s*(?P<end>\d+))?\]")
-FENCE = re.compile(r"^\s*(`{3,}|~{3,})")
+# CommonMark: an opener is at most 3 spaces in, a run of 3+ backticks or tildes, then an info
+# string (a backtick opener's holds no backtick). A closer is at most 3 spaces in, a run of the
+# opener's character at least as long, then nothing but blanks. Anything else is fence content.
+OPENER = re.compile(r"^ {0,3}(?P<mark>`{3,}(?=[^`]*$)|~{3,})")
+CLOSER = re.compile(r"^ {0,3}(?P<mark>`{3,}|~{3,})[ \t]*$")
 COVERAGE = re.compile(r"^Coverage:")
 FIRST = "Question-only copy of _build/extract/{name} (sha256 {digest})"
 FIRST_LINE = re.compile(r"^Question-only copy of _build/extract/(?P<name>\S+) "
@@ -58,22 +70,24 @@ def load(name):
 
 def fences(lines):
     """(the indices of the lines in a closed code fence, its fence lines included; the index of
-    each fence opener that never closes). A fence closes by a line of its own mark, at least as
-    long, before the next block header or `Coverage:` line: one still open there, or at the end
-    of the file (a forgotten closing fence, four backticks opened and three closed), exempts
-    nothing, so a solution marker after it still cuts (fail closed)."""
+    each fence opener that never closes). Fences follow CommonMark (OPENER, CLOSER): a line with
+    an info string or 4+ spaces of indent never closes one. A fence still open at the next block
+    header or `Coverage:` line ends there, and one open there or at the end of the file (a
+    forgotten closing fence, four backticks opened and three closed) is unclosed: strip() then
+    exempts nothing anywhere in the file (fail closed)."""
     out, unclosed, start, mark = set(), [], None, None
     for i, line in enumerate(lines):
+        line = line.rstrip("\r\n")
         if start is not None and (BLOCK.match(line) or COVERAGE.match(line)):
             unclosed.append(start)
             start = None
-        f = FENCE.match(line)
-        if not f:
-            continue
-        m = f.group(1)
         if start is None:
-            start, mark = i, m
-        elif m[0] == mark[0] and len(m) >= len(mark):
+            f = OPENER.match(line)
+            if f:
+                start, mark = i, f.group("mark")
+            continue
+        f = CLOSER.match(line)
+        if f and f.group("mark")[0] == mark[0] and len(f.group("mark")) >= len(mark):
             out.update(range(start, i + 1))
             start = None
     if start is not None:
@@ -82,8 +96,16 @@ def fences(lines):
 
 
 def fenced(lines):
-    """The indices of the lines in a closed code fence, its fence lines included."""
-    return fences(lines)[0]
+    """The indices of the lines a marker search skips: those in a closed code fence, its fence
+    lines included, or none at all when any fence in the file never closes (fences())."""
+    closed, unclosed = fences(lines)
+    return set() if unclosed else closed
+
+
+def marker(line, code, i):
+    """Whether lines[i] is a solution marker: the bracketed form anywhere, a looser one only
+    outside a fence."""
+    return bool(BRACKETED.match(line) or (i not in code and SOLUTION.match(line)))
 
 
 def segments(lines, code=None):
@@ -135,7 +157,7 @@ def strip(text, rows):
     for kind, start, end, m in segs:
         if kind != "block":
             if kind == "pre":
-                cut = next((i for i in range(start, end) if i not in code and SOLUTION.match(lines[i])), None)
+                cut = next((i for i in range(start, end) if marker(lines[i], code, i)), None)
                 if cut is not None:
                     keep[cut:end] = [False] * (end - cut)
                     removed.append((cut + 1, "a solution before the first block"))
@@ -157,7 +179,7 @@ def strip(text, rows):
                 keep[start:end] = [False] * (end - start)
                 removed.append((start + 1, why))
                 continue
-        cut = next((i for i in range(start + 1, end) if i not in code and SOLUTION.match(lines[i])), None)
+        cut = next((i for i in range(start + 1, end) if marker(lines[i], code, i)), None)
         if cut is not None:
             keep[cut:end] = [False] * (end - cut)
             removed.append((cut + 1, f"the solution in [{doc} {loc}]"))

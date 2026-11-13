@@ -6,6 +6,8 @@ answers file. Pinned: the copy keeps both questions, their data and their fields
 holds no solution line or answers-file block; a past exam with its key in the same file keeps
 its question pages and drops its key page; a rerun is a no-op and a copy whose extract no longer
 holds answers is removed; a code fence that never closes hides no solution marker after it;
+fences pair as CommonMark pairs them (a line with an info string or 4+ spaces of indent closes
+nothing) and the bracketed `Solution [<doc> <loc>]` marker cuts even inside a fence;
 extract_check.py fails a copy with a solution line (naming file and line), a missing copy, a stale
 one and an extract's unclosed fence (naming file and line), and passes the copy qonly.py wrote."""
 import contextlib
@@ -204,6 +206,74 @@ class QOnly(unittest.TestCase):
         self.assertNotIn("induction", body)
         self.assertEqual(qonly.fences(text.splitlines(keepends=True)), (set(), [1]))
 
+    def test_the_reviewers_readme_case_cuts(self):
+        # A fence opened bare, then a ```python line inside it: CommonMark reads that line as
+        # content, so the fence closes on the next bare line and the marker after it is outside.
+        # The old pairing closed on the ```python line, put the marker in a fence, cut nothing,
+        # and the extract went whole to answer-blind agents.
+        qonly = load("qonly")
+        f = "```"
+        text = "\n".join(["### [HW2 Q3] Fix the README", "The README reads:", f, f + "python",
+                          "x = 1", f, "Solution [HW2 Q3]: fix it as:", f, f + "python", "x = 2",
+                          f, "Coverage: HW2 Q3"]) + "\n"
+        lines = text.splitlines(keepends=True)
+        self.assertEqual(qonly.fences(lines), ({2, 3, 4, 5, 7, 8, 9, 10}, []))
+        due, body = qonly.due(text, {})
+        self.assertTrue(due)
+        self.assertEqual(body, "".join(lines[:6] + lines[11:]))
+
+    def test_an_info_string_line_inside_a_fence_closes_nothing(self):
+        # A looser marker, so the fence parse alone decides it.
+        qonly = load("qonly")
+        text = ("### [HW1 Q1] Fix it\n```\n```python\nx = 1\n```\n**Solution:** 42\n"
+                "```\ntail\n```\n")
+        self.assertEqual(qonly.fences(text.splitlines(keepends=True)), ({1, 2, 3, 4, 6, 7, 8}, []))
+        due, body = qonly.due(text, {})
+        self.assertTrue(due)
+        self.assertNotIn("42", body)
+
+    def test_an_indented_fence_line_in_a_string_closes_nothing(self):
+        # Four spaces in is content (an indented code line), not a closer.
+        qonly = load("qonly")
+        text = ('### [HW1 Q1] Fix it\n```python\ns = """\n    ```\n"""\n```\n'
+                "**Solution:** 42\n```\ny\n```\n")
+        self.assertEqual(qonly.fences(text.splitlines(keepends=True)),
+                         ({1, 2, 3, 4, 5, 7, 8, 9}, []))
+        due, body = qonly.due(text, {})
+        self.assertTrue(due)
+        self.assertNotIn("42", body)
+        # Up to three spaces in, a bare run of the mark at least as long closes (CommonMark).
+        text = "### [HW1 Q1] x\n````\n   `````  \n**Solution:** 42\n"
+        self.assertEqual(qonly.fences(text.splitlines(keepends=True)), ({1, 2}, []))
+        self.assertNotIn("42", qonly.due(text, {})[1])
+
+    def test_a_header_inside_a_fence_trusts_no_fence(self):
+        # A block header ends an open fence; the fence's own closer then reads as an opener and
+        # pairs with the next fence line, which hid the marker between them. An unclosed fence
+        # anywhere means no fence exempts anything.
+        qonly = load("qonly")
+        text = ("### [HW1 Q1] x\n```\n### [HW1 Q2] y\n```\n**Solution:** 42\n```\nz\n```\n"
+                "### [HW1 Q3] w\n```\n# solution\n```\n")
+        self.assertEqual(qonly.fences(text.splitlines(keepends=True))[1], [1, 7])
+        due, body = qonly.due(text, {})
+        self.assertTrue(due)
+        self.assertNotIn("42", body)
+        self.assertNotIn("# solution", body)
+
+    def test_a_bracketed_marker_inside_a_fence_cuts(self):
+        qonly = load("qonly")
+        for mark in ("Solution [HW1S p.1]: 42", "- Solution [HW1S Q1]: 42",
+                     "#### Solution [HW1S sec 2]: 42"):
+            text = "### [HW1 Q1] x\nWrite f.\n```\n" + mark + "\n```\nafter\n"
+            due, body = qonly.due(text, {})
+            self.assertTrue(due, mark)
+            self.assertEqual(body, "### [HW1 Q1] x\nWrite f.\n```\n", mark)
+        # A looser marker in the same fence is code (round 1), and so is a bracket that isn't
+        # the format's `[<doc> <locator>]`.
+        for mark in ("**Solution:** 42", "# solution", "solutions [i] = 3"):
+            text = "### [HW1 Q1] x\n```\n" + mark + "\n```\n"
+            self.assertEqual(qonly.due(text, {}), (False, text), mark)
+
     def test_extract_check_fails_an_extract_with_a_fence_that_never_closes(self):
         self.write("_build/extract/d1.md", '### [HW1 p.2] a page\n"no answer here"\n````\ncode\n```\n')
         self.qonly()
@@ -211,6 +281,22 @@ class QOnly(unittest.TestCase):
         self.assertEqual(code, 1, out)
         self.assertIn("_build/extract/d1.md:3: UNCLOSED FENCE", out)
         self.assertNotIn("hw1.md:", out)  # its fence closes
+
+    def test_extract_check_pairs_fences_as_qonly_does(self):
+        # The reviewer's case in a homework extract (Answers no): its marker now makes a copy due,
+        # so extract_check fails the extract until qonly.py writes one, then passes.
+        f = "```"
+        self.write("_build/extract/d1.md", "\n".join([
+            "### [HW1 p.2] Fix the README", "The README reads:", f, f + "python", "x = 1", f,
+            "Solution [HW1S p.2]: fix it as:", f, f + "python", "x = 2", f]) + "\n")
+        code, out = self.check()
+        self.assertEqual(code, 1, out)
+        self.assertIn("_build/extract/d1.md: holds answers, NO QUESTION-ONLY COPY", out)
+        self.assertNotIn("UNCLOSED FENCE", out)
+        self.qonly()
+        self.assertNotIn("x = 2", self.read("_build/q-only/d1.md"))
+        code, out = self.check()
+        self.assertEqual(code, 0, out)
 
     def test_the_marker(self):
         solution = load("qonly").SOLUTION

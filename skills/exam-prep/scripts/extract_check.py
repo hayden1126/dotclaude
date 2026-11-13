@@ -44,8 +44,11 @@ The question-only copies (qonly.py, hard rule 4, FB-056): it also fails, naming 
 would take out), and on an extract that holds answers with no copy, or with a copy whose first
 line names another SHA-256 than the extract's (stale: the extract changed after qonly.py ran),
 and on an extract's code fence that never closes before the next block header, the `Coverage:`
-line or the end of the file (a closed fence hides a solution comment from qonly.py; an open one
-hides nothing, but it is a broken extract all the same).
+line or the end of the file. Fences are qonly.fences()'s, read as CommonMark reads them (a line
+with an info string or 4+ spaces of indent closes nothing), so this check and qonly.py pair them
+the same way: a closed fence hides a loose solution comment from qonly.py, never the bracketed
+`Solution [<doc> <loc>]` marker; an open one hides nothing, but it is a broken extract all the
+same.
 A copy whose extract is gone or holds no answer now is a warning. Stdlib only, plus
 reveal_slice.py and qonly.py from this directory."""
 import argparse
