@@ -93,7 +93,9 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
   - **Live lanes** (briefs in each record). Merge order (Hayden's picks,
     2026-11-07, 2026-11-08 and 2026-11-10): exam-prep #183 merged 2026-11-10 (692fbf9) and is
     installed from main, under Hayden's early-merge exception (2026-11-10); the lane stays open for
-    round 2's retro (the next two exams), whose PR waits for Nov 16 unless he says so.
+    round 2's retro (the next two exams). **Hayden lifted the freeze for it (2026-11-13, "ignore
+    freeze, finish exam-prep"):** round 2's #184 is now first in merge order and installs from its
+    branch before Nov 16, then demo-av PR 4.
     The lead's pre-merge ./setup.sh (Hayden's OK) released demo-av's install hold, so the live
     demo-video and demo-first-scope are main's until demo-av reinstalls from its branch on his OK.
     0 demo-av PR 4 (demo content planning in `demo-first-scope`,
