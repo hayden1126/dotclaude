@@ -12,14 +12,22 @@ What counts as an answer, by the extract format (02-extract, "Solutions in an ex
 - a solution: its marker line, `Solution [<doc> <locator>]: ...` (also `**Solution:**`, a
   `#### Solution` heading, either with a list or quote mark before it), through the end of its
   block: the next `### [<doc> <locator>]` header, the closing `Coverage:` line, or the end of the
-  file. A closed fence's lines don't end it. Fences are read as CommonMark reads them (fences()).
+  file. The closing line is the brief's `Coverage: <range>; N blocks; ...` with nothing but blank
+  lines after it up to the next header or the end of the file (closing()): a solution's own
+  `Coverage: 3/4 = 75%` line, or one of the closing form with more text after it, is part of the
+  block and goes with the cut. A closed fence's lines don't end it. Fences are read as CommonMark
+  reads them (fences()).
   The bracketed marker, `Solution [<doc> <locator>]` then a colon or the line's end, cuts
   wherever it sits, in a fence or not: starter code never writes it (`solution[i + 1] = x` isn't
   one). A cut that starts inside a closed fence keeps the fence's closing line, so the copy's
   fences pair as the extract's do. A looser marker (`**Solution:**`, a `# solution` comment) inside
   a closed fence is code and cuts nothing, unless a fence anywhere in the file is still open at
   the next header, the `Coverage:` line or the end of the file: then the pairing can't be
-  trusted, no fence exempts anything, and extract_check.py fails the extract.
+  trusted, no fence exempts anything, and extract_check.py fails the extract. Nor does a closed
+  fence holding a line that could open a fence (```` ```python ```` inside it, say) exempt
+  anything inside it: that is nested markdown or a forgotten closer, where a solution's own
+  ```` ```python ```` line reads as content and its bare closing line closes the starter code's
+  fence, so the count balances with the marker inside.
 - a whole block of an answers file (MANIFEST's Answers `yes`) whose `solutions to <doc>` note
   names other docs only: all of it answers.
 - a page or section block of any other Answers `yes` doc (a past exam with its key, say), unless a
@@ -57,7 +65,9 @@ CITE = re.compile(r"\[(?P<doc>[A-Za-z0-9_.-]+)\s+pp?\.\s*(?P<page>\d+)(?:\s*-\s*
 # opener's character at least as long, then nothing but blanks. Anything else is fence content.
 OPENER = re.compile(r"^ {0,3}(?P<mark>`{3,}(?=[^`]*$)|~{3,})")
 CLOSER = re.compile(r"^ {0,3}(?P<mark>`{3,}|~{3,})[ \t]*$")
-COVERAGE = re.compile(r"^Coverage:")
+# The extract brief's closing line: `Coverage: <range>; N blocks; K image only (...); U flagged
+# unreadable.` A bare `Coverage:` start is a solution's or a tool's line as often as not.
+COVERAGE = re.compile(r"^Coverage:\s.*;\s*\d+\s+blocks?\s*;")
 FIRST = "Question-only copy of _build/extract/{name} (sha256 {digest})"
 FIRST_LINE = re.compile(r"^Question-only copy of _build/extract/(?P<name>\S+) "
                         r"\(sha256 (?P<digest>[0-9a-f]{64})\)")
@@ -73,16 +83,34 @@ def load(name):
     return module
 
 
+def closing(lines):
+    """The indices of the extract's closing `Coverage:` lines: a line of the brief's form
+    (COVERAGE) with nothing but blank lines after it up to the next block header or the end of
+    the file. Any other line starting `Coverage:` is the block's own text."""
+    out, tail = set(), True
+    for i in range(len(lines) - 1, -1, -1):
+        if BLOCK.match(lines[i]):
+            tail = True
+        elif COVERAGE.match(lines[i]):
+            if tail:
+                out.add(i)
+            tail = False
+        elif lines[i].strip():
+            tail = False
+    return out
+
+
 def fence_spans(lines):
     """([(opener index, closer index)] for each closed code fence; the index of each fence opener
     that never closes). Fences follow CommonMark (OPENER, CLOSER): a line with an info string or
-    4+ spaces of indent never closes one. A fence still open at the next block header or
-    `Coverage:` line ends there, and one open there or at the end of the file (a forgotten closing
-    fence, four backticks opened and three closed) is unclosed."""
+    4+ spaces of indent never closes one. A fence still open at the next block header or closing
+    `Coverage:` line (closing()) ends there, and one open there or at the end of the file (a
+    forgotten closing fence, four backticks opened and three closed) is unclosed."""
     spans, unclosed, start, mark = [], [], None, None
+    ends = closing(lines)
     for i, line in enumerate(lines):
         line = line.rstrip("\r\n")
-        if start is not None and (BLOCK.match(line) or COVERAGE.match(line)):
+        if start is not None and (BLOCK.match(line) or i in ends):
             unclosed.append(start)
             start = None
         if start is None:
@@ -109,9 +137,16 @@ def fences(lines):
 
 def fenced(lines):
     """The indices of the lines a marker search skips: those in a closed code fence, its fence
-    lines included, or none at all when any fence in the file never closes (fences())."""
-    closed, unclosed = fences(lines)
-    return set() if unclosed else closed
+    lines included, or none at all when any fence in the file never closes (fences()). A closed
+    fence with a line inside it that could open a fence (OPENER: ```` ```python ````, `~~~`, a
+    shorter bare run) is nested markdown or a forgotten closer balanced by the solution's own
+    fence, so the pairing can't be trusted there and it exempts nothing."""
+    spans, unclosed = fence_spans(lines)
+    if unclosed:
+        return set()
+    return {i for start, end in spans
+            if not any(OPENER.match(line.rstrip("\r\n")) for line in lines[start + 1:end])
+            for i in range(start, end + 1)}
 
 
 def marker(line, code, i):
@@ -122,15 +157,16 @@ def marker(line, code, i):
 
 def segments(lines, code=None):
     """The file as [(kind, start, end, match)]: `pre` before the first header, `block` for each
-    header's block, `coverage` for a Coverage: line. A header or Coverage: line ends an open
-    fence (fences())."""
+    header's block, `coverage` for the closing Coverage: line (closing()). A header or closing
+    Coverage: line ends an open fence (fences())."""
     code = fenced(lines) if code is None else code
+    ends = closing(lines)
     out, start, match = [], 0, None
     for i, line in enumerate(lines):
         if i in code:
             continue
         m = BLOCK.match(line)
-        if m or COVERAGE.match(line):
+        if m or i in ends:
             out.append(("block" if match else "pre", start, i, match))
             start, match = i, m
             if not m:

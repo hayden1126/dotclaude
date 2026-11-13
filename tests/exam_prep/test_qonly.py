@@ -9,7 +9,10 @@ holds answers is removed; a code fence that never closes hides no solution marke
 fences pair as CommonMark pairs them (a line with an info string or 4+ spaces of indent closes
 nothing) and the bracketed `Solution [<doc> <loc>]` marker, in every form the extract brief
 writes, cuts even inside a fence, keeping that fence's closing line, while starter code such as
-`solution[i + 1] = x` cuts nothing; extract_check.py compares a copy with what qonly.py writes
+`solution[i + 1] = x` cuts nothing; only the brief's closing `Coverage: <range>; N blocks; ...`
+line with nothing after it ends a block, so a solution's own `Coverage: 3/4 = 75%` goes with the
+cut and a fenced tool's `Coverage: 85%` ends no fence; a closed fence holding a line that could
+open a fence (a forgotten closer balanced by the solution's own fence) exempts nothing; extract_check.py compares a copy with what qonly.py writes
 now and fails a copy with a solution line (naming file and line), a hand-edited one, a missing
 copy, a stale one and an extract's unclosed fence (naming file and line), and passes the copy
 qonly.py wrote."""
@@ -218,7 +221,8 @@ class QOnly(unittest.TestCase):
         f = "```"
         text = "\n".join(["### [HW2 Q3] Fix the README", "The README reads:", f, f + "python",
                           "x = 1", f, "Solution [HW2 Q3]: fix it as:", f, f + "python", "x = 2",
-                          f, "Coverage: HW2 Q3"]) + "\n"
+                          f, "Coverage: HW2 Q3; 1 blocks; 0 image only; 0 flagged unreadable."]
+                         ) + "\n"
         lines = text.splitlines(keepends=True)
         self.assertEqual(qonly.fences(lines), ({2, 3, 4, 5, 7, 8, 9, 10}, []))
         due, body = qonly.due(text, {})
@@ -368,6 +372,67 @@ class QOnly(unittest.TestCase):
         self.assertNotIn("UNCLOSED FENCE", out)
         self.qonly()
         self.assertNotIn("x = 2", self.read("_build/q-only/d1.md"))
+        code, out = self.check()
+        self.assertEqual(code, 0, out)
+
+    def test_a_solution_line_starting_coverage_is_cut(self):
+        # Any line starting `Coverage:` used to close the block: a solution's own `Coverage: 3/4
+        # = 75%` (branch coverage) ended the cut, and it and the rest of the solution stayed in
+        # the copy. Only the extract format's closing line ends a block now.
+        qonly = load("qonly")
+        text = "\n".join(["### [HW1 Q1] b", "Pages: [HW1 p.1]", "Give it.",
+                          "Solution [HW1S p.2]: T takes 3 of 4.", "Coverage: 3/4 = 75%",
+                          "The else branch is never taken.", "### [HW1 Q2] y", "Z.",
+                          "Coverage: HW1 p.1; 2 blocks; 0 image only; 0 flagged unreadable."]) + "\n"
+        due, body = qonly.due(text, {})
+        self.assertTrue(due)
+        self.assertNotIn("75%", body)
+        self.assertNotIn("never taken", body)
+        self.assertEqual(body, "\n".join(["### [HW1 Q1] b", "Pages: [HW1 p.1]", "Give it.",
+                                          "### [HW1 Q2] y", "Z.", text.splitlines()[-1]]) + "\n")
+        # A line of the closing form with more text after it, before the next header, isn't the
+        # closing line: the cut runs on past it.
+        text = ("### [HW1 Q1] b\nGive it.\n**Solution:** 42\n"
+                "Coverage: HW1 p.1; 1 blocks; 0 image only; 0 flagged unreadable.\n"
+                "more of the answer\n### [HW1 Q2] y\nZ.\n")
+        due, body = qonly.due(text, {})
+        self.assertTrue(due)
+        self.assertNotIn("more of the answer", body)
+        self.assertEqual(body, "### [HW1 Q1] b\nGive it.\n### [HW1 Q2] y\nZ.\n")
+        # A fenced tool-output `Coverage: 85%` line used to end its fence, leaving an unclosed
+        # fence no rerun could clear.
+        f = "```"
+        text = "\n".join(["### [HW1 Q1] Run it", "The tool prints:", f, "Coverage: 85%", f,
+                          "**Solution:** 42"]) + "\n"
+        self.assertEqual(qonly.fences(text.splitlines(keepends=True)), ({2, 3, 4}, []))
+        due, body = qonly.due(text, {})
+        self.assertTrue(due)
+        self.assertNotIn("42", body)
+
+    def test_a_forgotten_closer_balanced_by_the_solutions_fence_hides_nothing(self):
+        # Starter code opens ```python and never closes; the solution's own ```python line is
+        # fence content (it has an info string), so the solution's bare closer closes the starter
+        # fence. The fence count balances, the loose marker sat in a "closed" fence, and nothing
+        # was cut. A closed fence holding a line that could open a fence exempts nothing.
+        qonly = load("qonly")
+        f = "```"
+        for inner in (f + "python", "~~~python", f):
+            text = "\n".join(["### [HW1 Q1] x", "Complete f.", "````python" if inner == f
+                              else f + "python", "def f(x):", "    pass", "**Solution:**", inner,
+                              "def f(x): return 2*x", "````" if inner == f else f,
+                              "Coverage: HW1 p.1; 1 blocks; 0 image only; "
+                              "0 flagged unreadable."]) + "\n"
+            lines = text.splitlines(keepends=True)
+            self.assertEqual(qonly.fences(lines), ({2, 3, 4, 5, 6, 7, 8}, []), inner)
+            due, body = qonly.due(text, {})
+            self.assertTrue(due, inner)
+            self.assertNotIn("2*x", body, inner)
+            # The cut keeps the fence's closer, so the copy's fences still pair.
+            self.assertEqual(body, "".join(lines[:5] + lines[8:]), inner)
+        # End to end: extract_check passes the copy qonly.py writes.
+        self.write("_build/extract/d1.md", text.replace("HW1 Q1", "HW1 p.2"))
+        self.qonly()
+        self.assertNotIn("2*x", self.read("_build/q-only/d1.md"))
         code, out = self.check()
         self.assertEqual(code, 0, out)
 
