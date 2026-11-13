@@ -253,6 +253,27 @@ class ExtractCheck(unittest.TestCase):
         self.assertIn("D3: 3 pages in scope, 3 rendered, 3 with a block, 0 image only, "
                       "1 UNREADABLE", out)
 
+    def test_a_value_illegible_at_300_dpi_is_counted_and_passes(self):
+        # Round 9: a value illegible even at 300 dpi had no way through stage 02, which runs
+        # unattended: every open `UNREADABLE:` flag fails. The marked form is counted per doc
+        # and passes; a plain flag still fails.
+        self.extract("D3.md", FULL["D3.md"] + "The weight under node B is "
+                     "(illegible at 300 dpi: a two-digit number).\n"
+                     "(Illegible at 300 dpi: the caption)\n")
+        code, out = self.run_check()
+        self.assertEqual(code, 0, out)
+        self.assertIn("D3: 3 pages in scope, 3 rendered, 3 with a block, 0 image only, "
+                      "0 UNREADABLE, 2 illegible at 300 dpi\n", out)
+        self.assertIn("D1: 7 pages in scope, 7 rendered, 7 with a block, 0 image only, "
+                      "0 UNREADABLE\n", out)
+        self.extract("D3.md", FULL["D3.md"] + "(illegible at 300 dpi: a weight)\n"
+                     "UNREADABLE: the edge weight under node B\n")
+        code, out = self.run_check()
+        self.assertEqual(code, 1, out)
+        self.assertIn("0 image only, 1 UNREADABLE, 1 illegible at 300 dpi", out)
+        self.assertIn("_build/extract/D3.md:4: UNREADABLE flag still open", out)
+        self.assertNotIn("D3.md:3:", out)
+
     def test_the_coverage_line_counts_no_flag(self):
         self.extract("D1.md", FULL["D1.md"]
                      + "Coverage: pages 1-7; 7 blocks; 1 (image only: p.1); UNREADABLE: none.\n")

@@ -35,7 +35,9 @@ once they count one, its row is checked like any other. A STATUS.md it can't rea
 It prints one line per doc: what is in scope, what has a block, `(image only` entries, and
 `UNREADABLE:` flags (the brief's closing `Coverage:` line, qonly.closing(), doesn't count; a
 block's own line starting `Coverage:` does), each open flag then named by file and line with
-its fix (a re-read at 300 dpi on a crop: stage 02 runs unattended, so it never asks). Exit 1
+its fix (a re-read at 300 dpi on a crop: stage 02 runs unattended, so it never asks), and the
+values marked `(illegible at 300 dpi: <what>)`, still unreadable after that re-read: counted on
+the doc's line, never a failure. Exit 1
 on a page or slide with no block, an in-scope page not rendered, a doc with no blocks, an open
 `UNREADABLE:` flag, a Scope it can't read, any block for a `reserved` doc (FB-023) or for a
 `pending` one (its file has arrived: give it a real Scope); 0 otherwise. Blocks for a doc id
@@ -87,6 +89,9 @@ CITE = re.compile(r"\[(?P<doc>[A-Za-z0-9_.-]+)\s+(?P<loc>[^\]]+)\]")
 CITE_PAGES = re.compile(r"pp?\.\s*(?P<page>\d+)(?:\s*-\s*(?P<end>\d+))?")
 IMAGE_ONLY = re.compile(r"\(image only\b", re.I)
 UNREADABLE = re.compile(r"\bUNREADABLE:")
+# A value still illegible after the re-read at 300 dpi, marked so (02-extract): counted per doc,
+# never a failure, since stage 02 runs unattended and no further read can recover it.
+ILLEGIBLE = re.compile(r"\(illegible at 300 dpi:\s*[^)\s][^)]*\)", re.I)
 PAGE_FILE = re.compile(r"p-(\d+)\.png$")
 # The Scope cell of an in-scope row, after its parenthetical notes are dropped: `in` or `concepts
 # only`, then nothing, `PDF pp.A-B[, C-D]` (or `p.A`) or `slides #/A-#/B`. Anything else is
@@ -169,13 +174,15 @@ def load_qonly():
 
 def blocks(root, rows):
     """{doc: {"pages", "frags", "blocks", "questions", "image_only", "unreadable",
-    "unreadable_at"}}, the last a list of (extract name, line number) for each open flag."""
+    "unreadable_at", "illegible"}}, `unreadable_at` a list of (extract name, line number) for
+    each open flag, `illegible` the count of values marked illegible at 300 dpi (ILLEGIBLE)."""
     out = {}
     closing = load_qonly().closing
 
     def entry(doc):
         return out.setdefault(doc, {"pages": set(), "frags": set(), "blocks": 0, "questions": 0,
-                                    "image_only": 0, "unreadable": 0, "unreadable_at": []})
+                                    "image_only": 0, "unreadable": 0, "unreadable_at": [],
+                                    "illegible": 0})
 
     def answers(cited, own):
         """Whether a question block of `own` may cover pages of `cited`: its own doc, or an
@@ -210,6 +217,7 @@ def blocks(root, rows):
             current["image_only"] += bool(IMAGE_ONLY.search(line))
             flags = len(UNREADABLE.findall(line))
             current["unreadable"] += flags
+            current["illegible"] += len(ILLEGIBLE.findall(line))
             if flags:
                 current["unreadable_at"].append((name, i + 1))
             if not question:
@@ -313,6 +321,8 @@ def deck_slides(root, row, scope):
 def check(root, doc, row, b):
     """(line, failed) for one in-scope doc."""
     flags = f"{b['image_only']} image only, {b['unreadable']} UNREADABLE"
+    if b["illegible"]:
+        flags += f", {b['illegible']} illegible at 300 dpi"
     if b["questions"]:
         flags = f"{b['questions']} question blocks, " + flags
     name = row["file"].lower()
@@ -499,7 +509,7 @@ def main(argv=None):
         return 1
     found = blocks(args.root, rows)
     empty = {"pages": set(), "frags": set(), "blocks": 0, "questions": 0, "image_only": 0,
-             "unreadable": 0, "unreadable_at": []}
+             "unreadable": 0, "unreadable_at": [], "illegible": 0}
     skip = unverified(args.root)
     bad = False
     for doc, row in rows.items():
