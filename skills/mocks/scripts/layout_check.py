@@ -122,7 +122,8 @@ MEASURE_JS = """(() => {
   };
 })()"""
 
-ZOOM_PICK_JS = """[...document.querySelectorAll("#c-zoom button")].find((b) => b.textContent.trim() === "100%").click()"""
+ZOOM_PICK_JS = """((label) => [...document.querySelectorAll("#c-zoom button")]
+  .find((b) => b.textContent.trim() === label).click())"""
 
 # Scrolls the frame to its far corner: how much of the render that reached.
 ZOOM_REACH_JS = """(() => {
@@ -139,7 +140,7 @@ SCROLL_RESET_JS = """(() => {
 # A click that changes the render waits for its load: the next srcdoc change would
 # cancel a pending one, and any script inside that render with it. Returns the
 # button's label when a choice that should reach the render left it unchanged.
-# Size and Zoom act on the frame, so they never need to. The live DOM counts as well
+# Size and the corner's Zoom act on the frame, so they never need to. The live DOM counts as well
 # as srcdoc: a mock may keep one loaded page and flip attributes on it, to hold its
 # scroll position between looks.
 CLICK_JS = """(async (index) => {
@@ -529,8 +530,9 @@ def check_resize(report: Report, browser: Browser, url: str):
 
 
 def check_zoom(report: Report, browser: Browser, url: str):
-    """At 100% the render may pass the room it has, so all of it must be reachable.
-    Tries the scroll, since the sizes alone can't show a frame that clips."""
+    """At 100% the render may pass the room it has, so all of it must be reachable,
+    and at 200% the frame must reach twice the render's extents. Tries the scroll,
+    since the sizes alone can't show a frame that clips."""
     tab = Page(browser)
     tab.open(url, *ZOOM_SIZE)
     labels = tab.evaluate('[...document.querySelectorAll("#c-frame button")].map((b) => b.textContent.trim())')
@@ -538,7 +540,7 @@ def check_zoom(report: Report, browser: Browser, url: str):
         scope = "zoom {}x{} {}".format(*ZOOM_SIZE, label)
         tab.open(url, *ZOOM_SIZE)
         tab.evaluate(f'document.querySelectorAll("#c-frame button")[{index}].click()')
-        tab.evaluate(ZOOM_PICK_JS)
+        tab.evaluate(f"{ZOOM_PICK_JS}('100%')")
         check_settled(report, scope, tab.settle(*ZOOM_SIZE))
         reach = tab.evaluate(ZOOM_REACH_JS)
         report.check(scope, "zoom 100% scrolls",
@@ -546,6 +548,14 @@ def check_zoom(report: Report, browser: Browser, url: str):
                      and reach["height"] >= reach["renderHeight"] - TOLERANCE,
                      f"reaches {reach['width']:.0f} x {reach['height']:.0f} "
                      f"of {reach['renderWidth']} x {reach['renderHeight']}")
+        tab.evaluate(f"{ZOOM_PICK_JS}('200%')")
+        check_settled(report, scope, tab.settle(*ZOOM_SIZE))
+        reach = tab.evaluate(ZOOM_REACH_JS)
+        report.check(scope, "zoom 200% reaches 2x",
+                     abs(reach["width"] - 2 * reach["renderWidth"]) <= 2 * TOLERANCE
+                     and abs(reach["height"] - 2 * reach["renderHeight"]) <= 2 * TOLERANCE,
+                     f"reaches {reach['width']:.0f} x {reach['height']:.0f} "
+                     f"of {2 * reach['renderWidth']} x {2 * reach['renderHeight']}")
     tab.close()
 
 
@@ -565,7 +575,8 @@ def check_controls(report: Report, browser: Browser, url: str):
     scope = "controls {}x{}, {} buttons".format(*CONTROLS_SIZE, count)
     report.check(scope, "no script errors", not errors, "; ".join(errors[:2]) or "none")
     for label in filter(None, unchanged):
-        print(f"WARN controls: {label} changed nothing in the render; fine if it only shows beside another option")
+        print(f"WARN controls: {label} changed nothing in the render; fine if it only shows beside another "
+              "option or on another screen")
 
 
 def preflight(browser: Browser, url: str) -> tuple[list[str], list[str]]:
