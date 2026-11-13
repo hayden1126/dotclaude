@@ -658,7 +658,9 @@ The products, each one the hub has:
    it names as `05-verify` step 5 says and rerun (MANIFEST.md; a file it reads that isn't UTF-8,
    named in the message: an extract or solutions file rewritten as UTF-8, a page or a sheet
    saved again as UTF-8; `no page found`, with no notes and no sheet yet; or an unattempted set,
-   or an answers file that solves one, with nothing extracted: extract it).
+   or an answers file that solves one, with nothing extracted: extract it, after fixing its Key
+   cell as `templates/MANIFEST.md.tmpl`'s legend says when the message names that cell as empty
+   or unread).
    A hit is reworded with fresh numbers and setup (S7) and repeats from item 2. While a mock is untaken, also
    the leak compare: run item 1 again and compare the hit lines with the baseline's (count them,
    since every hit on the notes reads "(the page)" and a second copy of an answer adds one). A new

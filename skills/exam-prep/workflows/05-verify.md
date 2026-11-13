@@ -158,7 +158,10 @@ order (`08-practice`) get the same audit when they exist.
   hit needs explaining, `python3 -I <skill>/scripts/extract_check.py --leak-files` prints that
   list, a `questions <path>` or `allow <path>` line per file. With no such set it prints
   `QUESTIONS OK: no unattempted set` and exits 0: log `no unattempted set` in STATUS. It reads
-  extracts and solutions files only, so every unattempted set needs a block in an extract, and
+  extracts and solutions files, plus one exception: a set, or an answers file that solves one,
+  whose File is neither a PDF nor a reveal deck (a Word file, a plain course page) has its
+  rendered text read too (`_build/text/<doc>.md`, or a non-deck `.html` page's own file), beside
+  its extract and never in its place. So every unattempted set needs a block in an extract, and
   every answers file that solves one a block in a solutions file, before the check can pass: an
   answers file added late (`09-tutor` step 6) is extracted first. It exits 2, with the reason
   on stderr, on four causes, each fixed and then rerun: the hub has no MANIFEST.md or one it
@@ -166,7 +169,9 @@ order (`08-practice`) get the same audit when they exist.
   message (an extract or solutions file: rewrite it as UTF-8; a page or a sheet: save it as
   UTF-8); no page is found (`no page found`: no notes and no sheet yet; run it from `<root>`
   once the notes exist); or an unattempted set, or an answers file that solves one, has nothing
-  extracted (`no file holds <DOC>, ...; extract it, then rerun`: extract it, `02-extract`). An
+  extracted (`no file holds <DOC>, ...; extract it, then rerun`: extract it, `02-extract`; when
+  the message says its Key cell is empty or isn't read, so it counts as a set, first fix that
+  cell as `templates/MANIFEST.md.tmpl`'s legend says, then extract it). An
   exit 2 checked nothing, wherever the command runs: nothing publishes or commits on it. A hit from
   a shared answers file's own file is a blocker like any other, even when the set it quotes is
   attempted: the notes quote an attempted set's official text only once every set its answers
