@@ -543,8 +543,6 @@ HUB_HEAD = ("| Doc id | File | Pages | Scope | Answers | Key | Rendered | Notes 
             "|---|---|---|---|---|---|---|---|\n")
 KEY_TEXT = "the courier settles the depot first and then every customer by distance"
 VALUE_TEXT = "the round costs 17, then 29, and finally 41 units in total"
-# A rendered page's other lines, so its text isn't thin (render_pdf.sh's bar, 200 characters a page).
-FILLER = "Each further line of the page restates the rules of the round for the reader.\n" * 4
 
 
 class HubQuestions(unittest.TestCase):
@@ -556,7 +554,9 @@ class HubQuestions(unittest.TestCase):
     unextracted set is read from its rendered text, and one with neither is bad usage, as is a
     MANIFEST.md with no rows it reads; with no --pages the notes and the cheat sheets are read.
     Round 19: an answers file never extracted is read from its rendered text, and thin rendered
-    text read alone (a scanned PDF's) is bad usage."""
+    text read alone (a scanned PDF's) is bad usage. Round 20 (Hayden, 2026-11-13): rendered text
+    is never read, so a set or an answers file solving one that no extract or solutions file
+    holds is bad usage whatever its rendered text."""
 
     def setUp(self):
         tmp = tempfile.TemporaryDirectory()
@@ -681,88 +681,64 @@ class HubQuestions(unittest.TestCase):
         self.assertEqual((rc, err), (0, ""), out)
         self.assertEqual(out, "QUESTIONS OK: 1 pages checked against 1 question files\n")
 
-    def test_an_unattempted_set_with_no_extract_is_read_from_its_rendered_text(self):
+    def test_an_unattempted_set_with_no_extract_is_bad_usage_whatever_its_rendered_text(self):
         # r18-1 #2, r18-2 #1: PE4, added unverified (11-next-exam), has a row and its renders but
-        # no extract. Alone it made --hub exit 2; beside another unattempted set it was left out.
+        # no extract. Round 19 read it from its rendered text, with a thin-text guess review
+        # round 20 found wrong both ways; Hayden (2026-11-13): it must be extracted, alone or not.
         rows = ("| HW1 | `sources/hw1.pdf` | 1 | in | {} | | yes | |\n"
                 "| PE4 | `sources/pe4.pdf` | 4 | in | yes | pp. 3-4 | yes | |\n")
-        self.write("MANIFEST.md", HUB_HEAD + rows.format("no, attempted 2026-11-01"))
         self.write("_build/extract/hw1.md", "### [HW1 Q1a] Round\nPages: [HW1 p.1]\n\"Round it.\"\n")
         self.write("_build/pages/HW1/p-001.png", "")
         self.write("STATUS.md", "Unverified: PE4, S9, 2026-11-12\n")
-        text = self.write("_build/text/PE4/p-003.txt", f"{KEY_TEXT}.\n" + FILLER)
+        self.write("_build/text/PE4/p-003.txt", f"{KEY_TEXT}.\n" * 8)
         page = f"# Rounds\n\nRecall that {KEY_TEXT}.\n"
-        rc, out, err = self.hub(page_text=page)
-        self.assertEqual((rc, err), (1, ""), out)
-        self.assertIn(f"words in a row match {text}:1", out)
-        # Its twin: a page that copies nothing passes.
-        rc, out, err = self.hub()
-        self.assertEqual((rc, out, err), (0, "QUESTIONS OK: 1 pages checked against 1 question "
-                                             "files\n", ""))
-        # With another unattempted set, PE4's text is still read.
-        self.write("MANIFEST.md", HUB_HEAD + rows.format("no"))
-        rc, out, err = self.hub(page_text=page)
-        self.assertEqual((rc, err), (1, ""), out)
-        self.assertIn(f"words in a row match {text}:1", out)
-        # With neither an extract nor rendered text, it exits 2 naming the set, alone or not (an
-        # empty _build/text/PE4/ would be thin text, r19-1 #2).
-        os.remove(text)
-        os.rmdir(os.path.dirname(text))
         for hw1 in ("no", "no, attempted 2026-11-01"):
             with self.subTest(hw1=hw1):
                 self.write("MANIFEST.md", HUB_HEAD + rows.format(hw1))
                 rc, out, err = self.hub(page_text=page)
                 self.assertEqual((rc, out), (2, ""), err)
                 self.assertEqual(err, "mock_leak: no file holds PE4, an unattempted set: no "
-                                      "extract holds a block of it and _build/text/ holds no "
-                                      "rendered text of it; render it (01-ingest) or extract it, "
-                                      "then rerun\n")
+                                      "extract holds a block of it; extract it, then rerun\n")
+        # Its twin: once extracted, its extract is read, and its rendered text is not.
+        ext = self.write("_build/extract/pe4.md", f"### [PE4 Q1] Rounds\nPages: [PE4 p.1]\n"
+                                                  f"\"{KEY_TEXT}\"\n")
+        rc, out, err = self.hub(page_text=page)
+        self.assertEqual((rc, err), (1, ""), out)
+        self.assertIn(f"words in a row match {ext}:3", out)
+        self.assertNotIn("_build/text", out)
+        rc, out, err = self.hub()
+        self.assertEqual((rc, out, err), (0, "QUESTIONS OK: 1 pages checked against 1 question "
+                                             "files\n", ""))
 
-    def test_an_answers_file_never_extracted_is_read_from_its_rendered_text(self):
-        # r19-1 #1: HW4S, added late, has rendered text and no block anywhere; it was never read,
-        # so notes quoting its answer passed.
+    def test_a_late_answers_file_is_bad_usage_until_a_solutions_block_holds_it(self):
+        # r19-1 #1: HW4S, added late, has rendered text and no block anywhere. Round 19 read the
+        # text; round 20 requires a solutions block of it (Hayden, 2026-11-13).
         rows = ("| HW4 | `sources/hw4.pdf` | 1 | in | {} | | yes | hw |\n"
                 "| HW4S | `sources/hw4s.pdf` | 1 | in | yes | for HW4 | yes | sol |\n")
         self.write("MANIFEST.md", HUB_HEAD + rows.format("no"))
         self.write("_build/extract/hw4.md", "### [HW4 Q1a] Tree\nPages: [HW4 p.1]\n\"Find the "
                                             "minimum spanning tree of the graph shown.\"\n")
         sentence = "The minimum spanning tree has total weight 42 since edges ab bc cd are chosen first."
-        text = self.write("_build/text/HW4S/p-001.txt", f"{sentence}\n" + FILLER)
+        self.write("_build/text/HW4S/p-001.txt", f"{sentence}\n" * 4)
         page = f"# Trees\n\n{sentence}\n"
         rc, out, err = self.hub(page_text=page)
+        self.assertEqual((rc, out), (2, ""), err)
+        self.assertEqual(err, "mock_leak: no file holds HW4S, the answers to an unattempted set "
+                              "(HW4): no solutions file holds a block of it; extract it, then "
+                              "rerun\n")
+        # Its twin: once a solutions block of HW4S exists, the check runs on it.
+        sol = self.write("_build/solutions/hw4.md", f"### [HW4 Q1a] Tree\nSolution [HW4S p.1]: "
+                                                    f"{sentence}\n")
+        rc, out, err = self.hub(page_text=page)
         self.assertEqual((rc, err), (1, ""), out)
-        self.assertIn(f"words in a row match {text}:1", out)
-        # Its twins: a page that copies nothing passes; HW4 attempted, nothing is read.
+        self.assertIn(f"words in a row match {sol}:2", out)
+        self.assertNotIn("_build/text", out)
         rc, out, err = self.hub()
         self.assertEqual((rc, out, err), (0, "QUESTIONS OK: 1 pages checked against 2 question "
                                              "files\n", ""))
+        # HW4 attempted, nothing is read.
         self.write("MANIFEST.md", HUB_HEAD + rows.format("no, attempted 2026-11-01"))
         self.assertEqual(self.hub(page_text=page)[:2], (0, "QUESTIONS OK: no unattempted set\n"))
-        # The rendered page alone with under 200 characters (the review's own repro) is thin:
-        # bad usage, extract it.
-        self.write("MANIFEST.md", HUB_HEAD + rows.format("no"))
-        self.write("_build/text/HW4S/p-001.txt", f"{sentence}\n")
-        rc, out, err = self.hub(page_text=page)
-        self.assertEqual((rc, out), (2, ""), err)
-        self.assertEqual(err, "mock_leak: HW4S's rendered text _build/text/HW4S/ is thin (under 200 "
-                              "characters a page on average: a scan?) and nothing of it is "
-                              "extracted: extract it, then rerun\n")
-
-    def test_thin_rendered_text_alone_is_bad_usage(self):
-        # r19-1 #2: a scanned PDF renders a form feed a page; read alone it compared nothing, so
-        # the hub passed.
-        rows = "| PE4 | `sources/pe4.pdf` | 4 | in | yes | pp. 3-4 | yes | exam |\n"
-        self.write("MANIFEST.md", HUB_HEAD + rows)
-        self.write("_build/text/PE4/p-001.txt", "\f")
-        rc, out, err = self.hub(page_text=f"Recall that {KEY_TEXT}.\n")
-        self.assertEqual((rc, out), (2, ""), err)
-        self.assertEqual(err, "mock_leak: PE4's rendered text _build/text/PE4/ is thin (under 200 "
-                              "characters a page on average: a scan?) and nothing of it is "
-                              "extracted: extract it, then rerun\n")
-        # Its twin: once extracted, the extract is read and the page that copies it fails.
-        self.write("_build/extract/pe4.md", f"### [PE4 Q1] Rounds\nPages: [PE4 p.1]\n\"{KEY_TEXT}\"\n")
-        rc, out, err = self.hub(page_text=f"Recall that {KEY_TEXT}.\n")
-        self.assertEqual((rc, err), (1, ""), out)
 
     def test_an_extract_that_isnt_utf8_is_bad_usage(self):
         # r19-1 #4: the reason names the file, not the codec's byte offset.
