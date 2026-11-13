@@ -1,6 +1,6 @@
 # Agent briefs
 
-Baseline as of 2026-11-10; changes only via `12-retro`.
+Baseline as of 2026-11-12; changes only via `12-retro`.
 
 One brief per role the pipeline spawns. Fill the `{{...}}` slots per agent and keep the rest as
 written. Each brief follows the delegation skill's shape (purpose, end state, scope, hard
@@ -29,9 +29,27 @@ around a denial. Finish the rest of the task if you can, and report `blocked` or
 
 ## Extract (stage 02)
 
-Role: `general-purpose`, because it reads sources and writes one output file (the delegation
-skill's sources-to-file use). One per deck or deck part, or per homework with its solutions. Keep
+Role: `general-purpose`, because it reads sources and writes its own output files (the delegation
+skill's sources-to-file use): the extract, and for a doc with official solutions the solutions
+file beside it (hard rule 6). One per deck or deck part, or per homework with its solutions. Keep
 the bracketed slots that apply and delete the rest.
+
+An answers file that solves several sets (its MANIFEST.md Key cell `for HW1, HW2 and HW3`,
+`02-extract` step 1) gets an agent of its own, from this brief with every SOLUTIONS slot kept:
+{{DOC}} names those sets, whose question pages it reads only for their part ids, and it uses
+those ids as the extracts do, `### [<set> <part>]`, never with the answers file's id;
+{{SOLDOC}} is the answers file. Its End
+state, Artifact path and Format drop every line about the extract, and it writes one solutions
+file beside each extract that holds a set's blocks, {{ROOT}}/_build/solutions/<name>.md under
+that extract's `<name>`, holding the part blocks of that extract (a deck split over two
+extracts may need two for one set), plus its own file, {{ROOT}}/_build/solutions/<doc id in lower case>.md
+(`hws.md` for `HWS`), holding the answers file's page or section blocks in full, as any answers
+page's block is written (its shared setups and tables included). Each of those files gets its
+own first lines, `# <its one doc> solutions (extract)` (a header never names several docs) and a
+`Sources:` line, and its own closing `Coverage:` line. Each set's own agent gets this brief with
+no SOLUTIONS slot and writes only its extract. An agent may write several files; no file is
+written by two agents. An answers file that solves one set keeps the brief as it stands: its page
+blocks go in that set's file.
 
 ```text
 # Brief: transcribe {{DOC}} {{RANGE}}{{SOLUTIONS: plus {{SOLDOC}} {{SOLRANGE}}}} into {{OUT}}
@@ -39,22 +57,26 @@ the bracketed slots that apply and delete the rest.
 ## Purpose
 These extracts are the only copy of the course content the notes are written from. A later stage
 reorders them by topic, so a fact missing or misread here is missing or wrong in every product.
-Transcribe; never summarize.
+Transcribe; never summarize.{{SOLUTIONS: The official solutions go in a file of their own: agents
+that must not see answers read the extract, so it holds none.}}
 
 ## End state
 - Done means: every unit of {{DOC}} {{RANGE}} has a block (a page, a slide, a question part, or a
   section of a source without pages), in source order, in the format below, ending with the
-  coverage line.{{SOLUTIONS: Each official solution in {{SOLDOC}} {{SOLRANGE}} sits under the
-  question part it answers.}}
-- Artifact path: {{ROOT}}/_build/extract/{{OUT}}. Write it as you go, block by block, so a crash
-  loses nothing.
+  coverage line.{{SOLUTIONS: Every question part of {{DOC}} also has a block in the solutions
+  file, keyed by the part's block id, holding its official solution from {{SOLDOC}} {{SOLRANGE}}
+  or `No official solution.`}}
+- Artifact path: {{ROOT}}/_build/extract/{{OUT}}{{SOLUTIONS: , and the solutions file
+  {{ROOT}}/_build/solutions/{{OUT}} (the same name)}}. Write as you go, block by block, so a
+  crash loses nothing.
 - Report: end your reply with the JSON block (status, summary, artifacts, blocked_actions). The
-  summary repeats the coverage line and names any in-scope material you saw outside your range.
+  summary repeats the coverage line{{SOLUTIONS: of each file}} and names any in-scope material
+  you saw outside your range.
 
 ## Scope
-- Role: you are a general-purpose agent because this task reads sources and writes one output
-  file. Write nothing else.
-- Work in: {{ROOT}}. Read only, except your one output file.
+- Role: you are a general-purpose agent because this task reads sources and writes its output
+  files. Write nothing else.
+- Work in: {{ROOT}}. Read only, except your output files above.
 - In scope: {{DOC}} {{RANGE}}{{SOLUTIONS: and its official solutions, {{SOLDOC}} {{SOLRANGE}}}}.
   How to read it:
   - {{PDF: for every page read both the text ({{ROOT}}/_build/text/<doc>/p-NNN.txt) and the image
@@ -92,14 +114,17 @@ Transcribe; never summarize.
     empty one: every page in your range gets a block, in a question document too;
   - `UNREADABLE: <what, and where on the page>` for anything you can't read with certainty. Never
     guess a value. Flag a small, rotated or crowded label (an edge weight, a subscript) the same
-    way, so the main session re-reads it at a higher resolution.
+    way, so the main session re-reads it at a higher resolution. The main session alone replaces
+    a flag with `(illegible at 300 dpi: ...)` when the re-read fails too; never write that form
+    yourself.
 - If your first or last page continues a topic from outside your range, say so in one line under
   its block.
 - A question document (homework, recitation, practice exam) gets one block per question part
   instead of one per page: `### [{{DOC}} Q3a] <short title>`, with a shared stem as
   `### [{{DOC}} Q3 stem] <title>`; a deeper part is `Q3b.1` or `Q3bii`, a numbered part `Q2.1`,
   and a part the source numbers in roman `Q3ii`. A page with no question on it still gets its
-  page block (`(blank)` or `(image only: ...)`), and text on a question page outside every part
+  page block (`(blank)` or `(image only: ...)`){{SOLUTIONS: , in the solutions file when it is
+  one of {{SOLDOC}}'s answers pages (below)}}, and text on a question page outside every part
   (the title, the instructions) goes in that page's block, `### [{{DOC}} p.N] <title>`, before
   its parts. Each question block holds
   - `Pages: [{{DOC}} p.N]`, the page or pages the part sits on;
@@ -108,12 +133,58 @@ Transcribe; never summarize.
     table, prove, compute, justify a label, ...>`
   - `**Conventions:** <every convention the answer depends on, such as a tie-break order, which
     check runs when, or how a board is numbered; or "none">`
-  - {{SOLUTIONS: and its official solution under it, on a line of its own, cited to its pages:
-    `Solution [{{SOLDOC}} p.N]: ...`, or `Solution [{{SOLDOC}} <its section>]: ...` for a file
-    without pages ({{SOLDOC}} is {{DOC}} when the solutions sit in the same file). Only a part's
-    block holds a `Solution [` line, never a stem's or a page's: the self-test counts those lines
-    as the official parts.}}
 - Last line: `Coverage: {{RANGE}}; N blocks; K image only (<why, per page>); U flagged unreadable.`
+  (a flag's detail may follow, in parentheses).
+- {{SOLUTIONS: The answers pages of {{SOLDOC}} are {{KEY PAGES: from {{SOLDOC}}'s MANIFEST.md
+  Key cell, given here: for a separate answers file (`for ...`), every page of it; for a doc with
+  its own key (a past exam), the pages the cell names, as "pp. 7-9, 11", or "none: each solution
+  sits under its question on the same page" for `inline`, or for `sections: ...` (a source
+  without pages, such as a Word exam or a slide deck) "its key sections or slides, by their exact
+  locators: Marking scheme, Answers (a deck's are its slides, `#/5, #/6`). Each one's block takes
+  that locator, `### [PE3 Marking scheme] ...`, and goes to the solutions file, as does a block
+  whose locator is one of those names followed, after any spaces, by a character that is no
+  letter or digit (`### [PE3 Marking scheme (continued)]`, `[PE3 Marking scheme: Q2]`, `[PE3
+  #/5/0]`) or by `Q` and a digit (`### [PE3 Marking scheme Q2] ...`). The one exception: a
+  locator naming a key section is key material whatever page reference it carries (`### [PE3
+  Marking scheme p.2]` goes to the solutions file too), and a name given with a page reference
+  (`Answers p.4`) is the locator of its block, `### [PE3 Answers p.4]`. Every other section (the
+  instructions, a formula sheet, `Key formulas` under a key section `Key`) stays in the
+  extract"}}. Every other page or section of {{SOLDOC}} (the cover, the rules, a formula sheet,
+  an appendix table) gets its block in the extract, as any page does: the agents that must not
+  see answers read those pages there.
+- The extract holds no answer, and the check fails each one it finds there. Never write in it a
+  `Solution [` or `**Solution:**` line, a line that cites an answers page (`Pages:` lines aside),
+  or a block for an answers page. A line that states an answer (`Answer: ...`, `Final answer:
+  ...`) goes to the solutions file too, under its part; the question's own text and its answer
+  blanks stay.
+- The solutions file, {{ROOT}}/_build/solutions/{{OUT}}:
+  - First lines: `# {{DOC}} solutions (extract)`, then the extract's `Sources:` line.
+  - One block per question part of {{DOC}}, in the extract's order, its header the part's own
+    block id from the extract, `### [{{DOC}} Q3a]` (a title after it is optional). A stem or
+    part block always carries the set's id, {{DOC}}, never the answers file's: a block labelled
+    `[HW1S Q1 stem]` for set `HW1` fails `ANSWERS FILE ID ON A QUESTION`. A stem gets no block:
+    each of its parts gets its own. The block holds one of two things:
+    - the official solution on a line of its own, cited to its pages:
+      `Solution [{{SOLDOC}} p.N]: ...`, or `Solution [{{SOLDOC}} <its section>]: ...` for a file
+      without pages ({{SOLDOC}} is {{DOC}} when the solutions sit in the same file). It starts
+      exactly `Solution [`, with no words between `Solution` and the cite and a colon right
+      after the cite's `]`, and its working (a table, a fenced trace) follows under it. The self-test counts each part whose block holds
+      a `Solution [` line as an official part;
+    - the exact line `No official solution.` for a part the official solutions skip.
+  - Each answers page of {{SOLDOC}} (above) gets its own block here, never in the extract, as
+    the extract's page blocks are written: `### [{{SOLDOC}} p.N] <title>`. A part's solution on
+    a key page still goes under its part's block, and the key page's block holds what else is on
+    that page. When {{SOLDOC}} solves several sets, its page or section blocks go in its own
+    file instead, {{ROOT}}/_build/solutions/<doc id in lower case>.md, written in full the same
+    way, and each part's block beside the extract holding its question block; the check fails a
+    block in any other file (`WRONG SOLUTIONS FILE`). A set's home is the solutions file beside
+    each extract holding any block of that set (a page, section or slide block counts, not only
+    a question part's), so a deck split into parts `r3.md` and `r3b.md` keeps a key slide beside
+    the part holding it: a key page or slide in {{RANGE}} goes here. A block whose set has no
+    block in any extract has no home (`NO HOME FILE`): the set is extracted before its answers
+    file or in the same wave.
+  - `UNREADABLE:` flags as in the extract.
+  - Last line: the extract's `Coverage:` line, for the answers pages of {{SOLDOC}}.}}
 ```
 
 ## Write (stage 04)
@@ -143,11 +214,18 @@ alone, so it must be correct, cover what the exam tests, and make the ideas easy
   section §{{N}} (its table, lettered sets, figures and worked examples), the Conventions block,
   the cross-section links and the How it's tested table.
 - Sources: {{EXTRACT BLOCKS: the coverage-matrix rows that map into §{{N}}, as files and block
-  ranges}} in {{ROOT}}/_build/extract/, and {{EXAMPLES: the parts of
-  {{ROOT}}/_build/verify/examples.out.md your worked examples use}}.
+  ranges}} in {{ROOT}}/_build/extract/, {{SOLUTIONS FILES: the solutions files holding the
+  blocks of the question parts and answers docs among them, in {{ROOT}}/_build/solutions/, each
+  block in its home file: a part's solution under its `### [<doc> <part>]` block in its set's
+  file, `<name>.md` beside the set's extract, read with the `### [<doc> Q3 stem]` block before
+  its parts when there is one; an answers page's block in its answers file's home, the one set's
+  file when that file solves one set, `<doc id in lower case>.md` when it solves several, the
+  file beside its own extract for a doc holding its own key; or "none": drop this item}}, and {{EXAMPLES: the
+  parts of {{ROOT}}/_build/verify/examples.out.md your worked examples use}}.
 - {{PATTERNS, on a hub `11-next-exam` reopened, when the tutor log has them: Where this student
-  stalled before, from the tutor log's ## Patterns, quoted: {{LINES}}. Write so a reader doesn't
-  stall there.}}
+  stalled before, from the tutor log's ## Patterns, quoted: {{LINES}}. This is evidence from one
+  past exam, never an exam-format claim (FB-182): write so a reader doesn't stall there, and never say the
+  exam will ask it.}}
 - Out of scope: every other section's file, the backbone, and every file MANIFEST.md marks
   `reserved` ({{RESERVED FILES}}). Never open a file under practice/ whose name ends in -key.md.
 
@@ -172,8 +250,18 @@ These are the Markdown forms the page's converter reads (06-site); use them exac
 - Material in your blocks past this exam's scope cut (MANIFEST.md's Scope column, or one of its
   topic cuts: {{TOPIC CUTS, or "none"}}) stays (FB-121):
   open it with `> **Not on {{EXAM}}:** <where the scope ends, cited>`. Never cut it.
-- A figure the backbone lists: `<!-- FIG <id>: <what it shows, its data> -->` where it belongs,
-  on its own line, with no `<` or `>` in its text (`S to A`, not `S->A`); it is drawn later.
+- Diagram first (STYLE.md S11): {{DIAGRAM-TAUGHT: the backbone marks §{{N}} diagram-taught, so
+  the section leads with its first figure, its marker right after the first subsection's concise
+  box | NOT DIAGRAM-TAUGHT: each figure goes where it teaches}}. The words annotate a figure, and
+  prose that only re-describes one goes. A marker names every axis and part its figure labels.
+- A figure the backbone lists for §{{N}} ({{FIGURES: each id, kind and what it shows}}) gets a
+  marker where it belongs, on its own line, with no `<` or `>` in its text (`S to A`, not
+  `S->A`); it is drawn or placed later. A figure to be drawn (static or step-through):
+  `<!-- FIG fig-{{N}}-<slug>: <what it shows, its data> -->`. A slide image (kind `slide image`):
+  `<!-- FIG fig-{{N}}-<slug>: slide image of <code> <place>: <what the picture shows> -->`, such
+  as `<!-- FIG fig-2-board: slide image of D5 p.23: the board's labelled parts -->`; the main
+  session crops it and its caption cites the slide. Never add a figure the backbone doesn't list:
+  report it in your summary instead.
 - Links use backbone ids only, the text naming the target: `[§{{M}}.K <its title>](#<its id>)`.
   A section another writer owns still links by its id.
 - Cite every fact from the sources: `[D5 p.23]`, `[D2 #/14]`, `[HW1 Q2c]`. A section of another
@@ -184,9 +272,10 @@ These are the Markdown forms the page's converter reads (06-site); use them exac
   every value from a cited source; a step that derives one shows its working, so the reviewers
   can check it against the source.}}
 - Worked examples use {{the checker's data | an instance you build from the sources}}, never a
-  homework's or a recitation's numbers. Quote an answer only from a set MANIFEST.md marks
-  `yes, attempted`; {{UNATTEMPTED: the answer sets the student hasn't attempted yet}} are read
-  for their conventions only, never quoted. No mock key appears in the notes.
+  homework's or a recitation's numbers. Quote a set's official solution only once that set's own
+  MANIFEST.md row says `attempted` (an answers file's row stays `yes`) and, when its answers file
+  solves several sets, every set that file solves is attempted too; {{UNATTEMPTED: the sets
+  the student hasn't attempted yet}} are read for their conventions only, never quoted. No mock key appears in the notes.
 - Depth: {{concise | full}}, as the backbone marks it. A slide-only derivation that no practice
   question asks for goes in a Background quote (Format).
 - Depth label (STYLE.md S33): each subsection opens, under its heading, with `**Depth:** <Know
@@ -194,6 +283,22 @@ These are the Markdown forms the page's converter reads (06-site); use them exac
   statement it rests on, cited, or `(inferred: <why>)`. {{FORMAT STATEMENT: the exam-format
   statement's lines on what is memorized and what is provided, quoted from CLAUDE.md with their
   source | NONE: no statement says; mark each label inferred}}.
+- Concise box (STYLE.md S34): each subsection but the Must-know list opens, after its Depth line,
+  with its box, then the full explanation, which the box never replaces:
+
+  > **In short:**
+  > - **Rule:** <the rule, with its condition>
+  > - **Example:** <the tiny instance, cut to its numbers>
+
+  One `> - **<Label>:**` line per label that applies, from Rule, Why, Steps, Example, Trap and
+  Answer form, in that order, each at most once, one or two sentences each. Concise cuts words,
+  never a step, a condition or the instance (S18). Define every symbol in the box itself, and put
+  nothing in it that the text below doesn't teach.
+- Never write a skill rule id, such as (S12) or (FB-123), in the notes: the build refuses an FB
+  id in parentheses and a C id right after `CHASSIS`, and only warns on a bare S, L, K or C id,
+  `rule (C3)` among them (a course writes a state (S1), a lecture (L3) or the product rule (C3) the
+  same way, and a rebuild never fails on course text). The rules shape the text; the student
+  never sees their names.
 - Names in a trace or a state (nodes, states, variables, table rows) go in backticks in worked
   examples: CONVERT.md keeps them as code, and the notes-to-checker comparison counts a name only
   in backticks (K67).
@@ -205,6 +310,26 @@ These are the Markdown forms the page's converter reads (06-site); use them exac
 - {{PLAIN TEXT: the student reads in a plain-text tool, so no LaTeX (plain Unicode math), pipe
   tables, no `{#id}` anchors, and cross-references and Must-know pointers as text naming the
   section ("§{{M}}.K <its title>").}}
+```
+
+**Polish variant** (`10-polish`'s box and figure passes, on a reviewed file that already
+exists). Same role, one per section file. Replace the title, Purpose and the End state's "Done
+means" with the lines below, and keep the rest; while a mock is untaken, the pass's fence (its
+step 1) replaces the Scope's reading lines.
+
+```text
+# Brief: add {{the concise boxes | the approved figures}} to §{{N}} {{TITLE}} in notes/{{OUT}}
+
+## Purpose
+§{{N}} was written and reviewed before the {{concise box (S34) | widened diagram-first rule
+(S11)}}. The student approved this list: {{ITEMS: each subsection and what it gets}}. Add exactly
+that, so the reviewed text stays as it is.
+
+- Done means: {{BOX: every listed subsection opens, after its Depth line, with its concise box
+  (Format), and a listed subsection with no Depth line gets one; nothing else changes |
+  FIGURE: each approved figure's marker is in place (Format), a diagram-taught section's first
+  figure right after its first subsection's box, and prose that only re-describes a new figure is
+  trimmed; nothing else changes}}. Your summary lists each change by subsection.
 ```
 
 ## Review (stage 05)
@@ -231,7 +356,14 @@ main session checks each finding and applies the fixes.
 ## Scope
 - Work in: {{ROOT}}, read only.
 - Review {{ROOT}}/notes/{{FILE}} against its extract blocks ({{EXTRACT BLOCKS}} in
-  {{ROOT}}/_build/extract/), {{ROOT}}/_build/backbone.md (§{{N}} and the Conventions block) and
+  {{ROOT}}/_build/extract/) and the solutions files holding the blocks of the question parts and
+  answers docs those blocks cite ({{SOLUTIONS FILES}} in {{ROOT}}/_build/solutions/, each block
+  in its home file: each part's block in its set's file, `<name>.md` beside the set's extract,
+  read with its stem block `### [<doc> Q3 stem]` when there is one, and each answers page's
+  block in its answers file's home, the one set's file when that file solves one set, `<doc id
+  in lower case>.md` when it solves several, the file beside its own extract for a doc holding
+  its own key; or none),
+  {{ROOT}}/_build/backbone.md (§{{N}} and the Conventions block) and
   {{ROOT}}/_build/STYLE.md. {{CHECKER: Every worked example's numbers come from
   {{ROOT}}/_build/verify/examples.out.md. | NO CHECKER: Nothing in this course is computable, so
   there is no checker output: redo every step of each worked example from its cited sources, and
@@ -246,10 +378,26 @@ main session checks each finding and applies the fixes.
   3. Direction and causation: which condition guarantees which result, which proof needs which
      property; no ambiguous implication.
   4. STYLE: the rest of STYLE.md, S33 among it: each subsection states its depth, citing the
-     instructor's statement or marked inferred with the reason.
-- Answers: the notes quote an answer only from a set MANIFEST.md marks `yes, attempted`.
-  {{UNATTEMPTED: The student hasn't attempted <those sets>: their official answers sit in the
-  extracts for their conventions only, a quote from one in the notes is a blocker, and no finding
+     instructor's statement or marked inferred with the reason. Each concise box (S34, FB-094) matches
+     the full text below it: nothing in the box that the text doesn't support, no condition the
+     text states dropped from it, and its Example's numbers the text's or the checker's. A
+     diagram-taught section (the backbone's `Diagram-taught: yes`) leads with its figure (S11, FB-115).
+     A skill rule id in the text, such as (S12) or (FB-123), is a finding.
+  5. Wording against the official solutions: compare the section's wording with the official
+     solutions of the question parts its extract blocks cover ({{ANSWER FILES: each file
+     MANIFEST.md marks `Answers: yes` that solves a question part the coverage matrix maps into
+     §{{N}}, or "none": drop this item}}): each part's `### [<doc> <part>]` block in its set's
+     file, with its stem block when there is one, and an answers doc's page blocks in their home
+     file, as the solutions files above give them. Wording that tracks an official
+     solution (its phrasing, its sentence order, its steps as it writes them) is a finding, major:
+     the fix
+     rewords from the slide or derives the step plainly, never paraphrases the solution (FB-071).
+- Answers: the notes quote a set's official solution only once that set's own MANIFEST.md row
+  says `attempted` (an answers file's row stays `yes`) and, when its answers file solves several
+  sets, every set that file solves is attempted too; until then a quote of that file's text is a
+  blocker like any other.
+  {{UNATTEMPTED: The student hasn't attempted <those sets>: their official answers sit in
+  {{ROOT}}/_build/solutions/ for their conventions only, a quote from one in the notes is a blocker, and no finding
   may propose adding one. | ALL ATTEMPTED: drop this sentence.}}
 - Out of scope: other sections' files, except to check a link's target. Never open anything under
   {{ROOT}}/practice/, which holds answer keys, {{ROOT}}/_build/verify/mock_key.py, which computes
@@ -257,9 +405,10 @@ main session checks each finding and applies the fixes.
 ```
 
 **Audit variant** (a condensation: Must-know checklists here, the cheat sheet in 07, the cram
-order in 08). Same role, shape and Answers line, a fresh agent that hasn't reviewed the sections.
-Replace the title, Purpose, the End state's "Done means", and the Scope's review, check-order and
-out-of-scope lines with:
+order in 08). Same role and shape, a fresh agent that hasn't reviewed the sections. It must not see
+answers: it reads the extracts, which hold none, and never opens `_build/solutions/` (FB-056).
+Replace the title, Purpose, the End state's "Done means", and the Scope's review, check-order,
+Answers and out-of-scope lines with:
 
 ```text
 # Brief: audit {{CONDENSATION}} against the notes and their sources
@@ -276,10 +425,15 @@ often than any other. Every line must be true, carry its conditions, and point w
   or links somewhere that doesn't say it, and each point the section teaches as must-know that
   the condensation leaves out (not for the cram order, whose rows each name one thing on
   purpose).
+- Answers: read no official answer. Read a source in its extract,
+  {{ROOT}}/_build/extract/<name>.md ({{EXTRACT FILES: the extracts above}}), which holds its
+  questions without their answers; the official solutions live in {{ROOT}}/_build/solutions/,
+  which you never open (FB-056).
 - Out of scope: open nothing under {{ROOT}}/practice/ but {{CONDENSATION}} itself when it lives
-  there (never a `*-key.md` file or the mock), not {{ROOT}}/_build/verify/mock_key.py, and no file
-  MANIFEST.md marks `reserved`. A search (Grep, Glob) stays inside the notes, the extracts and
-  {{CONDENSATION}}: one over {{ROOT}} returns key lines.
+  there (never a `*-key.md` file or the mock), not {{ROOT}}/_build/verify/mock_key.py, nothing
+  under {{ROOT}}/_build/solutions/, and no file MANIFEST.md marks `reserved`. A search (Grep,
+  Glob) stays inside the notes, {{CONDENSATION}} and {{ROOT}}/_build/extract/: one over {{ROOT}}
+  or all of {{ROOT}}/_build/ returns answer lines.
 ```
 
 ## Cold read (stage 05)
@@ -317,7 +471,11 @@ checks each finding and applies the fixes.
   4. each pair of look-alike notions (symbols, operators, variants of one procedure) with no single
      table comparing them (S31);
   5. each optional notation that doesn't say when it is required, when it is allowed, and whether
-     leaving it out costs marks (S28).
+     leaving it out costs marks (S28);
+  6. each concise box (the `> **In short:**` quote under a subsection heading) that doesn't stand
+     alone, read before the text below it: a symbol it doesn't define, a rule without its
+     condition, a step skipped, an Example with no instance. A line too terse to use alone is a
+     finding, as a padded one is (S18, S34).
 - Don't flag: whether a fact is correct, typos, rendering and citations. Other reviews own those.
 - Out of scope: never open anything under {{ROOT}}/practice/, which holds answer keys,
   {{ROOT}}/_build/, {{ROOT}}/sources/, or a file MANIFEST.md marks `reserved`. A search (Grep,
@@ -352,12 +510,15 @@ written separately, from the checker.
   off it, naming the line), your rows of {{ROOT}}/_build/mock-plan.md, which quote each question
   you clone, in {{ROOT}}/_build/backbone.md the How it's tested table and the section numbers
   (`Topic: §N`), and the figure rows of {{ROOT}}/_build/CHASSIS.md.
-- Sources: the notes, {{ROOT}}/notes/*.md, and the plan's quoted questions. Nothing else: the
-  source documents and their extracts hold official solutions beside the questions.
+- Sources: the notes, {{ROOT}}/notes/*.md, the plan's quoted questions, and for a question you
+  clone, its set's extract {{ROOT}}/_build/extract/<name>.md ({{EXTRACT FILES: the extracts of
+  the sets the plan clones}}), for its full setup and figures. Nothing else: the source documents
+  hold official solutions beside the questions, and {{ROOT}}/_build/solutions/, which you never
+  open, holds them alone.
 - Out of scope: everything under {{ROOT}}/practice/ but your own file (the keys and the other
-  mocks), {{ROOT}}/sources/, and under {{ROOT}}/_build/ everything but the four files above (the
-  extracts, renders and the checker's values hold answers). A search (Grep, Glob) stays inside the
-  files you may read: one over {{ROOT}} returns key lines.
+  mocks), {{ROOT}}/sources/, and under {{ROOT}}/_build/ everything but the four files above and
+  those extracts ({{ROOT}}/_build/solutions/, the renders and the checker's values hold answers).
+  A search (Grep, Glob) stays inside the files you may read: one over {{ROOT}} returns key lines.
 
 ## Format
 - MOCK.md's format exactly. Header: the exam's title, its minutes and total points, its rules,
@@ -382,7 +543,7 @@ written separately, from the checker.
 ## Cold solver (stage 08, from 05-verify "The mock")
 
 Role: `reviewer`: it solves on paper and reports. Its scope is a list of the files it may open,
-since the key's values also sit in the checker and the extracts.
+since the key's values also sit in the checker and the solutions files.
 
 ```text
 # Brief: solve the {{EXAM}} mock practice/mock-{{SLUG}}.md cold, without the key
@@ -405,10 +566,203 @@ how those surface.
   {{ROOT}}/practice/mock-{{SLUG}}.md; the notes, {{ROOT}}/notes/*.md{{SHEET: ; and the
   sheet the student may bring, {{ROOT}}/cheatsheet/{{SHEET FILE}}}}.
 - Solve the mock from those, as the student would. A search (Grep, Glob) stays inside those
-  paths: one over {{ROOT}} would return key and extract lines.
+  paths: one over {{ROOT}} would return key and solution lines.
 - Out of scope: every other file. Above all, nothing else under {{ROOT}}/practice/ (the key) or
-  {{ROOT}}/_build/ (the checker and the extracts hold official answers and the key's values),
+  {{ROOT}}/_build/ (the checker and the solutions files hold official answers and the key's
+  values),
   nothing under {{ROOT}}/sources/, and no file MANIFEST.md marks `reserved`.
+```
+
+## Watch list ranker (stage 08)
+
+Role: `general-purpose`: it searches the web and writes one output file per part. One per topic,
+in waves of a few (`08-practice`, "Watch list", step 2), in two parts with a fetch between them: a
+delegated agent can't run `yt-dlp`, a Python program (L07), or reach a host the sandbox doesn't
+list (L02), so the main session fetches (in a build, with the video hosts in `allowed_domains`
+only, and a fetch log it starts fresh each run). Part 1, **Search**, writes the candidates; then the main
+session fetches each one's captions, chapters and storyboard frames; part 2, **Judge**, ranks from
+those files, by the same agent resumed (SendMessage to its id) or a fresh one from this brief with
+`{{PART}}` set to `judge` (`search` for part 1). A later wave fills the GAPS slot for the gaps the first one flagged,
+which also names its files `cand-<topic>-gaps.json` and `rank-<topic>-gaps.json`, so they never
+overwrite the first wave's candidates and picks.
+
+```text
+# Brief: rank explainer videos for the {{EXAM}} watch list, topic {{TOPIC}} (§{{N}}), {{PART}} part{{GAPS: , gap search}}
+
+## Purpose
+The watch list is a page the student studies from: per idea of the course, the best explainer
+video, or a notes row where none is good. Its faults cost study time the night before the exam:
+a video that doesn't teach the idea, one that skips what it relies on, one of four near-copies.
+You search for candidates; the main session fetches each one's transcript and frames; you then
+judge each candidate from those files and rank this topic's candidates by the rules. The main
+session merges every topic's file into the page.
+
+## End state
+- Done means, search part: every idea below has its candidates, the top 8 results of each search
+  less any coding tutorial (W7, W9), each with its video id, and every notes subsection of the topic has a
+  candidate or a `gaps` entry naming the searches tried (W8, W13).
+- Done means, judge part: every idea below has its picks, best first, one video per idea with the
+  rest folded or rejected (W14 to W17), or a `none` with why no video is good; every candidate in
+  the search file is in a pick or in `rejected`, judged from its fetched files (a candidate the
+  fetch log marks unfetched is rejected as `not fetched`, never judged from its title).
+- Artifact path: search part, {{ROOT}}/_build/watch/cand-{{TOPIC}}{{GAPS: -gaps}}.json; judge
+  part, {{ROOT}}/_build/watch/rank-{{TOPIC}}{{GAPS: -gaps}}.json. Write each as you go, idea by
+  idea, so a crash loses nothing.
+- Report: end your reply with the JSON block (status, summary, artifacts, blocked_actions). The
+  summary lists each idea with its candidate count (search) or its pick or "none" (judge), and
+  each gap.
+
+## Scope
+- Role: you are a general-purpose agent because this task searches the web and writes one output
+  file per part. Write nothing else.
+- Work in: {{ROOT}}. Read only, except this part's output file.
+- Read first, in full: {{ROOT}}/_build/WATCH.md (you apply W1 to W24 and W35); the docstring of
+  {{SKILL}}/scripts/videos.py (the pick fields; read the docstring only); this topic's notes,
+  {{ROOT}}/notes/{{FILES}}, for what each idea must teach, its notation and what it relies on.
+- The ideas, in teaching order (W22), each with its notes ids: {{IDEAS}}.
+- {{GAPS: Search only for these notes subsections, which the first wave left without a
+  candidate, each with the searches already tried: {{GAP IDS}}. | drop this line}}
+- {{YOURS: The student's own links, ranked on the same rules and kept as kind `yours` (W12):
+  {{URLS}}. | drop this line}}
+- Judge part: read your search file, {{ROOT}}/_build/watch/cand-{{TOPIC}}{{GAPS: -gaps}}.json, and judge each
+  candidate from its transcript (auto-captions), its chapters and its storyboard frames, which the main session fetched into {{ROOT}}/_build/videos/{{TOPIC}}/, named
+  by video id, and from {{ROOT}}/_build/watch/fetch-log.md for what it couldn't fetch (this run's
+  only: the main session starts it fresh each run, so every line in it is current); never from
+  a title or a description alone. Judge a full lecture by its chapters and keep a segment of it
+  (W11), read back to the lecture's start (W20).
+- Tools: web search, and Read, Write and Glob on the files above. No shell: you run no `yt-dlp`,
+  `curl` or other fetch, and open no video page. A candidate you need fetched again, or a frame
+  that won't open, goes in the summary for the main session.
+- Out of scope: everything under {{ROOT}}/practice/ (the mocks' keys), {{ROOT}}/sources/, a file
+  MANIFEST.md marks `reserved`, and under {{ROOT}}/_build/ everything but WATCH.md, the fetch
+  log, your output files and the topic's videos folder. A search (Grep, Glob) stays inside
+  {{ROOT}}/notes/ and that videos folder: one over {{ROOT}} returns key lines.
+
+## Format
+Search part, UTF-8 JSON, one object:
+  {"topic": "{{TOPIC}}",
+   "ideas": [{"idea": "<title>", "notes": ["<notes id>"], "searched": ["<query>"],
+              "candidates": [{"title": "", "channel": "", "video_id": "", "kind": "video | lecture | yours"}]}],
+   "gaps": [{"notes": "<notes id>", "searched": ["<query>"]}]}
+Judge part, UTF-8 JSON, one object:
+  {"topic": "{{TOPIC}}", "lectures": {"<lecture key>": "<title>"},
+   "ideas": [{"idea": "<title>", "notes": ["<notes id>"], "picks": [<pick>], "none": "<why>"}],
+   "gaps": [{"notes": "<notes id>", "searched": ["<query>"]}],
+   "rejected": [{"title": "", "channel": "", "video_id": "", "why": "", "covers": [""]}]}
+- A pick has videos.py's fields for a video, segment or yours pick (kind, title, channel,
+  video_id, start, end, length, visuals, why, flags, lecture, chapter, also), plus `covers`: the
+  points it teaches, one short line each, in your words. Leave out thread, differs and tested:
+  the annotator writes them. `none` only on an idea with no picks.
+- `why`: what puts it first, by W1 to W6 (clarity, visuals, narration, length). `flags`: short
+  chips, such as `quiet audio` (W6). `visuals`: what is drawn or animated, in a few words.
+- A second video's unique point goes in the first pick's `also` (W16), with the video and time
+  it comes from in the item; the second video goes in `rejected`.
+- `rejected`: every candidate you judged and didn't keep, each with why and its `covers` (the
+  cut-loss reviewer compares them with the kept rows). None of it reaches the page (W19).
+- Quote a transcript a few words at a time at most (W35).
+```
+
+## Watch list cut-loss reviewer (stage 08)
+
+Role: `reviewer`: it reads and reports; the main session checks each item against the notes and
+puts it in its row's `also`. One fresh reviewer per topic that lost a candidate to a cut or a fold
+(`08-practice`, "Watch list", step 4), after the merge and the overlap audit. Fill the GAP WAVE
+slot when a gap wave ranked the topic (a `rank-<topic>-gaps.json` exists); otherwise drop it.
+
+```text
+# Brief: find what the cuts lost in topic {{TOPIC}} (§{{N}}) of the {{EXAM}} watch list
+
+## Purpose
+Folding keeps the watch list to one video per idea, but a cut video may have been the only one to
+make a point the exam tests. You compare what each cut video covered with what the kept rows and
+the notes teach, so a lost exam point comes back as a "+ also" line under a kept row. You report;
+the main session checks and applies.
+
+## End state
+- Done means: for each candidate the topic lost (its rankers' `rejected` in each ranking file below,
+  and the cuts and folds the merge log names for this topic), each point it covers that no kept row of the topic
+  teaches, judged lost or not. For each lost point the notes test (a How it's tested line, a
+  Must-know item): the row it goes under (idea and pick), the item's text (at most 25 words), the
+  video and time it comes from, and the notes line that makes it an exam point (W29).
+- Artifact path: report only.
+- Report: at most 600 words, then the JSON block (status, summary, artifacts, blocked_actions).
+
+## Scope
+- Work in: {{ROOT}}, read only.
+- Read first: {{ROOT}}/_build/WATCH.md (you apply W16, W18, W19 and W29).
+- Read: {{ROOT}}/_build/watch/rank-{{TOPIC}}.json{{GAP WAVE: and, since a gap wave ranked this
+  topic too, {{ROOT}}/_build/watch/rank-{{TOPIC}}-gaps.json}} (`rejected`, and each pick's
+  `covers`),
+  {{ROOT}}/_build/watch/merge-log.md (this topic's cuts and folds), the topic `{{TOPIC}}` in
+  {{ROOT}}/practice/videos.json (open that file by its exact path, nothing else under
+  {{ROOT}}/practice/), the notes {{ROOT}}/notes/{{FILES}}, and to check a `covers` line, the
+  transcripts under {{ROOT}}/_build/videos/{{TOPIC}}/.
+- You didn't rank or merge this topic: judge from the files, not from a ranker's reasons.
+- Don't flag: the ranking itself, or a point the notes don't test. Only what the cuts lost.
+- Out of scope: everything else under {{ROOT}}/practice/ (the mocks' keys), {{ROOT}}/sources/, a
+  file MANIFEST.md marks `reserved`, and under {{ROOT}}/_build/ everything but the files above. A
+  search (Grep, Glob) stays inside {{ROOT}}/notes/ and {{ROOT}}/_build/videos/{{TOPIC}}/: one
+  over {{ROOT}} returns key lines.
+```
+
+## Watch list annotator (stage 08)
+
+Role: `general-purpose`: it reads the notes and the merged watch list and writes one output file.
+One per topic, after the cut-loss review (`08-practice`, "Watch list", step 5).
+
+```text
+# Brief: annotate topic {{TOPIC}} (§{{N}}) of the {{EXAM}} watch list
+
+## Purpose
+A row tells the student what to watch; its annotations tell them how it fits: what it picks up
+and sets up, where the video differs from their notes (a symbol copied from a video that clashes
+with the course's costs marks), and how the exam tests it. You write them from the notes and the
+picks; the main session merges your file into the page's data.
+
+## End state
+- Done means: the topic's intro (W21); for every row of the topic in practice/videos.json its
+  thread line (W25), its differs list (W26) and its tested line (W27), every symbol glossed in
+  plain words at its first use on the page (W28); and for each notes row whose notes subsection
+  opens with no concise box, its `explain` box (W24).
+- Artifact path: {{ROOT}}/_build/watch/annot-{{TOPIC}}.json. Write it as you go, row by row.
+- Report: end your reply with the JSON block (status, summary, artifacts, blocked_actions). The
+  summary names each symbol clash you found and each row whose notes subsection has no How it's
+  tested line.
+
+## Scope
+- Role: you are a general-purpose agent because this task reads files and writes one output
+  file. Write nothing else.
+- Work in: {{ROOT}}. Read only, except your output file.
+- Read first, in full: {{ROOT}}/_build/WATCH.md (you apply W20 to W28 and W35); the
+  docstring of {{SKILL}}/scripts/videos.py (the fields; read the docstring only).
+- Read: the topic `{{TOPIC}}` in {{ROOT}}/practice/videos.json (open that file by its exact path,
+  nothing else under {{ROOT}}/practice/); the notes {{ROOT}}/notes/{{FILES}}, and the neighbour
+  topic's notes {{ROOT}}/notes/{{NEIGHBOUR FILE}} for the intro's contrast; each video's
+  transcript under {{ROOT}}/_build/videos/{{TOPIC}}/, which the main session fetched (you fetch
+  nothing: a pick with no transcript there goes in the summary for the main session to fetch).
+- `tested` comes from the How it's tested line of the row's notes subsection (STYLE S9): the
+  answer shape and what to write. Never a prediction, never more than the notes say (hard rule 8,
+  FB-012); with no such line, say so in the summary and leave the row's tested line for the main
+  session.
+- Out of scope: everything else under {{ROOT}}/practice/ (the mocks' keys), {{ROOT}}/sources/, a
+  file MANIFEST.md marks `reserved`, and under {{ROOT}}/_build/ everything but WATCH.md, your
+  output file and the topic's videos folder (read only). A search (Grep, Glob) stays inside
+  {{ROOT}}/notes/ and that videos folder: one over {{ROOT}} returns key lines.
+
+## Format
+UTF-8 JSON, one object:
+  {"topic": "{{TOPIC}}", "intro": ["<bullet>"],
+   "rows": [{"idea": "<idea title>", "pick": <1-based index in the idea's picks>,
+             "thread": "", "differs": [""], "tested": "",
+             "explain": [{"label": "", "text": ""}]}]}
+- `intro`: what the topic is, how it differs from its neighbour topic, how its rows build (W21).
+- `thread`: one line, what the row picks up from the row before and sets up for the next (W25).
+- `differs`: notation and symbols first, a clashing symbol as the first line; [] when the video
+  matches the notes (W26).
+- `explain`: notes rows only, and only when their subsection has no concise box: STYLE S34's
+  labels, in its order, each at most once, every symbol defined in the box (W24).
+- Gloss a symbol where it first appears in your lines; quote a transcript a few words at a time
+  at most (W35).
 ```
 
 ## Convert (stage 06)
@@ -439,10 +793,16 @@ session assembles the page and checks it in a browser.
   {{ROOT}}/_build/CHASSIS.md and S11 to S13 in {{ROOT}}/_build/STYLE.md.
 - Source: {{ROOT}}/notes/{{FILE}}. Figures: draw the static ones the backbone's figure shortlist
   lists for §{{N}} ({{STATIC FIGURES}}); leave the step-through markers ({{STEP-THROUGHS, or
-  "none"}}) as they are.
-- Out of scope: every other notes file and fragment, the chassis, sources/, _build/extract/ and
-  _build/verify/ (a figure's data comes from the notes alone), everything under practice/, and
-  every file MANIFEST.md marks `reserved`. A search (Grep, Glob) stays inside the files above:
+  "none"}}) as they are; replace each slide-image marker ({{SLIDE IMAGES: each id and its file,
+  {{ROOT}}/_build/img/<id>.png, or "none"}}) with CONVERT.md's slide-image figure: one `img` with
+  `src="img/<id>.png"` and alt text saying what it shows, the caption ending in its citation.
+- Each concise box (`> **In short:**` under a subsection heading) becomes, in the same place,
+  `<div class="concise"><ul><li><strong>Rule:</strong> ...</li></ul></div>`, one `li` per bullet,
+  its label and colon in `strong`, the "In short" heading dropped, never tagged `rv`, as
+  CONVERT.md's "The concise box" says.
+- Out of scope: every other notes file and fragment, the chassis, sources/, _build/extract/,
+  _build/solutions/ and _build/verify/ (a figure's data comes from the notes alone), everything
+  under practice/, and every file MANIFEST.md marks `reserved`. A search (Grep, Glob) stays inside the files above:
   one over {{ROOT}} returns key lines. Never add what CONVERT.md's Output paragraph forbids (a
   script, a style, an event attribute, a class outside CHASSIS.md's table).
 ```
@@ -477,15 +837,22 @@ decides what goes on.
 - {{CONTENT: Read {{ROOT}}/notes/{{FILES}}, their Must-know lines first. Report what a student
   needs cold from these sections that the outline lacks: conditions, traps, formulas, decision
   rules. | QUESTION TYPE: Read the "How it's tested" table in {{ROOT}}/_build/backbone.md and the
-  question extracts it names in {{ROOT}}/_build/extract/ ({{QUESTION DOCS}}). Per question type
+  question sets it names ({{QUESTION DOCS}}), each in its extract,
+  {{ROOT}}/_build/extract/<name>.md ({{EXTRACT FILES}}). Per question type
   (trace, compute, justify, prove, fill a table, true or false, formulate, as the course has
   them), propose an answer template, the pros and cons a "compare" question needs, and a worked
   pattern, each only where the outline lacks it.}}
-- Answers: {{UNATTEMPTED: The student hasn't attempted <those sets>: read their questions only,
-  and propose nothing from their official answers. | ALL ATTEMPTED: drop this line.}}
+- Answers: read no official answer. The extracts hold none; the official solutions live in
+  {{ROOT}}/_build/solutions/, which you never open (FB-056). {{UNATTEMPTED: The student hasn't attempted
+  <those sets>: read their questions only, propose nothing from their official answers, and
+  give a worked pattern fresh numbers and a fresh setup, never one of theirs: the sheet is
+  checked against their text before it ships. | ALL
+  ATTEMPTED: drop this sentence.}}
 - Out of scope: nothing under {{ROOT}}/practice/ (the mock sheet holds nothing derived from the
-  mock, and keys live there), nothing under {{ROOT}}/sources/, and no file MANIFEST.md marks
-  `reserved`.
+  mock, and keys live there), nothing under {{ROOT}}/sources/ or {{ROOT}}/_build/solutions/, and
+  no file MANIFEST.md marks `reserved`. A search (Grep, Glob) stays inside the notes, the outline,
+  the backbone and {{ROOT}}/_build/extract/: one over {{ROOT}} or all of {{ROOT}}/_build/ returns
+  answer lines.
 ```
 
 ## Notes patch (stages 08 and 09)
@@ -792,7 +1159,9 @@ session settles each finding.
 Role: `researcher`: it reads the shards, the hub's records and the skill; it changes nothing, and
 the main session saves its report by script (`12-retro` step 3). One per hub-exam, spawned together;
 a hub-exam whose shards pass about 400 KB gets one per shard group, and only the first group's keeps
-the {{RECORDS}} lines and section 4. About 40 tool calls and 40 minutes each, in the standing Budget
+the {{RECORDS}} lines and section 4. A hub whose records are long gets a records-only reader beside
+them (`12-retro` step 3): its {{SHARDS}} slot reads `none: you read the hub's records only`, it keeps
+the {{RECORDS}} lines and section 4, and every shard group's brief drops them. About 40 tool calls and 40 minutes each, in the standing Budget
 block.
 
 ```text

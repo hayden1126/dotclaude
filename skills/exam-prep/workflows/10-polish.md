@@ -1,6 +1,6 @@
 # 10 Polish
 
-Baseline as of 2026-11-10; changes only via `12-retro`.
+Baseline as of 2026-11-12; changes only via `12-retro`.
 
 A pass over the verified notes for one kind of failure, or for a scope change that came after the
 build: scan, report, then apply exactly what the student approves (FB-170). It runs only when the
@@ -22,6 +22,17 @@ from then on, in the cram night's session (`08-practice` step 8, its one tab), b
 | Numbering | departures from S3 and the backbone's `set-` registry (FB-172) | one reader, the numbering variant | every section |
 | Redundancy | an idea stated more often than S6 allows (FB-171) | the main session | the sections the student names |
 | Scope | every product a scope change touches (FB-180) | the main session | the whole hub |
+| Box | subsections with no concise box (S34, FB-094) or no Depth line (S33) | the main session | every section, or the ones the student names |
+| Figure | mechanisms with no figure, and sections with no `Diagram-taught` line or a `pre-S11` one (S11, FB-115) | the main session, by `03-backbone` step 5's sweep | every section, or the ones the student names |
+
+The box and figure passes bring a hub built before S34 or the widened S11 up to them, a reopened
+hub's old sections among them (`11-next-exam` otherwise leaves those as written). Two build
+warnings name them (FB-015): a cram order with no S33 depth label on any row (`cram_check.py` and
+`assemble.py` warn `PRE_S33`) gets its labels in a box pass, and a backbone section marked
+`Diagram-taught: pre-S11` (a reopened hub's older sections, which `11-next-exam` marks, or the
+sections an earlier figure pass didn't cover, which step 5 marks), or a backbone with no
+`Diagram-taught` line at all (`coverage_check.py` warns on either), gets `yes` or `no` in a
+figure pass, which replaces the `pre-S11`.
 
 A direct instruction that names its edit, what and where ("add the cost caveat to §4.6 and where
 §3 first gives the cost"), is an approved list of one, the pass `edit`: skip steps 3 and 4, but
@@ -45,7 +56,8 @@ show a sheet line it changes, exactly, before making it (FB-137; while a mock is
   attempt, `practice/*-key.md`). The set holds for the pass: `08-practice` step 8.1 starts no
   attempt while the `Build running` line stands, and a mock the student takes anyway is recorded
   once the pass ends.
-- MANIFEST.md's Answers cells: a fix quotes an answer only from a set marked `yes, attempted`.
+- MANIFEST.md's Answers cells: a fix quotes a set's official solution only once that set's own row
+  says `attempted` (an answers file's row stays `yes`).
 - PLAN.md's Checker line: a new number or trace in a fix comes from the checker, or with none from
   a cited source, its working shown (hard rule 3).
 
@@ -84,9 +96,10 @@ From the student's ask: the pass, the sections, and the pattern.
 - **Redundancy** covers only the sections the student names.
 - **Scope** starts from the source for the change, quoted: staff-authored text or an endorsed
   answer (hard rule 7), never a student's post alone.
+- **Box** and **figure** take no pattern: their rules, S34 and S11, are the pattern.
 
 Name the pass's log, `_build/logs/polish-<pass>-<date>.md` (`<pass>` one of `clarity`, `causation`,
-`numbering`, `redundancy`, `scope`, `edit`; a second pass of the same kind that day adds `-2`, then
+`numbering`, `redundancy`, `scope`, `box`, `figure`, `edit`; a second pass of the same kind that day adds `-2`, then
 `-3`, before `.md`, and that name is the pass's everywhere, its STATUS line and its baseline file
 included). Start it: the ask in the student's words, the pass, the sections, the pattern, and the
 hub's head (`git rev-parse HEAD`) as `before <sha>`. The log marks each step's end as it finishes
@@ -157,6 +170,27 @@ step 1 says.
   place of step 7.5's patches and checks (11 runs them however it ends; its step 1 needs the hub
   free). Step 7.4's report names it, so a student whose session ends first asks again.
 
+- **Box.** The main session alone. In each named section's notes file, list every subsection
+  but the Must-know list with no `> **In short:**` box under its heading, and every one with no
+  Depth line (S33). When `cram_check.py` warns `PRE_S33`, list the cram order's rows too: each
+  takes its label from its subsection's Depth line, once that line exists.
+- **Figure.** The main session alone, as `03-backbone` step 5 runs: the mechanism sweep over the
+  named sections' notes and their slides' diagrams (their extract blocks and page images), each
+  candidate kept or cut with its reason; each section marked `Diagram-taught: yes` or `no` (in
+  place of any `pre-S11`); and
+  the kept rows not yet drawn as the proposed shortlist, each with its kind (static, step-through,
+  slide image). A figure the section already has counts toward its floor. While STATUS has a
+  `Figure shortlist:` line, or when the student asks to cut, the scan also lists the figures
+  already drawn in the named sections, from the backbone's Figure shortlist (it holds every drawn
+  figure; `_build/logs/figures.md` holds only the sections a recent run swept), each marked
+  `waiting for review` when the log holds its row, so the student can cut a figure the build drew
+  (`03-backbone` step 5.4). For each drawn figure proposed for a cut, the scan greps the notes for
+  its id (`grep -n '<fig-id>' notes/*.md`) and lists every line outside the figure's own FIG
+  marker that refers to it, in any section's file: CHASSIS C5 lets any section link a figure, so
+  a cut leaves those links dangling and `linkcheck.py` fails until step 5 rewords them.
+  A `Diagram-taught: yes` section keeps at least one figure: a cut that would leave it none is
+  listed with that note, and applies only with an add this pass makes to the same section.
+
 ## Step 4: Report
 
 1. Check every finding against the file before reporting it (FB-108): open the line it quotes and
@@ -171,12 +205,48 @@ step 1 says.
    new line exactly: the student sees a sheet's change before it is made, FB-137); then a
    recommendation (a rank, numbers, or for numbering a scope) and the question: which items to
    apply. While a mock is untaken, the log's leak check passes first. Then show the report in the
-   message itself (hard rule 11).
+   message itself (hard rule 11). A figure pass's report is the proposed shortlist with its cut
+   rows, and any drawn rows step 3 lists for cutting (a proposed cut with the lines step 3
+   found referring to it), one line each: the student sees it before
+   any figure is built (FB-062), as `03-backbone` step 5.4 says for a figure pass. Once the pass
+   is approved, the student has reviewed the covered sections' logged rows, so the log records
+   two changes for step 5.6 (outside the pass's paths, so a stop before that commit leaves the
+   rows still waiting): `_build/logs/figures.md` rewritten without the rows of the sections this
+   pass covered, and STATUS's `Figure shortlist:` line (it keeps one) replaced by the recount of
+   the rows left, or taken out when none is left (with no line, none is added).
 4. The student answers with a rank, numbers, "your recommendation" or a scope; text they add to an
    item is shown again before it goes in (while a mock is untaken, from the log once it passes).
    Log the answer and commit.
 
 ## Step 5: Apply
+
+**A box or figure pass applies through writers**, in place of item 3's one-fix edits: the new
+text is the notes' own, so it is written the way the build writes it. Item 2's baseline comes
+first, as for any pass. For a figure pass the main session then adds to the backbone the Mechanism
+sweep table, each covered section's `Diagram-taught` line (`yes` or `no`, in place of any
+`pre-S11`), `- Diagram-taught: pre-S11` on every section the pass didn't cover that has no line
+(`03-backbone` step 5.2: once one section carries a line, a section with none fails
+`coverage_check.py`, and FB-015's warning form never blocks a rebuild), and the approved
+shortlist rows; for each approved cut of a drawn figure it takes out its shortlist row and its
+entry on the section's Figures line together (`03-backbone` step 5.3) and marks its sweep row cut
+with the student's reason. After that `coverage_check.py` exits 0, its only figure warnings the
+`pre-S11` sections this pass didn't cover. It crops each approved slide image into
+`_build/img/` (`04-write` step 4.5, its `.gitignore` line added first when the hub lacks it). Then one writer per section file, spawned at once from the
+"Write" brief's "Polish variant", each changing only its own file: a box pass adds the
+approved boxes (S34) and missing Depth lines and changes nothing else; a figure pass adds the
+approved FIG markers, a diagram-taught section's first figure right after its first box, trims
+prose that only re-describes a new figure (S11), and takes out the FIG marker of each approved cut,
+rewording any text that points at that figure. A line step 3 listed in another section's file as
+referring to a cut figure is reworded too: by that file's writer, its brief naming the line, when
+this pass spawns one for that file, else by the main session as item 1's forced change; either
+way that section's fragment takes the change, and step 7's report names each line. While a mock
+is untaken, each brief carries this pass's fence (step 1) as its reading limits. The main session
+checks that `git diff` names only those files and only those changes (these rewordings among
+them), and runs one fresh section reviewer per changed file from the
+"Review" brief (`05-verify`'s), settling its findings as `05-verify` does. Then each changed
+section's fragment takes the change in `CONVERT.md`'s forms (its boxes, its new figures drawn as
+`06-site` draws them, a cut figure's drawing taken out), and a box pass labels the cram order's
+rows from the new Depth lines. Items 4 to 6 run as for any pass.
 
 1. Apply the approved items and nothing else (FB-170). An item the student adds is applied and
    logged with the others. A scope list starts with its MANIFEST.md change (after item 2's
@@ -191,7 +261,7 @@ step 1 says.
 3. One fix at a time, as `05-verify` step 5 says, in every copy of the fact that `08-practice`'s
    "Changing the notes or a sheet" item 2 searches for (the one list of the published products and
    what a change does to each), a new number or trace as step 1 says, never an answer from a set
-   MANIFEST.md doesn't mark `yes, attempted`. While a mock is untaken, each fix is that section's
+   whose own MANIFEST.md row lacks `attempted`. While a mock is untaken, each fix is that section's
    item 2: a method taught in general or with an example of its own, never a mock's instance. A
    fix that changes the reference (`05-verify` step 5) adds `08-practice` step 4's `Reference
    changed:` line once `Stage 08 built` stands, made at item 6 like the other changes outside the
@@ -210,8 +280,9 @@ step 1 says.
    sections' screenshots seen; its republish waits for step 7.1. A rebuild over the Review view's
    minutes with no `.rv` tag left gets new minutes as `07-cheatsheet`'s "Tag the review" opening
    says: asked, or while a mock is untaken set and logged `held for the look-back`.
-5. That section's item 4: the questions check when the pass changed the notes,
-   and while a mock is untaken the leak compare with the pass's baseline file, never a new
+5. That section's item 4: the questions check when the pass changed the notes or a sheet, `python3 -I
+   <skill>/scripts/mock_leak.py --hub .` run by the main session (the script
+   builds its file list from MANIFEST.md's attempt marks), and while a mock is untaken the leak compare with the pass's baseline file, never a new
    baseline (a `.tex` is read as its source). A questions hit is reworded with fresh numbers and
    setup (S7); a new hit on a number, order or table answer is a leak, reworded. Either reword is
    logged as the item's `changed (how)` (step 6 takes it as the approved text, and the look-back
@@ -256,7 +327,8 @@ dropped. Log `look-back done` once every rejection is settled, before step 7's r
    line), each logged in STATUS until they say it is done.
 3. The log: each item applied, changed (how), dropped (why) or beyond the list, and the fidelity
    review's outcome, or that it didn't run.
-4. The report to the student: what was applied, anything beyond the list (FB-170), anything a stop
+4. The report to the student: what was applied, anything beyond the list (FB-170; each line
+   reworded in another section for a cut figure, step 5, among them), anything a stop
    put back, a fidelity review that didn't run, the version, and what to print, compile or paste
    again.
 5. Hand off and commit. In that same commit, the `Build running` line goes (hard rule 1) and

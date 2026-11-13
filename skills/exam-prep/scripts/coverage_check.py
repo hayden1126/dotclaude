@@ -18,14 +18,31 @@ a number the backbone's section headings or tables define. A parenthetical after
 Every `### [<doc> <locator>]` block in _build/extract/*.md must fall inside some row: a page
 block by its pages, a slide by its index, a question part by its question and part (a whole
 question covers every part; a stem, or a block naming the question with no part, falls under any
-row of its question; a deeper part, `Q3b.1` or `Q3aii`, falls under its letter, and a part of two
+row of its question; a deeper part, `Q3b.1`, `Q3aii` or its dotted form `Q3a.ii`, falls under its
+letter, and a part of two
 or more of i, v and x, `Q3ii`, is a roman part, not `i` and a sub-part). A block with any
 other locator (`### [C1 main.py]`, or `Q3C`, which isn't a part) is mapped only by its doc's
-`(all)` row.
+`(all)` row. The solutions files (_build/solutions/*.md) hold answers, which the matrix never
+maps, so their blocks are read only to pass an extract with no block of its own whose solutions
+file of the same name holds one (an extract agent given only an answers file).
+
+The figure floor (STYLE S11): each `## §N` section of the backbone carries a `- Diagram-taught:
+yes|no` line beside its `- Figures:` line, and a section marked `yes` (its slides teach it through
+diagrams) must name at least one `fig-` id on its Figures line. A section the floor doesn't hold
+yet says `- Diagram-taught: pre-S11` (FB-015): an older section of a hub reopened for the next
+exam (written before the rule), or a section a partial 10-polish figure pass didn't reach. Each
+passes with a WARN line on stderr naming 10-polish's figure pass, which sets yes or no and adds
+the figures. A backbone with no such line anywhere predates the rule and
+gets one WARN for the whole backbone. Once any section carries a line, a section with none fails:
+a fresh build that left it out looks the same as an old section, so the old ones are marked. A
+line that misspells the form (`- **Diagram-taught:** yes`, `* Diagram-taught: yes`, `- Diagram
+taught: yes`, any case) fails as malformed rather than reading as absent. Two lines in a section,
+a value other than yes, no or pre-S11, a `yes` with no figure, or two `## §N` headings with the
+same number (the second would hide the first's floor) fails.
 
 Exit 1 when a block is unmapped, a row's cell doesn't parse, a target isn't a subsection, a line
-looks like a block header but isn't one, or the extracts hold no blocks (or a file holds none);
-0 otherwise. Stdlib only."""
+looks like a block header but isn't one, the extracts hold no blocks (or a file holds none), or a
+section breaks the figure floor; 0 otherwise. Stdlib only."""
 import argparse
 import os
 import re
@@ -33,7 +50,7 @@ import sys
 
 BLOCK = re.compile(r"^###\s+\[(?P<doc>[A-Za-z0-9_.-]+)\s+(?:p\.(?P<page>\d+)(?:-(?P<end>\d+))?"
                    r"|#/(?P<h>\d+)(?:/(?P<v>\d+))?"
-                   r"|Q(?P<q>\d+)(?:(?P<roman>[ivx]{2,})(?=[\] ])|(?P<letter>[a-z])(?:\.\d+|[ivx]+|\d+)?"
+                   r"|Q(?P<q>\d+)(?:(?P<roman>[ivx]{2,})(?=[\] ])|(?P<letter>[a-z])(?:\.\d+|\.?[ivx]+|\d+)?"
                    r"|\.(?P<sub>\d+)(?:[a-z]|\.\d+)?)?(?P<stem> stem)?"
                    r"|(?P<other>[^\]]+))\]")
 # A line that looks like a block header but isn't one: a wrong heading level, or an h3 with no
@@ -53,6 +70,17 @@ SECTION = re.compile(r"^## §(\d+)\b|^\|\s*(\d+(?:\.\d+)+)\s*\|", re.M)
 TARGET = re.compile(r"\d+(?:\.\d+)*")
 SEPARATOR = re.compile(r"\|[\s:|-]+\|?")
 EN_DASH = chr(0x2013)
+SECTION_HEAD = re.compile(r"^## §(\d+)\b.*$", re.M)
+DIAGRAM_TAUGHT = re.compile(r"^\s*-\s*Diagram-taught:\s*(.*)$")
+# Any list, quote, heading or bold form of the words, in any case: a line this matches and
+# DIAGRAM_TAUGHT doesn't is a misspelled Diagram-taught line, never an absent one.
+NEAR_DIAGRAM_TAUGHT = re.compile(r"^[\s>#]*(?:[-*+]|\d+[.)])?[\s*_]*diagram[-_ ]?taught", re.I)
+FIGURES = re.compile(r"^\s*-\s*Figures:(.*)$")
+FIG_ID = re.compile(r"`fig-[\w-]+`")
+# A backbone with no Diagram-taught line anywhere predates the rule; it passes with this warning.
+PRE_S11 = ("no section carries a `Diagram-taught: yes|no` line: a backbone written before the "
+           "figure floor (STYLE S11), so no section is held to it; a 10-polish figure pass adds the "
+           "lines and the figures")
 
 
 def span(a, b):
@@ -178,6 +206,72 @@ def matrix(backbone):
     return out, bad
 
 
+def figure_floor(backbone):
+    """([problems], [warnings]) for the figure floor: each `## §N` section's `- Diagram-taught:`
+    line and, when it says yes, a `fig-` id on its `- Figures:` line (a Figures line may wrap onto
+    indented lines). A `pre-S11` section is a warning (FB-015); a section with no line is one only
+    when no section carries a line (or a misspelled one)."""
+    heads = list(SECTION_HEAD.finditer(backbone))
+    found, bad, count = [], [], {}
+    for head in heads:
+        count[head.group(1)] = count.get(head.group(1), 0) + 1
+    for num in sorted((n for n, c in count.items() if c > 1), key=int):
+        bad.append(f"§{num}: DUPLICATE section number: {count[num]} `## §{num}` headings; each "
+                   "section number heads one section")
+    for i, head in enumerate(heads):
+        end = heads[i + 1].start() if i + 1 < len(heads) else len(backbone)
+        body = re.split(r"^## ", backbone[head.end():end], maxsplit=1, flags=re.M)[0]
+        lines = body.splitlines()
+        taught, malformed, figures = [], [], ""
+        for n, line in enumerate(lines):
+            m = DIAGRAM_TAUGHT.match(line)
+            if m:
+                taught.append(m.group(1).strip())
+            elif NEAR_DIAGRAM_TAUGHT.match(line):
+                malformed.append(line.strip())
+            m = FIGURES.match(line)
+            if m:
+                figures = m.group(1)
+                for more in lines[n + 1:]:
+                    if not more.startswith((" ", "\t")) or not more.strip():
+                        break
+                    figures += " " + more.strip()
+        found.append((head.group(1), taught, malformed, figures))
+    if not any(taught or malformed for _, taught, malformed, _ in found):
+        return bad, [PRE_S11] if found else []
+    warnings = []
+    for num, taught, malformed, figures in found:
+        for line in malformed:
+            bad.append(f"§{num}: MALFORMED Diagram-taught line `{line}`: write it "
+                       "`- Diagram-taught: yes|no` (or `pre-S11` for a reopened hub's older "
+                       "section or one a partial figure pass didn't reach)")
+        if malformed:
+            continue
+        if not taught:
+            bad.append(f"§{num}: no `Diagram-taught: yes|no` line, though other sections carry "
+                       "one: a fresh section states it, and a reopened hub's older section or one "
+                       "a partial 10-polish figure pass didn't reach says "
+                       "`- Diagram-taught: pre-S11` (FB-015)")
+            continue
+        if len(taught) > 1:
+            bad.append(f"§{num}: {len(taught)} Diagram-taught lines; a section has one")
+            continue
+        if re.match(r"pre-S11(?:\s|$|\()", taught[0]):
+            warnings.append(f"§{num}: Diagram-taught: pre-S11, a section written before the "
+                            "figure floor (STYLE S11, FB-015) or not yet reached by a figure "
+                            "pass, so it isn't held to it; a 10-polish figure pass sets yes or "
+                            "no and adds the figure")
+            continue
+        word = re.match(r"(yes|no)\b", taught[0])
+        if not word:
+            bad.append(f"§{num}: `Diagram-taught: {taught[0]}` is neither yes nor no "
+                       "(nor pre-S11)")
+        elif word.group(1) == "yes" and not FIG_ID.search(figures):
+            bad.append(f"§{num}: Diagram-taught: yes, but its Figures line names no `fig-` id: a "
+                       "section its slides teach through diagrams leads with a figure (STYLE S11)")
+    return bad, warnings
+
+
 def covered(row, m):
     """Whether a matrix row covers one block (a BLOCK match)."""
     if row is None:
@@ -203,13 +297,26 @@ def covered(row, m):
     return parts[key] is None or (part is not None and part in parts[key])
 
 
+def solutions_blocks(root, name):
+    """Whether _build/solutions/<name> holds a block: an extract whose sources were all answers
+    (a separate answers file) holds none of its own, and the matrix maps no answers."""
+    try:
+        with open(os.path.join(root, "_build", "solutions", name), encoding="utf-8") as f:
+            return any(BLOCK.match(line) for line in f)
+    except OSError:
+        return False
+
+
 def unmapped(root):
     with open(os.path.join(root, "_build", "backbone.md"), encoding="utf-8") as f:
-        rows, bad = matrix(f.read())
+        backbone = f.read()
+    rows, bad = matrix(backbone)
+    floor, warnings = figure_floor(backbone)
+    bad += floor
     total, missing = 0, []
     d = os.path.join(root, "_build", "extract")
     for name in sorted(os.listdir(d)) if os.path.isdir(d) else []:
-        if not name.endswith(".md"):
+        if not name.lower().endswith(".md"):
             continue
         with open(os.path.join(d, name), encoding="utf-8") as f:
             lines = f.read().splitlines()
@@ -224,9 +331,9 @@ def unmapped(root):
             found += 1
             if not covered(rows.get(m.group("doc")), m):
                 missing.append(f"{m.group(0)[4:].strip()} ({name})")
-        if not found:
+        if not found and not solutions_blocks(root, name):
             bad.append(f"NO BLOCKS in {name} (a header that isn't `### [<doc> <locator>]`?)")
-    return total, missing, bad
+    return total, missing, bad, warnings
 
 
 def main(argv=None):
@@ -236,7 +343,9 @@ def main(argv=None):
     if not os.path.exists(os.path.join(args.root, "_build", "backbone.md")):
         print("coverage_check: no _build/backbone.md here", file=sys.stderr)
         return 2
-    total, missing, bad = unmapped(args.root)
+    total, missing, bad, warnings = unmapped(args.root)
+    for w in warnings:
+        print(f"coverage_check: WARN: {w}", file=sys.stderr)
     print(f"{total} extract blocks; {len(missing)} unmapped")
     for m in missing:
         print(f"  UNMAPPED {m}")

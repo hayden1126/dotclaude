@@ -55,7 +55,7 @@ SVG_TAGS = {"svg", "g", "line", "circle", "ellipse", "rect", "path", "polygon", 
             "tspan", "title", "desc", "defs", "marker"}
 ANSWER_SPACE = "_(answer space)_"
 URL_REF = re.compile(r"""url\(\s*(['"]?)#([^)'"\s]+)\1\s*\)""", re.I)  # CSS reads URL( too
-PAGE_ID = re.compile(r"^(q\d+[a-z]?|view-.*|main|themeBtn|MathJax-script|MJX-.*)$")
+PAGE_ID = re.compile(r"^(q\d+[a-z]?|view-.*|main|themeBtn2?|fsBtn2?|MathJax-script|MJX-.*)$")
 ENTITIES = {"lt", "gt", "amp", "quot", "apos"}
 
 

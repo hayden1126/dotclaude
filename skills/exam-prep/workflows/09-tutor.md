@@ -1,6 +1,6 @@
 # 09 Tutor
 
-Baseline as of 2026-11-10; changes only via `12-retro`.
+Baseline as of 2026-11-12; changes only via `12-retro`.
 
 The student studies with the hub: walks through a set one part at a time, takes a true-or-false
 quiz, or asks about the material. The main session tutors and only answers; every change to the
@@ -12,18 +12,21 @@ picks it up.
 
 ## Step 1: Where things are
 
+- First, a `_build/held-check.md` left behind (Step 7's check of a held passage, cut short) is
+  deleted unread, before anything else: it holds held text (hub CLAUDE.md).
 - STATUS: the notes page's URL and every other artifact's (FB-008), its `Tutor:` line, and
   `_build/logs/tutor.md` for where the last walk-through or quiz stopped (the log wins over a
   Tutor line it has moved past). When the student says where they are ("we finished Q1 and Q2,
   start with Q3a"), their word wins: log it.
-- PLAN.md's Checker line; MANIFEST.md's Answers column and its `solutions to <doc>` notes; hub
+- PLAN.md's Checker line; MANIFEST.md's Answers and Key columns; hub
   CLAUDE.md's exam-format statement and Logistics line.
 - The mocks. A mock is untaken while its file `practice/mock-<slug>.md` (not a `-key.md` file)
   exists and STATUS records no attempt of it (`08-practice` step 8.2 records each one, its misses
   or none). While one is, `08-practice` step 8's rules bind the tutor: it opens no untaken mock's
   key, `practice/mock-values-key.md` or `_build/verify/mock_key.py`, and keeps every search inside
-  `notes/`, `cheatsheet/`, `_build/frag/` and `_build/extract/` (which hold no mock), but for Step
-  5.5.4's grep of `practice/cram-order.md`; every STATUS write is followed by that stage's STATUS check with the untaken mocks' keys
+  `notes/`, `cheatsheet/`, `_build/frag/`, `_build/extract/` and `_build/solutions/` (which hold
+  no mock), but for Step 5.5.4's grep of `practice/cram-order.md`; every STATUS write is followed
+  by that stage's STATUS check with the untaken mocks' keys
   (its step 4's opening); every notes or sheet change runs its "Changing the notes or a sheet"; a
   one-line sheet addition goes where its step 8 says (Step 5.2); and the next-step line stays as it
   stands.
@@ -39,21 +42,23 @@ picks it up.
     unless its official solutions are extracted (Step 3), and so does a part that needs the
     reference extended;
   - it makes no fresh true-or-false statement, keeps every search inside `notes/`, `cheatsheet/`,
-    `_build/frag/` and `_build/extract/`, and never opens `_build/mock-plan.md`:
+    `_build/frag/`, `_build/extract/` and `_build/solutions/`, and never opens
+    `_build/mock-plan.md`:
     before any mock file exists, the plan already holds the mocks' questions and their variants;
   - it reads `notes/`, `cheatsheet/` and `_build/frag/` as committed, never from
     disk: the build edits them in place, and from 08's step 2 commits a change only once its leak
     compare passes (`08-practice`'s "Changing the notes or a sheet", item 4), so a line on disk may
     state a mock's answer. Search them with `git grep -n -e <phrase> HEAD -- notes/ cheatsheet/
     _build/frag/`, and read a passage with `git show HEAD:<path> | sed -n
-    '<from>,<to>p'`. `_build/extract/` is searched and read
-    from disk with the Grep and Read tools, whose output stays folded (Step 3): a part's block holds
-    its `Solution [` line; but not a file `git status --short -- _build/extract/` lists, which a
-    build's `02-extract` is still writing (`11-next-exam`'s builds too);
+    '<from>,<to>p'`. `_build/extract/` and `_build/solutions/` are searched and read from disk
+    with the Grep and Read tools, whose output stays folded (Step 3): a part's block in
+    `_build/solutions/` holds its solution; but not a file
+    `git status --short -- _build/extract/ _build/solutions/` lists, which a build's `02-extract`
+    is still writing (`11-next-exam`'s builds too);
   - it dispatches no patch: one the student approves waits under `## Pending patches` in the log
     (Step 5.3), a one-line sheet addition marked `sheet line`, and the build session never
     dispatches one either (it can't show the student a change or ask them); official
-    solutions that arrive, and the `yes, attempted` cell of a set the student finishes (Step 7),
+    solutions that arrive, and the `attempted` cell of a set the student finishes (Step 7),
     wait under `## Waiting checks`;
   - it writes no STATUS (the log says where the student is) and runs no handoff skill, whose check
     wants a STATUS edit and a clean tree, both the build's: it ends with the log's commit alone,
@@ -102,9 +107,16 @@ Settle it before the first part:
 
 - A taken mock: its key, `practice/mock-<slug>-key.md`. An untaken mock is never walked through:
   it is a timed rehearsal (`08-practice` step 8.1).
-- A set whose official solutions are extracted (MANIFEST.md marks their file `Answers: yes`, with
-  `solutions to <doc>` in its Notes): the `Solution [` line under each part's block in
-  `_build/extract/`.
+- A set whose official solutions are extracted (MANIFEST.md marks their file `Answers: yes`, its
+  Key cell `for <doc>`, or the set's own row `Answers: yes` with a Key cell of its own pages,
+  `inline` or `sections: ...`, a past exam with its key): the part's block, `### [<doc> <part>]`,
+  in `_build/solutions/<name>.md`, `<name>` being the set's extract name (find the line with
+  `grep -n -F '### [<doc> <part>]' _build/solutions/<name>.md`), its `Solution [` line and the
+  working under it, read with the stem block `### [<doc> Q3 stem]` before the parts when there
+  is one, plus the answers file's page blocks the `Solution [` line cites, in their home file:
+  the set's own file when the answers file solves that set alone or the set holds its own key,
+  `_build/solutions/<doc id in lower case>.md` when it solves several sets (`02-extract`, "The
+  solutions file"). A block reading `No official solution.` sends the part to the next source.
 - Any other set, with a checker: its values from the reference, before the first part (hard rule 3),
   once `selftest.py` prints `ALL PASS` (`05-verify` step 1) and no build runs (Step 1). Copy
   `<skill>/templates/verify-set-key.py` to `_build/verify/set_key.py` once, add the set's doc id to
@@ -119,20 +131,21 @@ Settle it before the first part:
   compare part by part, then delete the copy. Tell the student which parts the log grades whose
   value changed, by part id, and pose those parts again. A part the reference can't compute yet is a
   `pending()` call while the reference is extended as `08-practice` step 4.1 says (tested first on a
-  worked example from a lecture or from a set MANIFEST.md marks `yes, attempted`, the self-test
+  worked example from a lecture or from a set whose own MANIFEST.md row says `attempted`, the self-test
   rerun: any other set's would show its official answer in the self-test's edit, so ask first, as
   Step 6 does), and once mocks exist `08-practice` step 4's rerun clause for a changed reference
   follows (items 2 and 4; on the cram night a changed part of an untaken mock is left to the key
   recheck writer, as it says, its `Reference changed:` STATUS line committed with the reference
-  change, so `08-practice` step 8.1's key gate rechecks it before the next attempt): it isn't graded
+  change, so `08-practice` step 8.1's key gate (FB-159) rechecks it before the next attempt): it isn't graded
   until its `value()` replaces the call, and the other parts go first. A set whose official
   solutions give final answers only gets values here too when the student's partial work needs its
   intermediate values.
 - A part left to the notes (a proof, a justification), and every part when PLAN.md's Checker line
   says nothing is computable: the rule or method the notes state, cited, and the rubric.
 
-A `reserved` set belongs to a later exam: never open it. Read an extract, a key or a values file
-by its path with the Read tool, and search only extracts, with the Grep tool (a search over
+A `reserved` set belongs to a later exam: never open it. Read an extract, a solutions file, a key
+or a values file by its path with the Read tool, and search only extracts and solutions files,
+with the Grep tool (a search over
 `practice/` returns untaken mocks' key lines): their output stays folded on the student's screen,
 where a shell command prints it; and say nothing of a part's answer before the student's
 attempt. A failing self-test check prints the official answer it expected, so every `selftest.py`
@@ -208,23 +221,43 @@ At each set's end, its score in the reply and the log: verdicts right, and reaso
 ## Step 5: Questions and patches
 
 1. Answer a definition or yes/no question from what you know first, in the course's words; then
-   check the notes and say if they differ. Answer first (FB-164). A fact question gets a direct
-   answer and a tiny sanity case ("3 bits give 0 to 7"); the answer text is short and exam-ready,
-   in the course's words. In chat, write symbols as Unicode or plain text, never LaTeX delimiters,
-   and never coin a label the course doesn't use (FB-192). "Be even clearer" gets a clearer
-   version. A number or trace in an answer comes from the checker
-   (`_build/verify/examples.out.md`, or the reference run on the example), never by hand.
+   check the notes and say if they differ. Answer first (FB-164). Short by default: bold-labelled
+   bullets, one or two sentences each, only those the question needs, in this order: **Rule**,
+   **Why**, **Steps**, **Example** (cut to its numbers: a tiny sanity case, "3 bits give 0 to 7"),
+   **Trap**, **Answer form** (what a full-mark answer writes down). The full derivation only when
+   the student asks for it; "be even clearer" gets a clearer version, still short. Define each
+   symbol and term at its first use in the answer, even one an earlier answer defined. When one
+   letter means two things across the course's topics, name the senses apart every time ("n
+   items", "n steps"), never the bare letter. In chat, write symbols as Unicode or plain text
+   (x², a₁, ≤), never LaTeX delimiters and never HTML tags (no `<sub>` or `<sup>`), and never coin
+   a label the course doesn't use (FB-192). A number or trace in an answer comes from the checker
+   (`_build/verify/examples.out.md`, or the reference run on the example), never by hand. With a
+   sheet (`07-cheatsheet` built one), an answer about a fact ends with where the fact is on the
+   sheet the student will bring (the final sheet once `08-practice` step 8.3 has built it, else
+   the mock sheet, or the one sheet), as its index gives it (`07-cheatsheet` step 3, FB-144): the block,
+   its side and column (`Sums, side 1, column B`), or `not on the sheet`. The sheet's HTML is read
+   under `cheatsheet/` (during a build as committed, Step 1); a fact not on it that the student
+   would need cold is a gap for item 2's sheet line.
 2. Then search `notes/` for the point. When the notes don't say it where the student was reading, or
-   say it unclearly there, offer the patch: the exact sentence (one short sentence at the point of
-   confusion; the student's own insight is often the best one, A3.C16), the subsection, the line it
-   follows or replaces, and for the sheet a one-line form when one fits (FB-166). When the notes
-   already say it elsewhere, point there instead. While a mock is untaken, a sheet line goes where
+   say it unclearly there, the gap goes at once into the log's `## Pending patches`, a line marked
+   `proposed` (Step 7 commits it): the exact sentence (one short sentence at the point of
+   confusion; the student's own insight is often the best one, A3.C16), the subsection, the text it
+   follows or replaces, quoted, and for the sheet a one-line form when one fits (FB-166). Don't offer
+   it yet: every five questions, and before the session ends or a mock attempt starts, offer every
+   `proposed` line together as one notes patch, in one message, so the student weighs one patch,
+   not one per question. Each place in that offer, and every pointer to the notes in an answer, is
+   the published page's subsection by its number and title, linked `<notes URL>#<id>` (plain-text
+   notes: the section named as text), never a source file or a line number: the student reads the
+   page (A3.C2, FB-160). When the notes already say it elsewhere, point there instead, the same way. While a
+   mock is untaken, a sheet line goes where
    `08-practice` step 8 puts one: into the final sheet once its step 8.3 has built it, and until
    then into STATUS as a final-sheet item for 8.3 (bookkeeping, no writer). Otherwise it goes on the
    sheet `07-cheatsheet` built last; with no sheet yet the notes patch alone carries it, since 07
    picks from the notes.
-3. On the student's yes, dispatch it at once (FB-169: the draft first, applied when told, never
-   left for later). When it can't go yet (the hub isn't free, "One open patch" below, or an older
+3. On the student's yes, to the offer or to the lines they pick, the approved lines become one
+   pending line, unmarked, its text each approved sentence with its place, and each `proposed`
+   line is struck through, `in the <date> patch` or `declined`. Dispatch it at once (FB-169: the
+   draft first, applied when told, never left for later). When it can't go yet (the hub isn't free, "One open patch" below, or an older
    pending line waits, which goes first), log it under `## Pending patches` (the approved text,
    where it goes, the date) for Step 1; while any line is `held: mock first` (Step 5.5.9), it is
    logged with that mark too. Text the student rewords is shown again before it goes.
@@ -290,7 +323,7 @@ At each set's end, its score in the reply and the log: verdicts right, and reaso
       page's rebuild, which renders the fixed row into the map (`06-site` step 4). A sheet's refit is the main session's (Step 7), and
       a LaTeX sheet is read as its `.tex` here; the student compiles it only at item 8, after the
       leak compare.
-   5. That section's item 4: the questions check when the stat named `notes/`,
+   5. That section's item 4: the questions check when the stat named `notes/` or `cheatsheet/`,
       and while a mock is untaken the leak compare with the baseline in
       `_build/logs/patch-baseline.txt`.
    6. A check in item 4 that fails, a questions hit or a new leak hit in item 5, a wording cut or an
@@ -349,6 +382,7 @@ student's drop of a dispatched line (below), stays until its RESTORE follow-up g
 
 | Mark | Open | Where it goes on |
 |---|---|---|
+| `proposed` | no | a gap not yet offered: offered with the other `proposed` lines every five questions (Step 5.2); on the student's yes, joined into one unmarked line (Step 5.3); else struck through `declined` |
 | none | no (a line whose change is in HEAD keeps its mark) | dispatched when the hub is free (Step 5.4) |
 | `held: <why>` | while its change is in HEAD | a mark still naming a branch: its worktree and branch removed first (Step 5.5.1). On the student's go: an open one, Step 5.4 with its fields at once (its own dispatch); else Step 5.4 when the hub is free, or the mark cleared, its fields kept, to wait in order. Or dropped (below) |
 | `dispatched <date>` | yes | in a fresh session, once `delegation-ledger watch` (the delegation skill) shows no live writer for it: with a `drop` field, Step 5.5's drop; else its worktree's branch with a commit of its own, Step 5.5.2; none, or no worktree (the Agent tool removes one that changed nothing), Step 5.5.1 |
@@ -376,10 +410,19 @@ change itself waits for Step 5.5.7.
 ## Step 6: Official solutions that arrive
 
 During a build (Step 1) this waits for the build's end, as a line under the log's `##
-Waiting checks`. Run `01-ingest` for the file (its MANIFEST.md row `Answers: yes`, `solutions to
-<doc>` in Notes) and `02-extract` for the set again with its solutions, one agent, so each lands
-under its part. Then `05-verify`, "Official solutions that arrive late", which adds them to the
-self-test and diffs every answer against the notes and any `practice/tutor/` values file. That
+Waiting checks`. Run `01-ingest` for the file (its MANIFEST.md row `Answers: yes`, its Key cell
+`for <doc>`) and `02-extract` for the set again with its solutions, as its step 1 says: an
+answers file that solves this set alone shares its agent, which writes the pair (the extract,
+and the solutions file with each solution under its part's block id); one that solves several
+sets gets its own agent, which writes, for each set, one solutions file beside each extract that
+holds the set's blocks (a deck split over two extracts may need two), and one for its own pages,
+while
+each set's own agent writes only its extract.
+Both run before the next questions check (`05-verify` step 5), so no patch dispatches between
+them: once the row names an unattempted set, the check exits 2 (`no file holds <DOC>, ...`)
+until the solutions files hold the answers file's blocks.
+Then `05-verify`, "Official solutions that arrive late", which adds them to the self-test and
+diffs every answer against the notes and any `practice/tutor/` values file. That
 check shows answers: the self-test's new lines show in the edit, a failing line prints both values,
 and STATUS records what was wrong; so does 02's fix of a flagged solution line (its step 3.2), in
 an edit. For a set the student hasn't attempted in full both wait, as a line under the log's `##
@@ -387,8 +430,9 @@ Waiting checks` (Step 7): ask, and run them on their go (the edits may show answ
 part is attempted. The self-test's output goes to its file (Step 3), and STATUS records the verdict
 by part only (`HW3: Q1a and Q2a match; Q2b differs, §2.3 fixed`). Show the student the table of
 parts and whether each matched; the official answers themselves only for parts they have attempted,
-or on request (Step 3). Each fix to the notes is offered and dispatched as Step 5 says. A set
-already attempted in full gets `yes, attempted` in the new row at once (Step 7).
+or on request (Step 3). Each fix to the notes is offered and dispatched as Step 5 says. The new
+answers row stays `yes`: a set's attempt is marked in that set's own row (Step 7), never in an
+answers file's row, which may solve several sets.
 
 ## Step 7: The log and the session's end
 
@@ -399,26 +443,39 @@ already attempted in full gets `yes, attempted` in the new row at once (Step 7).
   reasoning instead, and its scores close it. The section ends `Next: <part>`. The log ends with
   three sections, kept last: `## Patterns` (Step 5.6), `## Pending patches` (Step 5.3) and `##
   Waiting checks` (Step 6, and a MANIFEST.md cell held during the build: the set and what waits),
-  each line dated. A pending line's marks are Step 5's "One open patch" table; a waiting line is
+  each line dated, a `proposed` line written as the question exposes its gap, so a session that
+  ends early loses none. A pending line's marks are Step 5's "One open patch" table; a waiting line is
   struck through once it runs. The log names parts and what went wrong, never a part's answer (hard
   rule 4); a pending line keeps its approved text exactly.
 - STATUS keeps one line, `Tutor: <set> <walk-through or quiz>, next <part>; <N> patches pending
   (_build/logs/tutor.md)`, current as each part closes. It is never the next-step line: routing
   and the cram night own that.
 - When every part of a set has been attempted or its solution shown, in walk-throughs and quizzes
-  together, the MANIFEST.md row whose Notes say `solutions to <that set>`, if there is one, gets
-  `yes, attempted` in its Answers cell: the notes and sheets may quote it from then on (`04-write`).
-  With no such row, the set's own row's Answers cell becomes `no, attempted YYYY-MM-DD` (today's
-  date), the one place `05-verify` step 5's questions check reads it. A check waiting on the set
-  (Step 6) runs then. During a build the cell waits under `## Waiting checks` for the build's end
-  (Step 1).
-- Once a set is attempted (its solutions row reads `yes, attempted`, or with no solutions row its
-  own row's Answers cell reads `no, attempted YYYY-MM-DD`), each `_build/held.md` entry that names
+  together, that set's own MANIFEST.md row records it in its Answers cell, with today's date: a
+  set with no key of its own (Answers `no`) becomes `no, attempted YYYY-MM-DD`, and a doc that
+  holds its own key (Answers `yes`, a past exam) becomes `yes, attempted YYYY-MM-DD`. A separate
+  answers file's row (Key `for ...`) stays `yes` and never records an attempt,
+  since it may solve several sets. The notes and sheets may quote the set's official solution from
+  then on (`04-write`), or, when its answers file solves several sets, once every set that file
+  solves is attempted (until then the questions check still reads that file's own file), and `05-verify` step 5's questions check reads these cells. A check
+  waiting on the set (Step 6) runs then. During a build the cell waits under `## Waiting checks`
+  for the build's end (Step 1).
+- Once a set is attempted (its own row's Answers cell reads `no, attempted YYYY-MM-DD` or `yes,
+  attempted YYYY-MM-DD`), each `_build/held.md` entry that names
   it is offered back as a patch (FB-191): a passage `05-verify` step 5 cut or held back because it
-  overlapped that set. Show the student its section and its original text, and on their yes dispatch
-  it as Step 5 says. Remove the entry once its patch merges or the student declines it. While
-  another set is unattempted, the passage runs `05-verify` step 5's questions check against that set
-  first, and a hit waits for that set too.
+  overlapped that set. An entry held from a multi-set answers file's own file (a hit labelled with
+  that file's block, `[HWS p.N]`) names every set that file solves, never the file itself, whose
+  row records no attempt: it is offered back once all of them are attempted. Before it is
+  offered, the main session runs the questions check on the passage alone, since it is not under
+  `notes/` yet and may overlap a set the entry doesn't name: it writes the original text to
+  `_build/held-check.md` and runs `python3 -I <skill>/scripts/mock_leak.py --hub . --pages
+  _build/held-check.md` from `<root>`, then deletes that file (it holds held text, quarantined
+  like `_build/held.md`: no agent reads it, and a session that finds one left behind by a run cut
+  short deletes it before anything else, hub CLAUDE.md). The passage
+  is offered only once this prints QUESTIONS OK, so every set it overlaps is attempted; a hit
+  names a set still unattempted, which the entry then names too and waits for. Then show the
+  student its section and its original text, and on their yes dispatch it as Step 5 says.
+  Remove the entry once its patch merges or the student declines it.
 - This bookkeeping (the log, STATUS, MANIFEST.md's Answers cell) and `_build/verify/` are the
   main session's. Every change to the notes' or a sheet's text is a writer's (hard rule 9);
   refitting a sheet after one (`07-cheatsheet` step 4's `--fs`, a block moved between sides) is a

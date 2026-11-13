@@ -1,6 +1,6 @@
 # 12 Retro
 
-Baseline as of 2026-11-10; changes only via `12-retro`.
+Baseline as of 2026-11-12; changes only via `12-retro`.
 
 After a round's exams, the retro turns what the student corrected into changes to this skill, so
 the next course starts from them instead of finding them again (FB-010). A round is the exams
@@ -74,6 +74,16 @@ itself, and its worktrees' folders after it). A sibling directory can match too 
 `w1`), so before step 3 read each shard's `Working directory` line and delete a shard from outside
 the hub.
 
+A hub whose sessions ran from a parent directory (the hub is a subdirectory with its own repo, such
+as `<parent>/<hub>/`, worked on from `<parent>`) has transcripts in the parent's folder too, beside the
+parent's other work. Take that folder's transcripts as well, with a window of their own whose since
+is the `until` of the latest `evidence.md` row for that folder (a row whose hub path is the parent
+or inside it), or none when there is no such row. Their shards' `Working directory` line names the
+parent, so the rule above doesn't sort them: filter them by content instead, keeping a shard that
+names the hub (its path, or its subdirectory's name beside its files, `grep -l`) and deleting the
+rest, each drop logged in `retro.md` with the shard's name and why. Log the parent's folder and its
+window in `retro.md` and in the hub-exam's `evidence.md` row, so the next retro starts there.
+
 Each hub-exam's window, logged in `retro.md` and in its `evidence.md` row before condensing, where
 the next retro finds it (a resume keeps a logged window):
 
@@ -101,7 +111,10 @@ with `!` in front.
 Load the delegation skill first. Spawn one `researcher` per hub-exam, unnamed, from
 `<skill>/templates/agent-briefs.md`, section "Retro harvest", all at once; a hub-exam whose shards
 pass about 400 KB gets one per shard group of about that size, and only the first group's reads the
-hub's records. Each reads its shards and, inside its window, its hub's records: the tutor log
+hub's records. A hub whose records are long (the tutor log, the polish and source logs and STATUS
+together pass about 200 KB, an unmeasured guess at what crowds a reader's shards out) gets a
+records-only reader of its own instead, spawned with the shard readers: its brief names no shard
+and keeps the records lines and section 4, and no shard reader reads the records. Each reads its shards and, inside its window, its hub's records: the tutor log
 (`_build/logs/tutor.md`, its tables and `## Patterns`), the polish logs (`_build/logs/polish-*.md`),
 a source added's log (`_build/logs/source-*.md`), the skill fixes made in the hub
 (`_build/logs/skill-fixes.md`, FB-014: each a candidate), STATUS's judgment calls, PLAN.md's

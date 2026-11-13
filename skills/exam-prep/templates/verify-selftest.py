@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 r"""Self-test: the reference must reproduce every official solution before anything uses it.
 
-exam-prep template verify-selftest.py, baseline as of 2026-10-20; changes only via `12-retro`.
+exam-prep template verify-selftest.py, baseline as of 2026-11-12; changes only via `12-retro`.
 Copy it to _build/verify/selftest.py and fill the marked parts. Run from the hub root:
 
   python3 -I _build/verify/selftest.py      exit 0 only when every check passes
@@ -11,10 +11,12 @@ imported below. Each `check` names the official answer part it reproduces, cited
 notes cite (`HW1 Q2c [HW1S p.3]`), so a FAIL points at the page to read. An official part the
 reference can't compute (a proof, an explanation) is a `skip` with its shape. An `example` checks
 a worked example the course itself shows (a slide, a reading): it isn't an official part, but it
-tests the reference before any solutions are out. PARTS is the number of official answer parts
-the extracts hold:
+tests the reference before any solutions are out. PARTS is the number of official answer parts:
+the question parts whose block in _build/solutions/ holds a `Solution [<doc> <loc>]` line (a part
+whose block says `No official solution.`, an answers file's page block and a lecture's worked
+example never count), printed from the hub root by:
 
-  grep -hE '^[-*[:space:]]*Solution \[' _build/extract/*.md | wc -l
+  python3 -I <skill>/scripts/extract_check.py --parts
 
 It passes only when its checks and skips name exactly PARTS distinct parts, none twice: a
 self-test that checks three of forty answers proves little. With no check and no example it
@@ -25,7 +27,8 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))  # -I leaves the script dir out
 
-PARTS = None  # ---- Fill in: the official answer parts the extracts hold (the grep above).
+PARTS = None  # ---- Fill in: the question parts whose solutions block holds a `Solution [` line
+#                    (python3 -I <skill>/scripts/extract_check.py --parts prints it).
 FAILS = []
 RUN = []
 SKIPPED = []

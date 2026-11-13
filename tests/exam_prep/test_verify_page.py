@@ -1,5 +1,7 @@
 """skills/exam-prep/scripts/verify_page.mjs: where it finds Playwright, its --steps file, and what
-its browser checks catch.
+its browser checks catch. The sample's pinned figure panel (C5) passes at both widths, and its
+page broken to open no panel, repeat ids in the copy, keep a step-through's controls or pin on a
+Ctrl+click fails; so does a Review view that hides the concise box (C6).
 
 No browser runs in the first two: each candidate install is a fake `playwright` package whose
 index.mjs prints its name and exits 7 as soon as it is imported. PATH holds only node and, where a
@@ -25,7 +27,10 @@ there too; its page broken to show an untagged paragraph, hide an rv block or dr
 list fails, and so does a link to a hidden target that doesn't switch to Full notes; a section
 with an Unverified banner before its first h3 is hidden whole, and shown it fails; and a load at
 a hidden target's hash, or a hash change to one, with the Review view remembered, that doesn't
-switch to Full notes fails."""
+switch to Full notes fails. The sample's theme chrome (CHASSIS.md, C2 to C4) passes, and its page
+broken to give the root a transparent or unset scrollbar track, put a worded theme button in the
+rail, unfix the theme icon, let T flip the theme with Ctrl held or typed in an input, drop the T
+key, or show or hide the full-screen buttons against what the frame grants, fails."""
 import contextlib
 import importlib.util
 import io
@@ -400,9 +405,9 @@ class BrowserCatchesTest(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         self.assertIn("[1280-light-review]", r.stdout)
         self.assertIn("  review view shows its blocks and hides the rest", r.stdout)
-        self.assertIn("hidden-target link #sec-2-walks: switched to Full notes", r.stdout)
-        self.assertIn("a hash change to hidden #sec-2-walks: switched to Full notes", r.stdout)
-        self.assertIn("a load to hidden #sec-2-walks: switched to Full notes", r.stdout)
+        self.assertIn("hidden-target link #sec-2-basics: switched to Full notes", r.stdout)
+        self.assertIn("a hash change to hidden #sec-2-basics: switched to Full notes", r.stdout)
+        self.assertIn("a load to hidden #sec-2-basics: switched to Full notes", r.stdout)
         self.assertIn("long jump chromium 1280px review top->last ok:", r.stdout)
         self.assertIn("long jump chromium 390px review bottom->first ok: #sec-2", r.stdout)
         shots = set(os.listdir(os.path.join(self.tmp, "review", "shots")))
@@ -413,9 +418,17 @@ class BrowserCatchesTest(unittest.TestCase):
         # The page's own rule broken one way at a time: the check reads CHASSIS.md's rule itself.
         keep_p = self.edit("if(tag==='h2') return;", "if(tag==='h2'||tag==='p') return;")
         self.fails("rvshowp", "the Review view shows p", page=keep_p)
-        hide_rv = self.edit("if(k.classList.contains('rv')){ if(h3) h3.classList.remove('rvhide'); return; }", "")
+        # The rv and concise boxes share one branch: drop either test and that box is hidden.
+        # Without rv, 1.2's h3 (rv blocks only) hides too; 1.1's stays for its concise box.
+        shown = "if(k.classList.contains('rv')||k.classList.contains('concise')){"
+        hide_rv = self.edit(shown, "if(k.classList.contains('concise')){")
         out = self.fails("rvhide", "the Review view hides div.callout.warn.rv", page=hide_rv)
-        self.assertIn("the Review view hides h3#sec-1-sums", out)
+        self.assertIn("the Review view hides details#ex-1-range", out)
+        self.assertIn("the Review view hides h3#sec-1-rules", out)
+        self.assertNotIn("hides div.concise", out)
+        hide_concise = self.edit(shown, "if(k.classList.contains('rv')){")
+        out = self.fails("rvconcise", "the Review view hides div.concise", page=hide_concise)
+        self.assertNotIn("hides div.callout.warn.rv", out)
         no_must = self.edit("if(must&&(tag==='ul'||tag==='ol')){ must=false; return; }", "")
         self.fails("rvmust", "the Review view hides ul", page=no_must)
 
@@ -447,15 +460,142 @@ class BrowserCatchesTest(unittest.TestCase):
 
     def test_a_hash_to_a_hidden_target_that_doesnt_switch_views(self):
         # Loaded at a hidden target's hash, or a hash change to one, with the Review view remembered.
-        self.fails("rvload", "a load to #sec-2-walks, hidden in the Review view, didn't switch to Full notes",
+        self.fails("rvload", "a load to #sec-2-basics, hidden in the Review view, didn't switch to Full notes",
                    page=self.edit("    hashToHidden();\n", ""))
-        self.fails("rvhash", "a hash change to #sec-2-walks, hidden in the Review view, didn't switch",
+        self.fails("rvhash", "a hash change to #sec-2-basics, hidden in the Review view, didn't switch",
                    page=self.edit("window.addEventListener('hashchange',hashToHidden);", ""))
 
     def test_overflow_inside_an_open_worked_example(self):
         self.fails("wexwide", "with the worked examples and map open", page=self.edit(
             "<p>Setup: the range 3 to 7.</p>",
             '<p>Setup: the range 3 to 7.</p><div style="width:3000px">wide</div>'))
+
+    # The theme chrome (CHASSIS.md, C2 to C4).
+    def test_the_pinned_figure_panel_and_the_concise_box_pass(self):
+        r = self.verify("pin")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("pinned figure: 3 figure links, #fig-2-triangle pinned as a bottom sheet, swapped, closed\n",
+                      r.stdout)
+        self.assertIn("pinned figure: 3 figure links, #fig-2-triangle pinned beside the text, swapped, closed, "
+                      "previewed on hover", r.stdout)
+        shots = set(os.listdir(os.path.join(self.tmp, "pin", "shots")))
+        for name in ("390-dark-pin.png", "1280-light-pin.png", "1280-light-review-pin.png", "1280-light-fig-1-slide.png"):
+            self.assertIn(name, shots)
+
+    def test_a_panel_that_jumps_repeats_ids_or_ignores_modifiers(self):
+        self.fails("pinnone", "a click on the link to figure #fig-2-triangle opened no panel (role=\"dialog\") (C5)",
+                   page=self.edit("var a=e.target.closest&&e.target.closest('a.xref'), fig=figOf(a); if(!fig) return;\n"
+                                  "      e.preventDefault();", "return;"))
+        self.fails("pinids", "with #fig-2-triangle pinned, ids repeat: fig-2-triangle",
+                   page=self.edit("map[el.id]=el.id+suffix;", "map[el.id]=el.id;"))
+        self.fails("pinlive", "the pinned step-through #fig-2-walk keeps",
+                   page=self.edit("c.querySelectorAll('.fig-controls').forEach(function(x){x.remove();});", ""))
+        self.fails("pinmod", "a Ctrl+click on a figure link pinned the figure",
+                   page=self.edit("e.button!==0||e.ctrlKey||e.metaKey||e.shiftKey||e.altKey", "e.button!==0"))
+
+    def test_a_pinned_copy_wider_than_its_panel(self):
+        # Without the panel's own scaling, the page's 460 px floor for a figure on a phone pushes the
+        # copy past a 390 px bottom sheet's edge.
+        out = self.fails("pinwide", "390-light: the pinned copy of #fig-2-triangle runs past the panel", page=self.edit(
+            ".figpin figure svg,.figpin figure>img{min-width:0;max-width:100%;height:auto}", ""))
+        self.assertNotIn("1280-light: the pinned copy", out)
+
+    def test_a_review_view_that_hides_the_concise_box(self):
+        self.fails("rvbox", "the Review view hides div.concise", page=self.edit(
+            "k.classList.contains('rv')||k.classList.contains('concise')", "k.classList.contains('rv')"))
+
+    # The drawer over a pinned sheet at 900 px and below (C5) and the foot's tail (C1).
+    ESC_RAIL = ("document.addEventListener('keydown',function(e){if(e.key==='Escape'&&!e.defaultPrevented&&"
+                "rail.classList.contains('open')){e.preventDefault();closeNav();}});")
+    ESC_PANEL = "if(e.key==='Escape'&&!e.defaultPrevented&&!panel.hidden&&!rail.classList.contains('open')) unpin();"
+    FIT = ("var natural=se.scrollHeight-window.innerHeight-((parseFloat(getComputedStyle(main).paddingBottom)||0)"
+           "-8*rem);")
+    MUST_KNOW = re.compile(r'(<h3 id="sec-2-must-know">[^<]*</h3>\s*)<ul>.*?</ul>', re.S)
+
+    def short_tail(self):
+        """The sample page with its last subsection cut to one line (its list, which holds the
+        figure links, moved up into the subsection before), so its foot needs a tail at 390 px."""
+        self.assertEqual(len(self.MUST_KNOW.findall(self.page)), 1)
+        return self.MUST_KNOW.sub(lambda m: m.group(0)[len(m.group(1)):] + "\n" + m.group(1) + "<p>One line.</p>",
+                                  self.page)
+
+    def test_an_escape_that_closes_the_drawer_and_the_pinned_figure_both(self):
+        page = self.edit(self.ESC_RAIL, "document.addEventListener('keydown',function(e){if(e.key==='Escape'&&"
+                                        "rail.classList.contains('open'))closeNav();});")
+        self.assertEqual(page.count(self.ESC_PANEL), 1)
+        page = page.replace(self.ESC_PANEL, "if(e.key==='Escape'&&!panel.hidden&&!rail.classList.contains('open')) unpin();")
+        self.fails("escboth", "390-light: one Escape with the drawer open over a pinned figure closed the pinned "
+                              "figure too: it closes the drawer alone (C5)", page=page)
+
+    def test_the_foot_tail_holds_through_a_pin_or_says_it_skipped(self):
+        r = self.verify("tailok", page=self.short_tail())
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertRegex(r.stdout, r"  foot tail: 390-light: --tail holds at [1-9]\d*px through a pin")
+        self.assertNotIn("skip 390-light: the foot tail check", r.stdout)
+        # The whole sample's last subsection is long enough for no tail at 390 px: it can't tell.
+        r = self.verify("tailzero")
+        self.assertIn("skip 390-light: the foot tail check: --tail is 0px before a pin", r.stdout)
+
+    def test_a_tail_fit_that_misreads_the_pinned_sheet(self):
+        page = self.short_tail()
+        self.assertEqual(page.count(self.FIT), 1)
+        page = page.replace(self.FIT, "var natural=se.scrollHeight-window.innerHeight-cur;")
+        self.fails("tailbad", "390-light: the page's foot tail (--tail) was ", page=page)
+
+    def test_the_theme_chrome_passes(self):
+        r = self.verify("chrome")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("[1280-light]\n", r.stdout)
+        self.assertIn("  theme chrome: track rgb(244, 246, 248), fixed icon, full screen", r.stdout)
+        self.assertIn("T flips system to dark", r.stdout)
+        self.assertIn("  theme chrome: track rgb(15, 21, 25), fixed icon, full screen", r.stdout)
+        self.assertIn("T flips system to light", r.stdout)
+
+    def test_a_page_track_that_is_transparent_or_unset(self):
+        rule = ":root{scrollbar-color:var(--scroll-thumb) var(--bg);background:var(--bg)}"
+        self.fails("track", "the page's scrollbar track is rgba(0, 0, 0, 0), not an opaque color (C2)",
+                   page=self.edit(rule, ":root{scrollbar-color:var(--scroll-thumb) transparent}"))
+        self.fails("notrack", "the page's scrollbar track is auto, not an opaque color (C2)", page=self.edit(rule, ""))
+
+    def test_a_worded_theme_button_in_the_rail(self):
+        nav = '<nav><ul class="toc" id="toc"></ul></nav>'
+        out = self.fails("worded", 'theme buttons with words: #themeBtn3 "Toggle theme"', page=self.edit(
+            nav, nav + '<button class="themebtn" id="themeBtn3" type="button" aria-keyshortcuts="t">Toggle theme</button>'))
+        self.assertIn('a theme button in the rail: "Toggle theme"', out)
+
+    def test_a_theme_icon_that_is_not_fixed(self):
+        self.fails("unfixed", "no theme icon fixed on screen at 1280 px (C3)",
+                   page=self.edit(".themefab{position:fixed;", ".themefab{position:static;"))
+
+    def test_a_closed_drawer_that_casts_a_shadow(self):
+        # Off-screen, its shadow paints a grey strip down the page's left edge at 390 px.
+        out = self.fails("drawershadow", "390-light: the closed drawer casts a shadow (rgba(0, 0, 0, 0.2) 0px 0px "
+                                         "40px 0px), a strip down the page's left edge", page=self.edit(
+            "transform:translateX(-100%);transition:transform .22s ease,box-shadow .22s ease}",
+            "transform:translateX(-100%);transition:transform .22s ease;box-shadow:0 0 40px rgba(0,0,0,.2)}"))
+        self.assertNotIn("1280-light: the closed drawer", out)
+
+    def test_t_with_ctrl_or_typed_in_an_input_or_not_at_all(self):
+        self.fails("ctrl", "Ctrl+T flipped the theme", page=self.edit("if(e.ctrlKey||e.metaKey||e.altKey||e.repeat) return;", ""))
+        self.fails("typing", "typing T in an input flipped the theme", page=self.edit(
+            "var t=e.target; if(t&&(t.isContentEditable||/^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName))) return;", ""))
+        self.fails("nokey", "pressing T didn't flip the theme",
+                   page=self.edit("else if(k==='t'){e.preventDefault();toggle();}", ""))
+
+    def test_full_screen_buttons_that_ignore_what_the_frame_grants(self):
+        # Headless Chromium grants full screen at the top level: buttons left hidden fail; where it
+        # wasn't granted, buttons shown would fail the same check the other way.
+        granted = self.verify("fsgranted")
+        if "full screen granted" not in granted.stdout:
+            self.skipTest("this browser grants no full screen at the top level")
+        self.fails("fshidden", "hidden where full screen is granted (C4)",
+                   page=self.edit("if(b){b.hidden=false; b.addEventListener('click',fsToggle);}", ""))
+        self.fails("fsshown", "shown where no full screen is granted (C4)", page=self.edit(
+            "var fsOK=!!(document.fullscreenEnabled||document.webkitFullscreenEnabled);",
+            "var fsOK=!!(document.fullscreenEnabled||document.webkitFullscreenEnabled);"
+            "['fullscreenEnabled','webkitFullscreenEnabled'].forEach(function(p){"
+            "Object.defineProperty(Document.prototype,p,{get:function(){return false;}});});"
+            "['fsBtn','fsBtn2'].forEach(function(id){var b=document.getElementById(id); if(b) b.hidden=false;});"))
 
 
 @unittest.skipUnless(os.environ.get("EXAM_PREP_PLAYWRIGHT"),
@@ -467,7 +607,9 @@ class ViewsTest(unittest.TestCase):
     that lacks a part or holds an extra one, overflows with its stems open, has zero-size math, a
     MathJax \\href to javascript: (put in past mockpage.py's guard) or an inline event handler,
     shows the wrong pane,
-    leaves the wrong button pressed or has no pane, and a page with fewer than two view buttons."""
+    leaves the wrong button pressed or has no pane, and a page with fewer than two view buttons.
+    Its theme chrome (CHASSIS.md, C2 to C4) is checked as a notes page's is, and a worded theme
+    button with no fixed icon fails."""
 
     @classmethod
     def setUpClass(cls):
@@ -505,6 +647,19 @@ class ViewsTest(unittest.TestCase):
         self.assertNotIn("spy", r.stdout)
         self.assertEqual(sorted(n for n in os.listdir(shots) if n.startswith("390-light-view-")),
                          ["390-light-view-paper.png", "390-light-view-topic.png", "390-light-view-type.png"])
+        # The notes chassis's theme chrome (CHASSIS.md, C2 to C4): an opaque themed track, the
+        # theme an icon fixed top right at 1280 px, full screen only where granted, T and F keys.
+        self.assertIn("  theme chrome: track rgb(244, 246, 248), fixed icon, full screen", r.stdout)
+        self.assertIn("  theme chrome: track rgb(15, 21, 25), fixed icon, full screen", r.stdout)
+
+    def test_the_mock_page_theme_chrome_is_checked(self):
+        # A mock page with the old chrome (a worded theme button in the bar, no T key) fails.
+        page = re.sub(r'<button class="themebtn themefab"[^\n]*</button>\n', "", self.page)
+        page = re.sub(r'(<button class="themebtn" id="themeBtn"[^>]*>)<svg.*?</svg>', r"\1Theme", page, count=1)
+        r, _ = self.run_views("chrome", page)
+        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+        self.assertIn('theme buttons with words: #themeBtn "Theme" (C3: an icon)', r.stdout)
+        self.assertIn("no theme icon fixed on screen at 1280 px (C3)", r.stdout)
 
     def test_parts_and_overflow_per_view(self):
         page = self.in_view(self.page, "type", 'data-part="Q4(d)"', 'data-gone="Q4(d)"')
@@ -554,7 +709,10 @@ class ViewsTest(unittest.TestCase):
 
     def test_a_broken_switcher_and_a_missing_pane(self):
         page = self.page.replace("if(pane) pane.hidden=!on;", "", 1)
-        page = page.replace("b.setAttribute('aria-pressed',on?'true':'false');", "", 1)
+        # The view switcher's aria-pressed, after `var buttons=` (fsSync's, before it, is spelled the same).
+        a = page.index("var buttons=")
+        self.assertIn("b.setAttribute('aria-pressed',on?'true':'false');", page[a:])
+        page = page[:a] + page[a:].replace("b.setAttribute('aria-pressed',on?'true':'false');", "", 1)
         self.assertEqual(page.count('id="view-topic"'), 1)
         page = page.replace('id="view-topic"', 'id="view-topix"')
         r, _ = self.run_views("switch", page)
@@ -562,6 +720,18 @@ class ViewsTest(unittest.TestCase):
         for want in ("view type: shows view-paper", "view type: pressed buttons paper",
                      "view topic: no #view-topic for its button"):
             self.assertIn(want, r.stdout)
+
+    def test_full_screen_buttons_that_ignore_full_screen(self):
+        # fsSync sets the full-screen buttons' aria-pressed and label on each fullscreenchange; a
+        # page whose buttons stay unpressed and "Full screen" in full screen fails.
+        old = "b.setAttribute('aria-pressed',on?'true':'false'); var t=on?'Exit full screen':'Full screen';"
+        self.assertEqual(self.page.count(old), 1)
+        r, _ = self.run_views("fssync", self.page.replace(old, "var t='Full screen';"))
+        if "full screen not granted" in r.stdout:
+            self.skipTest("this browser grants no full screen at the top level")
+        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+        self.assertIn('#fsBtn in full screen: aria-pressed false, label "Full screen"', r.stdout)
+        self.assertIn("the full-screen buttons don't follow full screen", r.stdout)
 
     def test_fewer_than_two_buttons(self):
         page = re.sub(r'\s*<button type="button" data-view="(type|topic)".*?</button>', "", self.page)

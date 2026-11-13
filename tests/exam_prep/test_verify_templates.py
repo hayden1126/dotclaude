@@ -5,15 +5,20 @@ replacement the way a hub fills it, and run as the workflow runs it: `python3 -I
 root. Pinned: an empty self-test or example generator fails; a mismatch fails and names the
 answer; the tolerance compares floats; the self-test fails until its checks and skips cover every
 official part; the example generator replaces its output only on a run that succeeds and covers
-the backbone's worked examples exactly, so a failed run keeps the last good output; and the
-sibling import works under -I."""
+the backbone's worked examples exactly, so a failed run keeps the last good output; the
+sibling import works under -I; PARTS's documented command counts the solutions files' part
+blocks; and each `.py` template the CHANGELOG's newest round names carries that round's date,
+while a newest round with no Files item, or one naming no file at all, fails (one naming files
+but no `.py` template passes: that round changed none)."""
 import os
+import re
 import subprocess
 import tempfile
 import unittest
 
 REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 TEMPLATES = os.path.join(REPO, "skills", "exam-prep", "templates")
+CHANGELOG = os.path.join(REPO, "skills", "exam-prep", "references", "CHANGELOG.md")
 
 REFERENCE = '''def total(xs):
     return sum(xs)
@@ -27,6 +32,103 @@ SUM = ('    from reference import total\n'
        '    row(1, total([4]))\n'
        '    row(2, total([4, 5]))')
 GOOD = "# good output\n"
+
+
+def newest_round(text):
+    """(the newest `## Round <n> (<date>)` entry's date, the `templates/*.py` files its `- **Files:**`
+    item names) in a CHANGELOG's text, as its header describes the entries. The names are None
+    when the entry has no Files item, or one naming no backquoted path at all (unparsable)."""
+    heads = list(re.finditer(r"^## Round (\d+) \((\d{4}-\d{2}-\d{2})\)[ \t]*$", text, re.M))
+    if not heads:
+        return None, None
+    head = max(heads, key=lambda m: int(m.group(1)))
+    end = text.find("\n## ", head.end())
+    section = text[head.end():end if end != -1 else len(text)]
+    files = re.search(r"^- \*\*Files:\*\*(.*?)(?=^- \*\*|\Z)", section, re.M | re.S)
+    if not files or not re.search(r"`[^`\s]+`", files.group(1)):
+        return head.group(2), None
+    return head.group(2), set(re.findall(r"`templates/([^`/\s]+\.py)`", files.group(1)))
+
+
+def baseline_problems(text, templates):
+    """What is wrong with the `.py` templates' baseline dates against a CHANGELOG's text: each
+    template the newest round's Files list names must carry that round's date. A missing entry,
+    or a Files item missing or naming no file it can read, is a problem too: the check would
+    otherwise pass on nothing. A Files item naming files but no `templates/*.py` one passes: that
+    round changed no `.py` template."""
+    date, names = newest_round(text)
+    if not date:
+        return ["no `## Round <n> (<date>)` entry in the CHANGELOG"]
+    if names is None:
+        return [f"the Round entry of {date} has no `- **Files:**` item naming a backquoted file"]
+    out = []
+    for name in sorted(names):
+        path = os.path.join(templates, name)
+        if not os.path.exists(path):
+            out.append(f"the CHANGELOG names templates/{name}, which doesn't exist")
+            continue
+        with open(path, encoding="utf-8") as f:
+            head = f.read(2000)
+        m = re.search(r"baseline as of (\d{4}-\d{2}-\d{2})", head)
+        if not m:
+            out.append(f"templates/{name} carries no `baseline as of <date>`")
+        elif m.group(1) != date:
+            out.append(f"templates/{name} carries {m.group(1)}, not the round's {date}")
+    return out
+
+
+class BaselineDate(unittest.TestCase):
+    def test_a_template_the_newest_round_changed_carries_its_date(self):
+        # Round 9: verify-selftest.py and verify-set-key.py changed in round 8 under a baseline
+        # dated 2026-10-20. 12-retro step 3 dates each file a round changes with that round's
+        # date, so a stale date hides the change from whoever compares a hub copy's date with the
+        # CHANGELOG. Each `.py` template the newest round's Files list names carries that round's
+        # date.
+        with open(CHANGELOG, encoding="utf-8") as f:
+            self.assertEqual(baseline_problems(f.read(), TEMPLATES), [])
+
+    def test_a_round_it_cant_read_fails_rather_than_passing_on_nothing(self):
+        # Review round 11: a Files list it couldn't find or parse left the name set empty, and
+        # the loop over it passed. Each of these must fail.
+        with tempfile.TemporaryDirectory() as tmp:
+            with open(os.path.join(tmp, "verify-a.py"), "w", encoding="utf-8") as f:
+                f.write("# baseline as of 2026-02-03\n")
+            good = "## Round 2 (2026-02-03)\n\n- **Files:** `templates/verify-a.py`.\n"
+            self.assertEqual(baseline_problems(good, tmp), [])
+            for text, needle in (
+                    ("# Changelog\n", "no `## Round"),
+                    ("## Round 2 (2026-02-03)\n\n- Files: `templates/verify-a.py`.\n",
+                     "has no `- **Files:**` item"),
+                    ("## Round 2 (2026-02-03)\n\n- **Files:** SKILL.md and scripts/x.py.\n",
+                     "has no `- **Files:**` item"),
+                    ("## Round 2 (2026-02-04)\n\n- **Files:** `templates/verify-a.py`.\n",
+                     "carries 2026-02-03, not the round's 2026-02-04"),
+                    ("## Round 2 (2026-02-03)\n\n- **Files:** `templates/verify-b.py`.\n",
+                     "which doesn't exist")):
+                with self.subTest(needle):
+                    problems = baseline_problems(text, tmp)
+                    self.assertEqual(len(problems), 1, problems)
+                    self.assertIn(needle, problems[0])
+            # Review round 12: a round naming files but no `.py` template changed none, and
+            # passes.
+            self.assertEqual(baseline_problems(
+                "## Round 2 (2026-02-03)\n\n- **Files:** `SKILL.md`, `scripts/x.py`.\n", tmp), [])
+
+    def test_the_round_parser_reads_the_newest_entry(self):
+        text = ("# Changelog\n\n- **Files:** `templates/x.py`, from the header's format.\n\n"
+                "## Round 1 (2026-01-02)\n\n- **Files:** `templates/old.py`, baseline 2026-01-02.\n"
+                "## Round 2 (2026-02-03)\n\n- **Files:** `SKILL.md`, `templates/STYLE.md`,\n"
+                "  `templates/verify-a.py` and `templates/verify-b.py`, each baseline 2026-02-03;\n"
+                "  `scripts/check.py`, which carries no date.\n"
+                "- **Changes:** `templates/verify-c.py` named outside the Files item.\n")
+        self.assertEqual(newest_round(text), ("2026-02-03", {"verify-a.py", "verify-b.py"}))
+        self.assertEqual(newest_round(text.replace("- **Files:** `SKILL", "- Files: `SKILL")),
+                         ("2026-02-03", None))
+        self.assertEqual(newest_round("# Changelog\n"), (None, None))
+        self.assertEqual(newest_round("## Round 3 (2026-03-04)\n\n- **Files:** none.\n"),
+                         ("2026-03-04", None))
+        self.assertEqual(newest_round("## Round 3 (2026-03-04)\n\n- **Files:** `SKILL.md`.\n"),
+                         ("2026-03-04", set()))
 
 
 class Skeleton(unittest.TestCase):
@@ -132,16 +234,29 @@ class Skeleton(unittest.TestCase):
         self.assertEqual(r.returncode, 1)
         self.assertIn("FAIL  D1 p.4 worked example", r.stdout)
 
-    def test_the_parts_grep_counts_every_solution_line_form(self):
-        extract = os.path.join(self.tmp.name, "_build", "extract")
-        os.makedirs(extract)
-        with open(os.path.join(extract, "hw.md"), "w") as f:
-            f.write("### [HW1 Q1a] a\nSolution [HW1S p.1]: 3\n### [HW1 Q1b] b\n"
-                    "- Solution [HW1S p.1]: 4\n### [HW1 Q1c] c\n  * Solution [HW1S p.2]: 5\n"
-                    "See the Solution [HW1S p.2] above.\n")
+    def test_the_parts_count_is_the_solutions_files_part_blocks(self):
+        # The documented command counts each question part whose block in _build/solutions/
+        # holds a `Solution [` line: one per part however many lines it has, never a stem's
+        # block, an answers file's page block or a `No official solution.` part.
+        solutions = os.path.join(self.tmp.name, "_build", "solutions")
+        os.makedirs(solutions)
+        with open(os.path.join(self.tmp.name, "MANIFEST.md"), "w") as f:
+            f.write("| Doc id | File | Pages | Scope | Answers | Key | Notes |\n"
+                    "|---|---|---|---|---|---|---|\n"
+                    "| HW1 | `sources/hw1.pdf` | 2 | in | no | | homework |\n"
+                    "| HW1S | `sources/hw1s.pdf` | 2 | in | yes | for HW1 | solutions |\n")
+        with open(os.path.join(solutions, "hw.md"), "w") as f:
+            f.write("### [HW1 Q1 stem] s\nSolution [HW1S p.1]: the setup\n"
+                    "### [HW1 Q1a] a\nSolution [HW1S p.1]: 3\n### [HW1 Q1b] b\n"
+                    "- Solution [HW1S p.1]: 4\nSolution [HW1S p.2]: and 5\n"
+                    "### [HW1 Q1c] c\nNo official solution.\n"
+                    "### [HW1 Q1d] d\nSolution [HW1S p.2] [HW1S p.1]: 6\n"
+                    "### [HW1S p.2] Solutions, continued\nSolution [HW1S p.2]: 7\n")
         with open(os.path.join(TEMPLATES, "verify-selftest.py"), encoding="utf-8") as f:
-            cmd = next(l.strip() for l in f if "grep" in l and "Solution" in l)
-        r = subprocess.run(["bash", "-c", cmd], cwd=self.tmp.name, capture_output=True, text=True)
+            cmd = next(l.strip() for l in f if "extract_check.py --parts" in l)
+        skill = os.path.dirname(TEMPLATES)
+        r = subprocess.run(["bash", "-c", cmd.replace("<skill>", skill)], cwd=self.tmp.name,
+                           capture_output=True, text=True)
         self.assertEqual(r.stdout.strip(), "3", r.stderr)
 
     # ---- example generator ----

@@ -1,6 +1,6 @@
 # STYLE: how the notes are written
 
-Baseline as of 2026-11-10; changes only via `12-retro`.
+Baseline as of 2026-11-12; changes only via `12-retro`.
 
 Content only: pedagogy, wording and structure. The look (layout, palette, components, how figures
 are drawn) is `CHASSIS.md`'s, since the two change at different speeds. A hub keeps a copy in
@@ -35,8 +35,11 @@ from later corrections. A retired rule is struck through and keeps its number. A
 - **S7. Worked examples** use fresh numbers, never a homework's or a recitation's, with numbered
   steps and a bold **Result**. Their data and traces come from the checker (in a course with
   none, from the cited sources). On the page they are collapsible and closed by default. The
-  notes quote an answer only from a set the student has attempted (MANIFEST's `yes, attempted`);
-  the mock's key lives in its own quarantined file.
+  notes quote a set's official solution only once that set's own MANIFEST row says `attempted`
+  (`no, attempted YYYY-MM-DD` or `yes, attempted YYYY-MM-DD`; an answers file's row stays `yes`),
+  and, when its answers file solves several sets, once every set that file solves is attempted
+  (until then a hit from that file's own solutions file is a blocker like any other); the mock's
+  key lives in its own quarantined file.
 - **S8. Conventions.** Every convention an answer depends on is stated once, in the subsection the
   backbone names, and every use says which convention applies, with a link there. Example (a
   search course): the tie-break order; goal test at expansion or at generation; an explored set or
@@ -50,9 +53,18 @@ from later corrections. A retired rule is struck through and keeps its number. A
   (`[W1 §2.1]`), so it can't be mistaken for one of the notes' own sections. No em dashes. Math
   in LaTeX: `\( \)` inline, `\[ \]` display. When the student reads in a plain-text tool instead
   of the page, write for that tool: no LaTeX, pipe tables, cross-references as text.
-- **S11. Figures** only where a cold reader would otherwise assemble a mechanism from prose. A tree
-  or graph example always gets a drawn figure, never ASCII art, and prose that only re-describes a
-  figure goes. How a figure is drawn is `CHASSIS.md`'s and `CONVERT.md`'s.
+- **S11. Diagram first.** A figure is often faster to learn from than words. Every section the
+  slides teach through diagrams (the backbone marks it `Diagram-taught: yes`) gets at least one
+  figure and leads with it, right after the concise box (S34): the words annotate the figure.
+  Every mechanism whose parts pass data (a pipeline whose stages hand values on), every
+  construction whose count or shape matters, and every comparison of two structures gets a drawn
+  figure; every trace of a drilled procedure gets a step-through fed by the checker (FB-117). Every axis and every part is
+  labelled. A tree or graph example always gets a drawn figure, never ASCII art, and prose that
+  only re-describes a figure goes (FB-115). The slides' diagrams are candidates, not a quota: cut a
+  redundant, decorative or out-of-scope one freely (`03-backbone` step 5 sweeps and cuts). A
+  mechanism is redrawn as SVG; a slide's own cropped image is used only for a reference picture
+  too costly to redraw (a component photo, a dense schematic), its citation in the caption
+  (`CONVERT.md`'s slide-image figure). How a figure is drawn is `CHASSIS.md`'s and `CONVERT.md`'s.
 - **S12. Cross-references are clickable links, never bare text.** Every mention of an earlier or
   later concept, worked example, figure, step or lettered set member links to it, such as (a search
   course) `[§5.2 Admissible vs consistent](#sec-5-admissible-vs-consistent)`. Every target has a
@@ -72,12 +84,18 @@ from later corrections. A retired rule is struck through and keeps its number. A
 - **S14. The reader may have skipped the lectures.** Assume no prior exposure.
 - **S15. Define every symbol and acronym at its first use.** Gloss logic symbols and unusual
   notation in plain words where they appear.
-- **S16. No exam-writer jargon** in text the student reads.
+- **S16. No exam-writer jargon** in text the student reads. Never write a skill rule id, such as
+  (S12) or (FB-123), in the student's text: the build refuses an FB id in parentheses and a C id
+  right after `CHASSIS`, and only warns on a bare S, L, K or C id, `rule (C3)` among them, since a
+  course writes a state (S1), a lecture (L3) or the product rule (C3) the same way, and a rebuild
+  never fails on course text (FB-095, FB-015).
 - **S17. Never coin labels for examples** (T1, Tree A). Name an example by its source page or its
   shape ("the tree on D7 p.34", "the four-node graph"). A label the course's own sources use is
   the course's term (S25), not a coined one.
-- **S18. Unpacked over compressed.** Prefer a three-sentence explanation or a tiny worked instance
-  to a compressed argument. A proof goes step by step on a small instance.
+- **S18. Concise, never compressed.** Concise means fewer words and a list layout, never a
+  skipped step, a dropped condition or a missing instance: cut the words, keep every step, its
+  condition and the tiny example that shows it. A line too terse to use alone (no condition, no
+  instance) fails as surely as a padded one. A proof goes step by step on a small instance (FB-075).
 - **S19. Start from what it replaces.** Open a concept with how it compares to the one it replaces:
   what is the same, what differs, and why it exists.
 - **S20. Background marked as background.** A derivation that only the slides carry and no
@@ -110,3 +128,13 @@ from later corrections. A retired rule is struck through and keeps its number. A
   "Written from memory:" line and then a "Provided on the exam:" line, inside the list, where the
   Review view shows them. The notes, the cram order and the exam-day map
   carry the same label.
+- **S34. The concise box.** Each subsection but the Must-know list opens with a concise box: the
+  rule in a few labelled bullets, read first, with the long explanation behind it (FB-094). Under the
+  subsection's heading (after its Depth line, S33) comes `> **In short:**`, then one
+  `> - **<Label>:** ...` line per label that applies, from **Rule**, **Why**, **Steps**,
+  **Example**, **Trap** and **Answer form**, in that order, each at most once, one or two sentences
+  each (the exact forms are `CONVERT.md`'s "The concise box"). The Example is cut to its numbers;
+  every symbol in the box is defined in the box, since it is read alone; each line keeps its
+  condition and its instance (S18, S23). The full explanation follows the box, and the box never
+  replaces it: each point in the box is taught below it, and the box says nothing the text below
+  doesn't support.
