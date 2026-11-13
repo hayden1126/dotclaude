@@ -113,7 +113,9 @@ Q2]`) is key material too, and goes to the solutions file; `Key formulas` under 
 is not, and stays in the extract. The rule has one exception: a locator naming a key section is
 key material whatever page reference it carries (`[PE3 Marking scheme p.2]` is key). A `reserved`,
 `pending` or `out` answers file solves nothing, nor does a row on a STATUS `Unverified:` line
-until it is verified. The brief's `{{KEY PAGES}}` slot gives the agent what the Key cell names:
+until it is verified. An answers file solves only in-scope sets: a `for ...` cell naming a
+`pending`, `reserved` or `out` set fails `KEY NAMES A SET NOT IN SCOPE` (step 3), since that set
+is never extracted and its answers would have no home. The brief's `{{KEY PAGES}}` slot gives the agent what the Key cell names:
 the pages, `none` for `inline`, or the key sections by locator. Only those pages or sections go
 to the solutions file; every other page or section of that doc (the cover, the rules, a formula
 sheet, an appendix table) keeps its block in the extract, so the answer-blind agents (the mock
@@ -173,9 +175,10 @@ STATUS).
    - `NO HOME FILE: [<doc> <loc>] has no home: no extract holds a block of <SET>; extract <SET> first`:
      a block whose home ("The solutions file") can't be computed, since its set `<SET>` has no
      block in any extract: a stem's block, a page or section block of an answers file whose Key
-     is `for <one doc>`, or a key block of a doc holding its own key. Extract a set before its
-     answers file: write `<SET>`'s extract (step 1), then rerun the check, which names the
-     block's home if it sits elsewhere;
+     is `for <one doc>`, or a key block of a doc holding its own key. `<SET>` is an in-scope set
+     not yet extracted, since a Key cell naming a set out of scope fails `KEY NAMES A SET NOT IN
+     SCOPE` instead: write `<SET>`'s extract (step 1), before its answers file or in the same
+     wave, then rerun the check, which names the block's home if it sits elsewhere;
    - `EMPTY SOLUTIONS BLOCK`: a part's block holds neither a `Solution [` line nor
      `No official solution.`;
    - `SOLUTION IN AN EXTRACT`: a bracketed `Solution [<doc> <loc>]` or bold `**Solution:**` line
@@ -208,6 +211,11 @@ STATUS).
      cell names an id that is no MANIFEST doc id. Fix the cell or the id.
    - `<doc>: KEY NAMES ITS OWN DOC: "for" names the docs an answers file solves; a doc holding its own key uses "pp. N-M", "inline" or "sections: <name>"`:
      a `for ...` cell names its own row's id. A doc holding its own key takes one of those forms.
+   - `<doc>: KEY NAMES A SET NOT IN SCOPE: <SET> is <pending|reserved|out>: drop it from the Key cell and cut its pages from <doc>'s Scope, or give <doc> the same Scope`:
+     a `for ...` cell names a set whose row is `pending`, `reserved` or `out`. An answers file
+     solves only in-scope sets: drop the set from the cell and cut its pages from the answers
+     file's Scope (`in, PDF pp.A-B`), or give the answers file the set's Scope. A `pending` set's
+     answers file then waits with it and is extracted once the set arrives (`01-ingest` step 5).
    - `<doc>: KEY WITHOUT ANSWERS: its Key cell is filled but Answers isn't yes`: either the file
      holds answers (set Answers to `yes`) or it doesn't (empty the Key cell, or write `-`).
    - `<doc>: SECTIONS KEY ON A PAGED DOC: use "pp. N-M" or "inline"`: `sections: ...` on a doc
@@ -269,7 +277,8 @@ has no solutions block or a part has two, while any solutions block sits outside
 block names no extract's part or holds neither a `Solution [` line nor `No official solution.`,
 while an extract holds a solution line, a line citing an answers page or a block of an answers
 page, and while an in-scope MANIFEST row fails:
-`NO KEY`, `UNREAD KEY`, `KEY NAMES NO DOC`, `KEY NAMES ITS OWN DOC`, `KEY WITHOUT ANSWERS`,
+`NO KEY`, `UNREAD KEY`, `KEY NAMES NO DOC`, `KEY NAMES ITS OWN DOC`,
+`KEY NAMES A SET NOT IN SCOPE`, `KEY WITHOUT ANSWERS`,
 `SECTIONS KEY ON A PAGED DOC`, `PAGES KEY ON AN UNPAGED DOC`, `KEY SECTION NOT FOUND` or
 `ANSWERS WITH NO PAIRING`), and STATUS has the coverage and each value marked illegible as a
 judgment call. Its warnings (a solutions block for a stem, a

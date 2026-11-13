@@ -53,7 +53,7 @@ sections), in exactly one of these forms (the template's legend gives them too):
 
 - empty or `-`, for a doc that isn't an answers doc;
 - `for HW1, HW2 and HW3`, for a separate answers file: the sets it solves, each a doc id of this
-  table, never its own row's;
+  table, never its own row's, and each in scope (below);
 - `pp. 7-9, 11` or `p.N`, for a doc holding its own key (a past exam) on those pages, a PDF only
   (a deck's Pages holds its slide count, so a deck is never paged);
 - `inline`, when each solution sits under its question on the same page, so no page is a key
@@ -68,8 +68,12 @@ and a formula sheet stay in the extract (`02-extract`). `extract_check.py` fails
 Answers `yes` row with no Key form (`NO KEY`), a cell in any other wording (`UNREAD KEY`), a set
 name that is no doc id (`KEY NAMES NO DOC`), a `for ...` cell naming its own row
 (`KEY NAMES ITS OWN DOC`), a filled cell on a row whose Answers isn't `yes`
-(`KEY WITHOUT ANSWERS`), `sections: ...` on a doc with pages (`SECTIONS KEY ON A PAGED DOC`) and
-`p.` or `pp.` on a doc without them (`PAGES KEY ON AN UNPAGED DOC`). The Key cell also sets
+(`KEY WITHOUT ANSWERS`), `sections: ...` on a doc with pages (`SECTIONS KEY ON A PAGED DOC`),
+`p.` or `pp.` on a doc without them (`PAGES KEY ON AN UNPAGED DOC`) and a `for ...` cell naming a
+`pending`, `reserved` or `out` set (`KEY NAMES A SET NOT IN SCOPE`). An answers file solves only
+in-scope sets, since a set that can't be extracted gives its answers no home: drop that set from
+the Key cell and cut its pages from the answers file's Scope, or give the answers file the set's
+Scope (a `pending` set's answers file then waits with it, step 5). The Key cell also sets
 each answers block's home file: a multi-set answers file's own pages go in
 `_build/solutions/<doc id in lower case>.md` (`WRONG SOLUTIONS FILE` otherwise, `02-extract`
 step 3).
@@ -88,7 +92,10 @@ root: give the student the exact command.
 A `pending` row is checked at every stage boundary. When its file arrives, rewrite the row's Scope
 from `pending: <planned scope>` to that planned scope in a form `extract_check.py` reads (`in`,
 `in, PDF pp.A-B` or `in, slides #/A-#/B`), run steps 1 to 3 for it, then extract it before stage
-03 (or before the next stage, once 03 is done), and log it in STATUS.
+03 (or before the next stage, once 03 is done), and log it in STATUS. An answers file that solves
+a `pending` set (`KEY NAMES A SET NOT IN SCOPE`, step 3) waits with it, its row `pending` too:
+once the set arrives, both rows get their planned scope, and the set is extracted before its
+answers file or in the same wave (`02-extract` step 1).
 
 ## Ed Discussion
 

@@ -66,7 +66,10 @@ Topic cuts: {{none | one line each:}}
   - empty or `-`: not an answers doc (and a `pending` row until its file arrives);
   - `for HW1, HW2 and HW3`: a separate answers file, naming the sets it solves, each a doc id of
     this table (`KEY NAMES NO DOC` otherwise) and never its own row's (`KEY NAMES ITS OWN DOC`: a
-    doc holding its own key takes one of the forms below);
+    doc holding its own key takes one of the forms below). It solves only in-scope sets: a set
+    that is `pending`, `reserved` or `out` fails `KEY NAMES A SET NOT IN SCOPE`; drop that set
+    from the cell and cut its pages from the answers file's Scope, or give the answers file the
+    set's Scope (for a `pending` set, it waits and is extracted once the set arrives);
   - `pp. 7-9, 11` or `p.N`: a doc holding its own key (a past exam), on those pages, only for a
     PDF, whatever Pages holds (`PAGES KEY ON AN UNPAGED DOC` otherwise);
   - `inline`: a doc holding its own key, each solution under its question on the same page, so
