@@ -231,7 +231,9 @@ STATUS).
      file's Scope (`in, PDF pp.A-B`), or give the answers file the set's Scope. When the Key
      cell names that set alone, the line ends `...: give <doc> the same Scope`, its only fix,
      since dropping the set would leave the answers file solving nothing. A `pending` set's
-     answers file then waits with it and is extracted once the set arrives (`01-ingest` step 5).
+     answers file then waits with it and is extracted once the set arrives (`01-ingest` step 5);
+     a drop taken for a `pending` set is logged in STATUS as `01-ingest` step 3 says, and its
+     step 5 undoes it when the set arrives.
    - `<doc>: KEY WITHOUT ANSWERS: its Key cell is filled but Answers isn't yes`: either the file
      holds answers (set Answers to `yes`) or it doesn't (empty the Key cell, or write `-`).
    - `<doc>: SECTIONS KEY ON A PAGED DOC: use "pp. N-M" or "inline"`: `sections: ...` on a doc

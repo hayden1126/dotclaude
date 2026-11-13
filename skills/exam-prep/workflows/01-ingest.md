@@ -74,9 +74,10 @@ name that is no doc id (`KEY NAMES NO DOC`), a `for ...` cell naming its own row
 in-scope sets, since a set that can't be extracted gives its answers no home: drop that set from
 the Key cell and cut its pages from the answers file's Scope, or give the answers file the set's
 Scope (a `pending` set's answers file then waits with it, step 5). An answers file that solves
-that set alone has only the second fix. When the drop is taken for a `pending` set, log in
-STATUS the set, the answers file and the pages cut: step 5 undoes it once the set arrives. The
-Key cell also sets
+that set alone has only the second fix. When the drop is taken for a `pending` set, log it in
+STATUS as a drop line, `Pending set dropped: <set> off <answers doc>'s Key cell, <pages or
+slides> cut from its Scope`: step 5 undoes it once the set arrives, during the build or after it
+(`11-next-exam`). The Key cell also sets
 each answers block's home file: a multi-set answers file's own pages go in
 `_build/solutions/<doc id in lower case>.md` (`WRONG SOLUTIONS FILE` otherwise, `02-extract`
 step 3).
@@ -102,7 +103,10 @@ answers file or in the same wave (`02-extract` step 1). When step 3 dropped the 
 (off a multi-set answers file's Key cell, its pages cut from that file's Scope, the drop logged
 in STATUS), its arrival undoes the drop: put the set back in the Key cell and its pages back in
 the answers file's Scope, then extract the set, and the answers file again in the same wave so
-the restored pages reach the solutions files (`02-extract` step 1). Take the STATUS line out.
+the restored pages reach the solutions files (`02-extract` step 1). Take the drop line out. A
+set that arrives after the build runs this same undo in either `11-next-exam` path, "A source
+added" (its step 4) or "A source added unverified" (its item 2), whenever STATUS holds a
+`Pending set dropped: <set>` line for it.
 
 ## Ed Discussion
 

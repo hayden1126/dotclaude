@@ -289,7 +289,8 @@ check the references by hand and rebuild `notes/combined.md` from the section fi
 
 A source the approved plan doesn't name, such as a widening `10-polish` can't make because its
 material was never extracted, or a file a staff post adds after the build; and a `pending` row's
-file that arrives after the build (one that arrives during it is the build's, `01-ingest` step 5).
+file that arrives after the build (one that arrives during it is the build's, `01-ingest` step 5),
+whose arrival also undoes any drop STATUS logs for it (step 4).
 Not official solutions to a set MANIFEST.md already lists: `09-tutor` step 6 takes those. Not a
 staff post that states only the exam's format (its question count, points or timing, FB-159): that updates
 CLAUDE.md's Exam facts, quoted with its source, and the cram order's pacing (`08-practice` step 8's
@@ -347,9 +348,15 @@ build is this build's end, not a stage's.
 4. **Build**, for that source only. While a mock is untaken, the student looks away from this window
    from here to step 5's look-back: tell them first to come back when a reply's only line asks for
    `/clear`, and to type it before reading anything above that line. The MANIFEST.md change first,
-   then `01-ingest` steps 1 to 3, `02-extract` (a new set with solutions gets its own solutions
-   file, `_build/solutions/<name>.md` beside its extract, from the agent that writes its extract, or
-   from its answers file's own agent when that file solves several sets), then `03-backbone`
+   then `01-ingest` steps 1 to 3, `02-extract` (a new set with solutions gets a solutions file
+   beside each extract holding its blocks, `_build/solutions/<name>.md` under that extract's name,
+   a deck split over two extracts two, from the agent that writes its extract, or from its answers
+   file's own agent when that file solves several sets). For a `pending` row's file, when STATUS
+   holds a `Pending set dropped: <doc>` line (`01-ingest` step 3), the MANIFEST.md change is
+   `01-ingest` step 5's undo: the set back in the answers file's Key cell and its pages back in
+   that file's Scope, then the set and the answers file extracted in one wave (`02-extract` step
+   1), so the restored pages reach the solutions files, and the drop line taken out in 02's
+   commit. Then `03-backbone`
    and `04-write` placing and
    writing the new material as rows 03 and 04 of "The build on a reopened hub" do: new sections
    after the last, or a subsection before an old section's Must know, with their ids,
@@ -506,8 +513,8 @@ fresh session answers from STATUS, then runs step 7.5.
    `_build/extract/` and `_build/solutions/`. Then check as "A source added" step 1 does: `05-verify`
    done (and `06-site` with a page), no `Build running` line, the hub free, the tree clean but for `_build/logs/` and
    `practice/tutor/`; note `git rev-parse HEAD`. A check that fails is told to the student, and
-   the addition waits for it. Pick the doc's id now, a new one as `01-ingest` gives (none reused):
-   it is `<doc>` from here on, in its MANIFEST.md row and both STATUS lines, and the id
+   the addition waits for it. Pick the doc's id now: a `pending` row's file keeps that row's id,
+   and any other gets a new one as `01-ingest` gives (none reused); it is `<doc>` from here on, in its MANIFEST.md row and both STATUS lines, and the id
    `extract_check.py` reads. Then add `Build running: <date>` and `Unverified add: <doc>, started
    <date>` to STATUS and commit them (hard rule 1: while they stand a `09-tutor` tab keeps its
    build limits and dispatches no patch, and no attempt or polish pass starts). Check that this
@@ -518,7 +525,14 @@ fresh session answers from STATUS, then runs step 7.5.
 2. **Ingest** the doc as `01-ingest` steps 1 to 3 do: copied in by name, rendered, and its
    MANIFEST.md row, `in` with the doc id item 1 picked and its count from disk, its Answers and
    Key cells as the template's legend says, its Notes what the source is, then `;` and who put it
-   in scope (a staff post, or the student's word, quoted).
+   in scope (a staff post, or the student's word, quoted). A `pending` row's file rewrites that
+   row as `01-ingest` step 5 does; when STATUS holds a `Pending set dropped: <doc>` line
+   (`01-ingest` step 3), `01-ingest` step 5's undo runs here too, the one extract this path
+   makes: the set
+   back in the answers file's Key cell and its pages back in that file's Scope, then the set and
+   the answers file extracted in one wave (`02-extract` step 1, its check included), since the
+   restored pages are official solutions and have their home only in the solutions files. The
+   drop line goes in item 5's commit. The notes stay unverified all the same.
 3. **Write**, the notes only, in the Write brief's Format: a new section after the last, or a
    short subsection just before an old section's Must know, placed and named as "The build on a
    reopened hub" row 03 says, any text naming the moved Must know by number updated. Each
@@ -550,8 +564,9 @@ fresh session answers from STATUS, then runs step 7.5.
    marks; `<doc>`, rendered and never extracted, is checked against its rendered text while it
    is an unattempted set), a hit reworded the same way, before item 5's commit and republish.
 5. **Commit**, once: the material (its notes, fragment and page), its backbone headings, its
-   MANIFEST.md row and, in STATUS, `Unverified: <doc>, <section ids>, <date>` in place of the `Skip
-   asked` line, with any rewording logged by its part, never a value, as "Changing the notes or a
+   MANIFEST.md row (after item 2's undo, the answers file's row too, with the extracts and
+   solutions files that undo wrote, and the drop line out of STATUS) and, in STATUS,
+   `Unverified: <doc>, <section ids>, <date>` in place of the `Skip asked` line, with any rewording logged by its part, never a value, as "Changing the notes or a
    sheet" ends (each STATUS write checked as the pushback's). Then republish the notes page as that
    section's item 5 says, its version bumped, and take out the `Build running` and `Unverified
    add:` lines in a commit of their own.

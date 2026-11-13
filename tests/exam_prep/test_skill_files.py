@@ -357,6 +357,48 @@ class QuotingRule(unittest.TestCase):
             self.assertIn(phrase, flat, rel)
 
 
+class PendingDropUndo(unittest.TestCase):
+    """01-ingest step 3 may drop a `pending` set off a multi-set answers file's Key cell (its
+    pages cut from that file's Scope), logged in STATUS; step 5 undoes it when the set arrives.
+    Round 19 found that a set arriving after the build goes through 11-next-exam ("A source
+    added", or its unverified path), which ran only 01's steps 1 to 3 and so never restored the
+    cut pages. The drop line has one form, and both 11 paths run step 5's undo on it."""
+
+    LINE = ("`Pending set dropped: <set> off <answers doc>'s Key cell, <pages or slides> cut from "
+            "its Scope`")
+    UNDO = ("the set back in the answers file's Key cell and its pages back in that file's Scope, "
+            "then the set and the answers file extracted in one wave (`02-extract` step 1")
+
+    @staticmethod
+    def flat(name):
+        with open(os.path.join(SKILL, "workflows", name), encoding="utf-8") as f:
+            return " ".join(f.read().split())
+
+    def test_ingest_logs_the_drop_and_undoes_it(self):
+        flat = self.flat("01-ingest.md")
+        step3 = flat.split("## Step 3", 1)[1].split("## Step 4", 1)[0]
+        self.assertIn(self.LINE, step3)
+        step5 = flat.split("## Step 5", 1)[1].split("## Ed Discussion", 1)[0]
+        self.assertIn("its arrival undoes the drop", step5)
+        self.assertIn("Take the drop line out.", step5)
+        for path in ('"A source added" (its step 4)', '"A source added unverified" (its item 2)'):
+            self.assertIn(path, step5)
+
+    def test_both_late_paths_run_the_undo(self):
+        flat = self.flat("11-next-exam.md")
+        added = flat.split("## A source added to this exam", 1)[1].split(
+            "## A source added unverified", 1)[0]
+        build = added.split("4. **Build**", 1)[1].split("5. **Close**", 1)[0]
+        unverified = flat.split("## A source added unverified", 1)[1].split("## Common mistakes", 1)[0]
+        ingest = unverified.split("2. **Ingest**", 1)[1].split("3. **Write**", 1)[0]
+        for name, text in (("A source added, step 4", build), ("unverified, item 2", ingest)):
+            self.assertIn("a `Pending set dropped: <doc>` line", text, name)
+            self.assertIn("`01-ingest` step 5's undo", text, name)
+            self.assertIn(self.UNDO, text, name)
+        self.assertIn("a `pending` row's file keeps that row's id", unverified)
+        self.assertIn("the drop line out of STATUS", unverified.split("5. **Commit**", 1)[1])
+
+
 class Privacy(unittest.TestCase):
     def test_no_denylisted_string(self):
         if not os.path.exists(DENYLIST):
