@@ -18,7 +18,7 @@ The shell is fixed. Design freedom goes into the render.
    - `MODES` are the themes `render` honours through `state.mode`. One entry hides the Mode buttons.
    - `SCREENS` are the screens the mock shows, as a top-row group; `render` gets `state.screen`. Leave it out, or give one entry, and the group hides.
    - `QUESTIONS` holds each decision the mock exists to settle, with `options` that switch the render live. An optional `screens: [...]` lists where the question's subject shows: changing its answer jumps to the first listed screen when the current one isn't listed, and its box gets a "Shows on" row of buttons that jump to each.
-   - `CONTROLS` adds a button group to the top row for a choice that applies to the whole render. With `corner: true`, the group sits in the render's corner beside the zoom instead.
+   - `CONTROLS` adds a button group to the top row for a choice that applies to the whole render. With `corner: true`, the group sits in the render's corner beside the zoom instead. Its label can't be `frame`, `mode`, `zoom`, `screen` or `answers`: the shell keeps its own state under those names.
    - `ABOUT` is HTML for the intro and any secondary notes, such as swatches.
 
    The shell adds two pieces to every mock. The corner zoom has Fit, 100%, 200% and 300%; when the render scrolls, drag it to pan, and the scroll position holds while the frame and screen stay the same. The "Copy choices" button copies every pick as plain text, to paste back in chat.
