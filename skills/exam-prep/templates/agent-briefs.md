@@ -178,7 +178,7 @@ that must not see answers read the extract, so it holds none.}}
     a question part's), so a deck split into parts `r3.md` and `r3b.md` keeps a key slide beside
     the part holding it: a key page or slide in {{RANGE}} goes here. A block whose set has no
     block in any extract has no home (`NO HOME FILE`): the set is extracted before its answers
-    file.
+    file or in the same wave.
   - `UNREADABLE:` flags as in the extract.
   - Last line: the extract's `Coverage:` line, for the answers pages of {{SOLDOC}}.}}
 ```

@@ -22,12 +22,14 @@ transcribes and never summarizes.
   writes each set's part blocks in that set's solutions file, `_build/solutions/<name>.md` under
   that set's extract `<name>`, plus the answers file's own page or section blocks, held in full
   like any answers page, in its own file, `_build/solutions/<doc id in lower case>.md`
-  (`_build/solutions/hws.md` for `HWS`). Each set's own agent then writes only its extract (the
-  brief without the SOLUTIONS slots), with the same part ids. An agent may write several files,
+  (`_build/solutions/hws.md` for `HWS`). Each set's own agent, in the same wave or an earlier
+  one, writes only its extract (the brief without the SOLUTIONS slots), with the same part ids. An agent may write several files,
   and no file is written by two agents (hard rule 6).
-- **A set is extracted before its answers file**, or in the same wave: an answers block's home
-  is beside its set's extract ("The solutions file"), and a block whose set has no block in any
-  extract has no home (`NO HOME FILE`, step 3).
+- **A set is extracted before its answers file**, or in the same wave, since step 3 checks the
+  wave once it is back: a set's part and stem blocks, a single-set answers file's page blocks and
+  a doc's own key blocks have their home beside the set's extract ("The solutions file"), and
+  such a block whose set has no block in any extract has no home (`NO HOME FILE`, step 3). A
+  multi-set answers file's own page blocks need no set extract: their home is its own file.
 - **By source type:** a PDF agent reads `_build/text/` and `_build/pages/`; a Word document's agent
   reads `_build/text/<doc>.md` and `_build/media/<doc>/`. A reveal deck agent reads a slice that
   the main session cuts before spawning:
@@ -74,7 +76,7 @@ whose range covers that slide:
 `extract_check.py` fails a block anywhere else (`WRONG SOLUTIONS FILE`, step 3). A block whose
 home can't be computed, since no extract holds a block of its set (a stem's, a single-set
 answers file's page, a key block), has none and fails `NO HOME FILE` (step 3): extract a set
-before its answers file. The set's
+before its answers file or in the same wave. The set's
 extract agent writes the set's file, except when the set's answers file solves several sets: that
 file's own agent writes each of those sets' files and its own (step 1). No file is written by two
 agents (hard rule 6). All are tracked in the hub. Each solutions file opens with `# <DOC>

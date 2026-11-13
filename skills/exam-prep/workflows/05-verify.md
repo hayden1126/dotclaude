@@ -183,9 +183,8 @@ Extract them first, as `02-extract` step 1 says (hard rule 6), after `01-ingest`
 the answers file's Key cell: an answers file that solves one set shares that set's agent, which
 writes the pair again, its extract and `_build/solutions/<name>.md`; one that solves several sets
 gets its own agent, which writes each set's part blocks in that set's `_build/solutions/<name>.md`
-and its own pages, in full, in `_build/solutions/<doc id in lower case>.md`, and each set's own
-agent then writes
-its extract again. Add them to the self-test (and rerun
+and its own pages, in full, in `_build/solutions/<doc id in lower case>.md`, while each set's own
+agent writes its extract again in the same wave. Add them to the self-test (and rerun
 `extract_check.py --parts` for `PARTS`), diff every answer against the notes and any solved key,
 and record the verdict in STATUS by doc, page and part (`HW1S p.2, HW1 Q2a: matched`, `HW1S
 p.3, HW1 Q3b: notes changed`): what matched, what was wrong, what changed, never a value, since
