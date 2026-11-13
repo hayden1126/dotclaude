@@ -10,8 +10,12 @@ computable (PLAN.md's Checker line): writers build each worked example from its 
 showing the working, and `05-verify`'s reviewers redo it.}}
 
 Corrections found while reading the extracts and the solutions files (each re-checked on the
-page image and fixed in the file it came from too, the extract or the solutions file):
-- {{DOC p.N: the extract (or the solutions file) read X; the page reads Y (re-read at 300 dpi)}}
+page image and fixed in the file it came from too, the extract or the solutions file). Mock
+writers and the sheets' gap scan read this file, so a solutions-file correction names its doc,
+page and part only, never a value:
+- {{EXTRACT: DOC p.N: the extract read X; the page reads Y (re-read at 300 dpi)}}
+- {{SOLUTIONS FILE: DOC p.N, PART: corrected in the solutions file (re-read at 300 dpi), as in
+  `HW1S p.2, Q2a: corrected in the solutions file (re-read at 300 dpi)`}}
 
 ## Conventions
 

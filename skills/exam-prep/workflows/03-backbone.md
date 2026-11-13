@@ -15,7 +15,10 @@ show in its official solutions; the backbone quotes none of their answers), ever
 the Ed digest (a convention such as a tie-break may be tagged `scope` or `format`, not only
 `hint`) and the practice questions. When an extract or a solutions file got something wrong,
 re-check it on the page image, then fix it in that file itself (writers read both), list it at
-the top of the backbone, and carry it into the checker. Read MANIFEST.md's topic cuts too: under
+the top of the backbone, and carry it into the checker. An extract correction gives what the
+extract read and what the page reads; a solutions-file correction names its doc, page and part
+only, never a value (`HW1S p.2, Q2a: corrected in the solutions file (re-read at 300 dpi)`),
+since mock writers and the sheets' gap scan read the backbone. Read MANIFEST.md's topic cuts too: under
 the backbone's Conventions block, one line per cut, naming the subsections it reaches and what of
 it stays in scope (04-write banners the material it takes out). A cut first seen in the Ed digest during the build goes under MANIFEST.md's Topic
 cuts too, logged in STATUS as a judgment call.
