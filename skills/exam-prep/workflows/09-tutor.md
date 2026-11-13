@@ -107,7 +107,9 @@ Settle it before the first part:
   it is a timed rehearsal (`08-practice` step 8.1).
 - A set whose official solutions are extracted (MANIFEST.md marks their file `Answers: yes`, with
   `solutions to <doc>` in its Notes, or the set's own row `Answers: yes` with no note, a past exam
-  with its key): the part's block in `_build/solutions/<name>.md`, its `Solution [` line and the
+  with its key): the part's block, `### [<doc> <part>]`, in whichever file under
+  `_build/solutions/` holds it (find it by its block id, `grep -n -F '### [<doc> <part>]'
+  _build/solutions/*.md`: it need not share the set's extract name), its `Solution [` line and the
   working under it. A block reading `No official solution.` sends the part to the next source.
 - Any other set, with a checker: its values from the reference, before the first part (hard rule 3),
   once `selftest.py` prints `ALL PASS` (`05-verify` step 1) and no build runs (Step 1). Copy

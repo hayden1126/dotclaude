@@ -176,8 +176,9 @@ alone, so it must be correct, cover what the exam tests, and make the ideas easy
   section §{{N}} (its table, lettered sets, figures and worked examples), the Conventions block,
   the cross-section links and the How it's tested table.
 - Sources: {{EXTRACT BLOCKS: the coverage-matrix rows that map into §{{N}}, as files and block
-  ranges}} in {{ROOT}}/_build/extract/, {{SOLUTIONS FILES: the solutions files of the question
-  sets among them, in {{ROOT}}/_build/solutions/, or "none": drop this item}}, and {{EXAMPLES: the
+  ranges}} in {{ROOT}}/_build/extract/, {{SOLUTIONS FILES: the solutions files holding the
+  blocks of the question parts and answers docs among them, in {{ROOT}}/_build/solutions/, each
+  part's solution under its `### [<doc> <part>]` block; or "none": drop this item}}, and {{EXAMPLES: the
   parts of {{ROOT}}/_build/verify/examples.out.md your worked examples use}}.
 - {{PATTERNS, on a hub `11-next-exam` reopened, when the tutor log has them: Where this student
   stalled before, from the tutor log's ## Patterns, quoted: {{LINES}}. This is evidence from one
@@ -312,8 +313,8 @@ main session checks each finding and applies the fixes.
 ## Scope
 - Work in: {{ROOT}}, read only.
 - Review {{ROOT}}/notes/{{FILE}} against its extract blocks ({{EXTRACT BLOCKS}} in
-  {{ROOT}}/_build/extract/) and their sets' solutions files ({{SOLUTIONS FILES}} in
-  {{ROOT}}/_build/solutions/, or none), {{ROOT}}/_build/backbone.md (§{{N}} and the Conventions block) and
+  {{ROOT}}/_build/extract/) and the solutions files holding the blocks of the question parts and
+  answers docs those blocks cite ({{SOLUTIONS FILES}} in {{ROOT}}/_build/solutions/, or none), {{ROOT}}/_build/backbone.md (§{{N}} and the Conventions block) and
   {{ROOT}}/_build/STYLE.md. {{CHECKER: Every worked example's numbers come from
   {{ROOT}}/_build/verify/examples.out.md. | NO CHECKER: Nothing in this course is computable, so
   there is no checker output: redo every step of each worked example from its cited sources, and
@@ -333,10 +334,11 @@ main session checks each finding and applies the fixes.
      text states dropped from it, and its Example's numbers the text's or the checker's. A
      diagram-taught section (the backbone's `Diagram-taught: yes`) leads with its figure (S11, FB-115).
      A skill rule id in the text, such as (S12) or (FB-123), is a finding.
-  5. Wording against the official solutions: compare the section's wording with the `Answers:
-     yes` files its extract blocks cover ({{ANSWER FILES: each file MANIFEST.md marks `Answers:
-     yes` whose blocks the coverage matrix maps into §{{N}}, or "none": drop this item}}), whose
-     solutions are their blocks in {{ROOT}}/_build/solutions/. Wording that tracks an official
+  5. Wording against the official solutions: compare the section's wording with the official
+     solutions of the question parts its extract blocks cover ({{ANSWER FILES: each file
+     MANIFEST.md marks `Answers: yes` that solves a question part the coverage matrix maps into
+     §{{N}}, or "none": drop this item}}): each part's `### [<doc> <part>]` block, and an answers
+     doc's page blocks, in the solutions files above. Wording that tracks an official
      solution (its phrasing, its sentence order, its steps as it writes them) is a finding, major:
      the fix
      rewords from the slide or derives the step plainly, never paraphrases the solution (FB-071).

@@ -71,9 +71,15 @@ Spawn one `reviewer` per section file, all at once (FB-102), each from
 4. **STYLE:** the rest of `_build/STYLE.md`, each subsection's depth label (S33) among it.
 
 Each brief names the answer sets the student hasn't attempted: the notes quote none of them, and
-a quote is a blocker. Its `{{ANSWER FILES}}` slot names each file MANIFEST.md marks `Answers:
-yes` whose blocks the coverage matrix maps into the section: wording that tracks an official
-solution is a finding (FB-071), reworded from the slide or derived plainly in step 5. Findings come back ranked blocker, major, minor, in at most 700 words.
+a quote is a blocker. Its `{{SOLUTIONS FILES}}` slot names the solutions files that hold the
+blocks of the question parts and answers docs the section's extract blocks cite: for each part
+the coverage matrix maps into the section (`[HW1 Q2a]`) and each answers doc page its blocks cite
+(`[HW1S p.2]`), the file under `_build/solutions/` holding its `### [<id>]` block, found by block
+id (`grep -l -F '### [HW1 Q2a]' _build/solutions/*.md`), or `none`. Its `{{ANSWER FILES}}` slot
+names each file MANIFEST.md marks `Answers: yes` that solves one of those parts: wording that
+tracks an official solution, its part's block in those solutions files, is a finding (FB-071),
+reworded from the slide or derived plainly in step 5. Findings come back ranked blocker, major,
+minor, in at most 700 words.
 Reviewers never open `practice/` (FB-105). Give each reviewer the diagram slides of its section
 that no checker trace covers (`02-extract` listed them in STATUS), to compare with the extract and
 the page image (FB-104).
@@ -131,8 +137,10 @@ order (`08-practice`) get the same audit when they exist.
   `00-intake` and `11-next-exam` write it from the student's word, `09-tutor` Step 7 when its last
   part is done.
   With no such set, skip the run and log `no unattempted set` in STATUS. Otherwise give each set's
-  extract (`_build/extract/<name>.md`) and its solutions file, if it has one
-  (`_build/solutions/<name>.md`), as question files, and the lecture extracts the notes cite as
+  extract (`_build/extract/<name>.md`) and each solutions file that holds a block of its parts,
+  `### [<doc> <part>]` (find them by block id: `grep -l -F '### [<doc> ' _build/solutions/*.md`,
+  since a separate answers file's agent may have written them under another name), as question
+  files, and the lecture extracts the notes cite as
   allowed sources:
   `python3 -I <skill>/scripts/mock_leak.py --questions <the sets' extracts and solutions files>
   --allow <the lecture extracts> --pages notes/*.md`. The main session runs it, since reviewers
