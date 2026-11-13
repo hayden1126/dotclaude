@@ -6,7 +6,8 @@ is pinned here. Every template, workflow and reference opens with the baseline h
 paths the skill names must exist, except the ones later stages will add (PENDING, which shrinks as
 each stage lands and fails once a pending path exists). The privacy check reads the maintainer's
 private denylist when it exists and skips otherwise: the repo is public, and the denylist itself
-names what must stay out of it."""
+names what must stay out of it. The questions check's question files read the same at every
+workflow site that names them."""
 import os
 import re
 import unittest
@@ -176,6 +177,49 @@ class WatchRules(unittest.TestCase):
     def test_the_cite_pattern(self):
         self.assertEqual(W_CITE.findall("(W12), W3 to W5; `[W1 §2.1]`, `W1 (all)`"),
                          ["12", "3", "5"])
+
+
+class QuestionsCheckFiles(unittest.TestCase):
+    """05-verify step 5 gives mock_leak.py's question files, and 08-practice's "Changing the
+    notes or a sheet" item 4, 10-polish and 11-next-exam (twice) restate them. Each site names
+    the same files in the same words: the unattempted sets' extracts and their existing
+    solutions files, never an attempted set's file or a multi-set answers file's own file (its
+    page blocks hold only a pointer line). The two sites that spell the paths say a set with no
+    official answers has no solutions file, since mock_leak.py exits 2 on a missing path."""
+
+    SET = ("each unattempted set's extract and its solutions file when it has one, never an "
+           "attempted set's file or a multi-set answers file's own file")
+    SITES = {"05-verify.md": 1, "08-practice.md": 1, "10-polish.md": 1, "11-next-exam.md": 2}
+    SPELLED = ("05-verify.md", "08-practice.md")
+    # The wording round 14 replaced, which passed a set's solutions file whether or not it exists.
+    OLD = ("extract and own solutions file", "and its own solutions file")
+    CONTEXT = ("questions check", "--questions", "question files")
+
+    @staticmethod
+    def flat(name):
+        with open(os.path.join(SKILL, "workflows", name), encoding="utf-8") as f:
+            return " ".join(f.read().split())
+
+    def test_each_site_names_the_same_files(self):
+        for name, count in self.SITES.items():
+            flat = self.flat(name)
+            self.assertEqual(flat.count(self.SET), count, name)
+            for old in self.OLD:
+                self.assertNotIn(old, flat, name)
+
+    def test_each_site_is_the_questions_check(self):
+        for name in self.SITES:
+            flat = self.flat(name)
+            for m in re.finditer(re.escape(self.SET), flat):
+                before = flat[max(0, m.start() - 300):m.start()]
+                self.assertTrue(any(c in before for c in self.CONTEXT), (name, before))
+
+    def test_the_spelled_sites_pass_only_existing_files(self):
+        for name in self.SPELLED:
+            flat = self.flat(name)
+            for phrase in ("set with no official answers has", "`_build/solutions/<name>.md`",
+                           "`mock_leak.py` exits 2 on a missing path"):
+                self.assertTrue(phrase in flat, (name, phrase))
 
 
 class Privacy(unittest.TestCase):

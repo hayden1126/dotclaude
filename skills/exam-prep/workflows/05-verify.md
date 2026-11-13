@@ -143,16 +143,19 @@ order (`08-practice`) get the same audit when they exist.
   YYYY-MM-DD` (a doc holding its own key): `00-intake` and `11-next-exam` write it from the
   student's word, `09-tutor` Step 7 when its last part is done. A separate answers file's row
   stays `yes` and never records an attempt, since it may solve several sets.
-  With no such set, skip the run and log `no unattempted set` in STATUS. Otherwise give each
-  unattempted set's extract (`_build/extract/<name>.md`) and its own solutions file
-  (`_build/solutions/<name>.md`, the same `<name>`: one file per set, so it holds that set's part
-  blocks alone) as question files, and the lecture extracts the notes cite as allowed sources:
+  With no such set, skip the run and log `no unattempted set` in STATUS. Otherwise give, as
+  question files, each unattempted set's extract and its solutions file when it has one, never an
+  attempted set's file or a multi-set answers file's own file: the extract
+  `_build/extract/<name>.md`, and `_build/solutions/<name>.md` under the same `<name>` (one file
+  per set, so it holds that set's part and stem blocks alone) only when it exists. A set with no
+  official answers has no solutions file, and `mock_leak.py` exits 2 on a missing path. The
+  lecture extracts the notes cite are the allowed sources:
   `python3 -I <skill>/scripts/mock_leak.py --questions <the unattempted sets' extracts and
-  solutions files> --allow <the lecture extracts> --pages notes/*.md`. An attempted set's
-  solutions file is never passed, nor is a multi-set answers file's own file: its page blocks
-  hold only the line `(transcribed under the sets' blocks)`, since its agent puts every word of
-  official text under a set's stem or part block in that set's own file (`02-extract`, "The
-  solutions file"). The main session runs it, since reviewers never open `practice/`.
+  existing solutions files> --allow <the lecture extracts> --pages notes/*.md`. A multi-set
+  answers file's own file adds nothing: its page blocks hold only the line `(transcribed under
+  the sets' blocks)`, since its agent puts every word of official text under a set's stem or
+  part block in that set's own file (`02-extract`, "The solutions file"). The main session runs
+  it, since reviewers never open `practice/`.
   Each hit names a notes line and a set's part, never the text. The Review view (`07-cheatsheet`)
   only tags blocks of the notes, so this check covers it, and every later change runs it as
   `08-practice`'s "Changing the notes or a sheet" item 4 says, with these same files.
