@@ -191,7 +191,11 @@ STATUS).
      `its own file, since it solves several sets`, `beside its own extract`): any page of a
      separate answers file, or a key page or key section its Key cell names (a locator that is a
      key section's name followed, after any spaces, by nothing, a character that is no letter or
-     digit, or `Q` and a digit, included);
+     digit, or `Q` and a digit, included). When the block has no home (its set has no block in
+     any extract), the line names this extract's own solutions file, `_build/solutions/<name>.md`,
+     with no `<why>`, and the moved block then fails `NO HOME FILE`: its fix applies, extracting
+     the set when it is in scope, else the `KEY NAMES A SET NOT IN SCOPE` fix (drop the set from
+     the answers file's Key cell, or give the answers file the set's Scope);
 
    `SOLUTION IN AN EXTRACT` holds for any extract block, a lecture's too, when its `Solution [`
    or `**Solution...**` line cites a solved or answers doc; and the lines above a file's first
