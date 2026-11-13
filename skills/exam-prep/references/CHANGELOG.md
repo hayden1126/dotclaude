@@ -136,6 +136,9 @@ evidence ids.
     3.4, checked by `extract_check.py`, which warns on an off-form marker and on an unmarked
     part, with `qonly.py --parts` feeding `05-verify`'s PARTS, FB-100), read by every
     answer-blind brief (I3.C18, I3.G9, I2.G10).
+  - FB-055: a value still illegible on a 300 dpi crop is written `(illegible at 300 dpi:
+    <what>)` by the main session, which `extract_check.py` counts without failing, noted in
+    STATUS and asked once no `Build running` line stands (round 9 review).
   - FB-191: `mock_leak.py`'s questions mode drops only the extract brief's own note lines (a
     `Pages:` line of cites alone, `**Shape:**`, `**Conventions:**` and the closing `Coverage:`
     line), so question text on any other `Pages:` or `Coverage:` line is checked (round 6 review).
