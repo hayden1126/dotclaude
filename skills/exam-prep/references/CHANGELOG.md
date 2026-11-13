@@ -193,7 +193,8 @@ evidence ids.
     list, and with no unattempted set the check prints `QUESTIONS OK: no unattempted set` (round
     17 review).
   - FB-191 and FB-056: the questions check reads the sheets too: `mock_leak.py --hub .` takes no
-    page and reads every page under `notes/` and `cheatsheet/`, so `07-cheatsheet` runs it
+    page and reads every page under `notes/` and the files directly in `cheatsheet/` (a finished
+    exam's frozen archive, `cheatsheet/<exam-slug>/`, is skipped), so `07-cheatsheet` runs it
     before a sheet is published or printed and a change to a sheet reruns it; an unattempted set
     with no extract (a source added unverified) is checked against its rendered text, and one
     with neither extract nor rendered text exits 2, as does a missing or unreadable MANIFEST.md;
