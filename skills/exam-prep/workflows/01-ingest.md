@@ -104,9 +104,10 @@ answers file or in the same wave (`02-extract` step 1). When step 3 dropped the 
 in STATUS), its arrival undoes the drop: put the set back in the Key cell and its pages back in
 the answers file's Scope, then extract the set, and the answers file again in the same wave so
 the restored pages reach the solutions files (`02-extract` step 1). Take the drop line out. A
-set that arrives after the build runs this same undo in either `11-next-exam` path, "A source
-added" (its step 4) or "A source added unverified" (its item 2), whenever STATUS holds a
-`Pending set dropped: <set>` line for it.
+set that arrives after the build runs this same undo in `11-next-exam`'s "A source added" (its
+step 4) whenever STATUS holds a `Pending set dropped: <set>` line for it, and in "A source added
+unverified" (its item 2) only for a set the student has attempted: that path refuses an
+unattempted set.
 
 ## Ed Discussion
 
