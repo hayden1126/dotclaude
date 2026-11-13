@@ -48,7 +48,13 @@ numbered) goes in the Conventions block with the one subsection that states it; 
 links there (FB-065). Where the slides and the official solutions disagree, say which one the
 answers follow, in that same place. The block also lists each notation the answers use, each with
 its staff source (the staff sheet, solution or post that writes it so): notation the staff's own
-sheets use wins over the slides' and over a hub's own conventions (FB-089).
+sheets use wins over the slides' and over a hub's own conventions (FB-089). An erratum (an official
+answer that is wrong, settled with the checker or the source: `05-verify` step 1) gets one line
+here naming its doc and part only, never a value (`Erratum: HW1S, HW1 Q2a: the official answer is
+wrong; the corrected value is on the part's Erratum line in its solutions file`): mock writers and
+the sheets' gap scan read the backbone. The corrected value sits only on the `Erratum:` line under
+the part's `Solution [` line in its set's solutions file, and STATUS logs the erratum by doc, page
+and part.
 
 ## Step 5: Shortlist the figures
 
