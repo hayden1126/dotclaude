@@ -396,6 +396,48 @@ class Template(unittest.TestCase):
         self.assertEqual(tab.evaluate(f"{main}.scrollTop"), 300)
         self.assertEqual(self.errors(tab), [])
 
+    def test_a_scroller_with_an_id_survives_an_answer_that_moves_it(self):
+        # "Drop it" removes the stats strip, so every later child of <main> moves up one place.
+        box = 'style="height: 200px; overflow: auto"><div style="height: 2400px"></div>'
+        pane = (f'<main>${{page}}<section {box}</section><div class="plain" {box}</div>'
+                f'<div id="pane" {box}</div>')
+        tab = self.open([(MAIN_OPEN, pane)])
+        doc = 'document.getElementById("app").contentDocument'
+        tab.evaluate(f'{doc}.querySelector("section").scrollTop = 300; {doc}.getElementById("pane").scrollTop = 500')
+        tab.evaluate(FRAMES_JS)
+        self.click(tab, question(2), "Drop it")
+        self.assertEqual(tab.evaluate(f'{doc}.getElementById("pane").scrollTop'), 500, "found by its id")
+        self.assertEqual(tab.evaluate(f'{doc}.querySelector(".plain").scrollTop'), 0,
+                         "the section's old place now holds a div: it isn't given the section's scroll")
+        self.assertEqual(self.errors(tab), [])
+
+    def test_a_scroll_cut_short_by_a_shorter_render_comes_back_in_full(self):
+        shell = '<main style="height: 600px; overflow: auto">${page}<div style="height: 1200px"></div>'
+        tab = self.open([(MAIN_OPEN, shell)])
+        main = 'document.getElementById("app").contentDocument.querySelector("main")'
+        tab.evaluate(f"{main}.scrollTop = 1e6")
+        tab.evaluate(FRAMES_JS)
+        bottom = tab.evaluate(f"{main}.scrollTop")
+        self.click(tab, question(2), "Drop it")
+        self.assertLess(tab.evaluate(f"{main}.scrollTop"), bottom, "the shorter render can't scroll as far")
+        self.click(tab, question(2), "Keep it")
+        self.assertEqual(tab.evaluate(f"{main}.scrollTop"), bottom)
+
+    def test_a_focusable_wrapper_still_pans(self):
+        tab = self.open([(MAIN_OPEN, '<main><div tabindex="0">${page}</div>')])
+        self.click(tab, "#c-zoom button", "200%")
+        p = tab.evaluate("""(() => {
+          const app = document.getElementById("app"), a = app.getBoundingClientRect(), k = a.width / app.width;
+          const r = app.contentDocument.querySelector("tbody td").getBoundingClientRect();
+          return { x: a.left + (r.left + r.width / 2) * k, y: a.top + (r.top + r.height / 2) * k };
+        })()""")
+        self.mouse(tab, "mousePressed", p["x"], p["y"], 1)
+        for step in range(1, 6):
+            self.mouse(tab, "mouseMoved", p["x"] - 20 * step, p["y"], 1)
+        self.mouse(tab, "mouseReleased", p["x"] - 100, p["y"], 0)
+        tab.evaluate(FRAMES_JS)
+        self.assertAlmostEqual(tab.evaluate(SCROLLS_JS)["frameLeft"], 100, delta=2)
+
     def test_a_press_on_the_render_s_own_scrollbar_never_pans(self):
         tab = self.open([(MAIN_OPEN, MAIN_OPEN + '<div style="height: 2400px"></div>')])
         self.click(tab, "#c-zoom button", "200%")
@@ -435,7 +477,8 @@ class Template(unittest.TestCase):
                                 "the page still builds, so the check can measure it")
 
     def test_a_config_may_use_plain_names_the_shell_avoids(self):
-        names = "const screens = {}, controls = [], where = 0, groups = 0, pan = 0, corner = 0, problems = 0;\n"
+        names = ("const screens = {}, controls = [], where = 0, groups = 0, pan = 0, corner = 0, problems = 0,"
+                 " app = 0, main = 0, scale = 0, frameEl = 0, topRow = 0;\nfunction update() {}\nfunction refit() {}\n")
         tab = self.open([(SCREENS_LINE, SCREENS_LINE + names)])
         self.assertEqual(self.errors(tab), [])
         self.click(tab, question(3), "Leave it out")

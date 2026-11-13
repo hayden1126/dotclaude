@@ -208,6 +208,8 @@ th { color: var(--muted); font-size: 12px; font-weight: 600; }
 </main></body></html>`;
 }
 /* ==== END OF MOCK CONFIG. Everything below is the layout; leave it alone. ==== */
+// One function scope, so no name the config declares can clash with the shell's.
+(() => {
 
 const WIDE = "(min-width: 1101px)";
 const FIT_STEPS = ["m-fit-1", "m-fit-2", "m-fit-3"];
@@ -217,7 +219,7 @@ const ZOOMS = ["Fit", "100%", "200%", "300%"];
 // data-no-pan, and anything whose own cursor says it reacts (pointer, grab, a resize handle).
 const PAN_START = 4;
 const NO_PAN = ["a", "button", "input", "select", "textarea", "label", "summary", "[contenteditable]",
-  '[tabindex]:not([tabindex="-1"])', "[onclick]", "[data-no-pan]",
+  "[onclick]", "[data-no-pan]",
   ...["button", "link", "tab", "switch", "checkbox", "radio", "slider", "option", "menuitem",
     "menuitemcheckbox", "menuitemradio", "treeitem"].map((role) => `[role=${role}]`)].join(", ");
 const PLAIN_CURSORS = ["auto", "default", "text"];
@@ -306,20 +308,25 @@ function controlGroup(label, seg) {
 // The render's scroll positions, kept across re-renders of the same view (frame and screen): the page's
 // and each scrolled element's, such as an app shell's <main>. #frame keeps its own scroll across a
 // srcdoc swap; the render's document and its elements start at the top on each load.
-let shownView = null, savedScroll = null;
+let shownView = null, savedScroll = null, restoring = false;
 const viewKey = () => `${state.frame.label}\n${state.screen ?? ""}`;
 
-// Where an element sits, from its nearest id or the root, so a reload finds the same scroller.
+// Where an element sits, from its nearest id or the root, so a reload finds the same scroller. Each
+// step keeps its tag: an answer that adds or drops an earlier sibling then finds nothing, not the
+// wrong element. A scroller with an id is found wherever it moves.
 function scrollPath(el) {
   const steps = [];
-  for (; el.parentElement && !el.id; el = el.parentElement) steps.unshift([...el.parentElement.children].indexOf(el));
+  for (; el.parentElement && !el.id; el = el.parentElement) steps.unshift([[...el.parentElement.children].indexOf(el), el.tagName]);
   return JSON.stringify([el.parentElement ? el.id : null, steps]);
 }
 
 function scrollTarget(doc, path) {
   const [id, steps] = JSON.parse(path);
   let el = id ? doc.getElementById(id) : doc.documentElement;
-  for (const i of steps) el = el?.children[i];
+  for (const [i, tag] of steps) {
+    el = el?.children[i];
+    if (el?.tagName !== tag) return null;
+  }
   return el;
 }
 
@@ -540,6 +547,10 @@ app.addEventListener("load", () => {
   const doc = app.contentDocument, win = app.contentWindow;
   if (!doc) return;
   if (savedScroll?.view === viewKey()) {
+    // The scroll events a restore fires come a frame later; they would save a position the shorter
+    // render cut short, over the one the viewer left.
+    restoring = true;
+    requestAnimationFrame(() => requestAnimationFrame(() => { restoring = false; }));
     const { left, top, inner } = savedScroll;
     win.scrollTo(left, top);
     for (const [path, [x, y]] of Object.entries(inner)) {
@@ -550,6 +561,7 @@ app.addEventListener("load", () => {
   // Element scrolls don't bubble, so this listens in the capture phase. The view is read at each
   // scroll, not at load: a Size click that leaves the HTML alone keeps this page.
   doc.addEventListener("scroll", (e) => {
+    if (restoring) return;
     const view = viewKey();
     if (savedScroll?.view !== view) savedScroll = { view, left: 0, top: 0, inner: {} };
     if (e.target === doc) Object.assign(savedScroll, { left: win.scrollX, top: win.scrollY });
@@ -568,6 +580,7 @@ addEventListener("resize", refit);
 new ResizeObserver(refit).observe(document.querySelector(".m-main"));
 document.fonts.ready.then(refit);
 if (shellProblems.length) throw new Error(`Mock config: ${shellProblems.join("; ")}`);
+})();
 </script>
 </body>
 </html>
