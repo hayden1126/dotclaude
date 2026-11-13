@@ -110,12 +110,15 @@ Transcribe; never summarize.
     check runs when, or how a board is numbered; or "none">`
   - {{SOLUTIONS: and its official solution under it, on a line of its own, cited to its pages:
     `Solution [{{SOLDOC}} p.N]: ...`, or `Solution [{{SOLDOC}} <its section>]: ...` for a file
-    without pages ({{SOLDOC}} is {{DOC}} when the solutions sit in the same file). Only a part's
+    without pages ({{SOLDOC}} is {{DOC}} when the solutions sit in the same file), starting
+    exactly `Solution [` with no words between `Solution` and the cite (the check fails any other
+    line that cites {{SOLDOC}}'s pages, `Pages:` lines aside). Only a part's
     block holds a `Solution [` line, never a stem's or a page's: the self-test counts those lines
     as the official parts. The solution is the last thing in the part's block, its working (a
     table, a fenced trace) under its line: the question-only copy drops everything from that
     line to the next `###` header, so nothing of the question may follow it.}}
 - Last line: `Coverage: {{RANGE}}; N blocks; K image only (<why, per page>); U flagged unreadable.`
+  (a flag's detail may follow, in parentheses).
 ```
 
 ## Write (stage 04)

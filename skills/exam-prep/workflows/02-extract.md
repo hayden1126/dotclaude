@@ -49,8 +49,12 @@ marker inside its block, since the question-only copy drops everything from the 
 block's end. Inside a code fence only the looser forms (a `# Solution` comment, which the heading
 form also reads as, or a bare `Solution:` or `Solution` line) are code and cut nothing; the bold
 `**Solution:**` and bracketed `Solution [<doc> <loc>]:` markers cut wherever they sit, so
-question code never writes them. The
-reverse holds too: a question that quotes a document in a nested fence (a four-backtick fence
+question code never writes them. A short qualifier still reads as the marker (`Solution to Q1a
+[<soldoc> p.N]:` or `Solution, part (a) [<soldoc> p.N]:`, with its colon, and `**Solution (Q1):**`),
+and so does `Answer [<soldoc> p.N]:` when <soldoc> is an Answers `yes` doc. Any other line that
+cites an answers file, or a key page of a past exam, and that no marker cuts is a solution worded
+off the format: `qonly.py` makes a copy due for it and `extract_check.py` fails it by file and
+line (a `Pages:` line holding nothing but cites doesn't count). The reverse holds too: a question that quotes a document in a nested fence (a four-backtick fence
 holding a three-backtick line and a `## Solution` heading) loses everything from that heading to
 the block's end in the question-only copy. That fails safe, so it stands, but quoted material
 avoids a heading-form marker. A block of an answers file (MANIFEST's Answers `yes`) is all
@@ -65,7 +69,8 @@ agent that wrote anywhere else broke its brief: undo that and say so in STATUS).
 1. `python3 -I <skill>/scripts/extract_check.py`. It checks every in-scope MANIFEST row against
    the blocks: each in-scope page of a PDF rendered and with a block, each in-scope slide of a
    deck, at least one block for any other source (the Ed digest is read as it is). It prints the
-   missing pages or slides and the image-only and `UNREADABLE:` counts per document. A missing
+   missing pages or slides and the image-only and `UNREADABLE:` counts per document, then each open
+   `UNREADABLE:` flag by file and line. A missing
    page goes back to its agent (SendMessage to its id), or the main session extracts it. Blocks
    for a `reserved` doc fail the check: delete them, and find which brief let the agent open it
    (FB-023). Blocks for a `pending` row fail too: its file has arrived, so give the row a real
@@ -89,7 +94,10 @@ agent that wrote anywhere else broke its brief: undo that and say so in STATUS).
    such extract as having no copy, and after any later edit to one (a resolved flag, a re-read
    page) it fails the copy as stale until `qonly.py` runs again. It also fails, by file and line,
    a copy that still holds a solution, and one that differs from what `qonly.py` would write now
-   (a hand edit): run `qonly.py` again. It fails, by file and line, an extract's code fence that
+   (a hand edit): run `qonly.py` again. It fails, by file and line, an extract's line that no
+   marker cuts and that cites an answers page (`CITES AN ANSWERS PAGE`): a solution is rewritten
+   as `Solution [<soldoc> p.N]: ...`, question text cites the question's own page. It fails, by
+   file and line, an extract's code fence that
    never closes before the next block header, the closing `Coverage:` line or the end of the file
    (no fence exempts a marker then): close it with the same mark. It warns, by file and line, on
    a looser marker left inside a fence, kept as code: the main session checks whether it starts
