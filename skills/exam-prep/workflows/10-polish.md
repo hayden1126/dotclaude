@@ -28,8 +28,8 @@ from then on, in the cram night's session (`08-practice` step 8, its one tab), b
 The box and figure passes bring a hub built before S34 or the widened S11 up to them, a reopened
 hub's old sections among them (`11-next-exam` otherwise leaves those as written). Two build
 warnings name them (FB-015): a cram order with no S33 depth label on any row (`cram_check.py` and
-`assemble.py` warn `PRE_S33`) gets its labels in a box pass, and a backbone with no
-`Diagram-taught` line (`coverage_check.py` warns) gets its lines in a figure pass.
+`assemble.py` warn `PRE_S33`) gets its labels in a box pass, and a backbone section with no
+`Diagram-taught` line (`coverage_check.py` warns) gets its line in a figure pass.
 
 A direct instruction that names its edit, what and where ("add the cost caveat to §4.6 and where
 §3 first gives the cost"), is an approved list of one, the pass `edit`: skip steps 3 and 4, but

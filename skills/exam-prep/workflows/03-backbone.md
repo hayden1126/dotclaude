@@ -119,6 +119,7 @@ but isn't one.
 ## Done when
 
 `coverage_check.py` exits 0 (every block mapped, every diagram-taught section with its figure);
-every id is in the registry; every section has its Diagram-taught line and the backbone holds the
+every id is in the registry; every section this run writes has its Diagram-taught line (an older
+section without one only warns, FB-015) and the backbone holds the
 figure shortlist (logged in STATUS while a `Build running` line stands, shown to the student when run alone without one); every practice question part has its How it's tested row; `examples.py` exits 0, or PLAN.md's Checker line says nothing in the course
 is computable; and the backbone is committed.

@@ -81,7 +81,8 @@ agent that wrote anywhere else broke its brief: undo that and say so in STATUS).
    extract and its SHA-256. Then rerun `extract_check.py`: until the copies exist it fails each
    such extract as having no copy, and after any later edit to one (a resolved flag, a re-read
    page) it fails the copy as stale until `qonly.py` runs again. It also fails, by file and line,
-   a copy that still holds a solution. Hard rule 4 and FB-191 keep the answers of a set the
+   a copy that still holds a solution, and one that differs from what `qonly.py` would write now
+   (a hand edit): run `qonly.py` again. Hard rule 4 and FB-191 keep the answers of a set the
    student hasn't attempted out of everything they read, so every agent that must not see
    answers reads the copy and never the extract for a source with solutions, whether or not the
    student has attempted it: the sheet gap scan, the audits (Must-know, cheat sheet, cram order),
@@ -100,6 +101,6 @@ audits the second group against their images (FB-052, FB-104).
 ## Done when
 
 `extract_check.py` exits 0 (it fails while any `UNREADABLE:` flag is open, or while a
-question-only copy is missing, stale or holds a solution), and STATUS has the coverage. It skips a doc on a STATUS `Unverified:` line (`11-next-exam`, "A source added
+question-only copy is missing, stale, differs from `qonly.py`'s output or holds a solution), and STATUS has the coverage. It skips a doc on a STATUS `Unverified:` line (`11-next-exam`, "A source added
 unverified") until that doc has a block. Commit the extracts and their question-only copies:
 they are tracked in the hub, which stays local.
