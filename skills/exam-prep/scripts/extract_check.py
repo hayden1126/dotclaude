@@ -4,10 +4,10 @@
   extract_check.py [--root DIR]           check; exit 0 or 1
   extract_check.py --parts [--root DIR]   print the self-test's PARTS and exit 0
 
-MANIFEST's table is read by its header names (Doc id, File, Pages, Scope, Answers, Notes; any
-other column, such as the optional By, is ignored); with no Doc id, File or Scope column it
-fails. Every row's Scope starts with `in`, `concepts only`,
-`reserved`, `pending` or `out`; any other word fails. An in-scope Scope is `in` or `concepts
+MANIFEST's table is read by its header names (Doc id, File, Pages, Scope, Answers, Key, Notes;
+any other column, such as the optional By, is ignored); with no Doc id, File or Scope column it
+fails. Notes is free text: nothing here reads it. Every row's Scope starts with `in`, `concepts
+only`, `reserved`, `pending` or `out`; any other word fails. An in-scope Scope is `in` or `concepts
 only`, then nothing, `PDF pp.A-B[, C-D]` or `slides #/A-#/B`, with notes in parentheses (a note
 holding a page range fails: it would go unchecked); any other wording fails as SCOPE NOT
 UNDERSTOOD. Each in-scope row is checked by its source's kind:
@@ -26,65 +26,67 @@ Blocks are the `### [<doc> <locator>] title` headers in _build/extract/*.md and
 _build/solutions/*.md: `p.N` (`p.N-M` for a run of build frames), `#/h` or `#/h/v`, a question
 part (`Q3a`), a stem (`Q3 stem`) or any other name (a source without pages). Inside a question
 block, a `[<doc> p.N]` cite covers that page when <doc> is the block's own or an answers file
-(Answers `yes`) whose `solutions to <doc>` note names the block's doc. A question block in a
-solutions file covers pages that way but counts as no block of its doc.
+whose `for` key names the block's doc. In an extract, a cite of another doc's page, or of a key
+page of its own doc, covers nothing (that page's block goes in a solutions file). A question block
+in a solutions file covers pages that way but counts as no block of its doc.
 
 Answers is read as `yes` when the cell starts with `yes`. The tutor's attempt mark lives in each
 set's own row (`no, attempted YYYY-MM-DD`, or `yes, attempted YYYY-MM-DD` for a doc with its own
 key), and a separate answers file's row stays `yes`; so `yes, attempted ...` is still an answers
 row and `no, attempted ...` still isn't.
 
-Notes: free text, read as clauses split on `;`. A clause holding `solutions to` or `solutions
-for` (any case), or starting with `key`, is a note this script reads and must match its form whole
-(SOLUTIONS_NOTE, KEY_NOTE); any other clause is a remark. Solved docs: an in-scope Answers `yes`
-doc with a `solutions to <doc>` note solves the docs it names; the note reads a list
-(`solutions to HW1, HW2 and HW3`, `solutions to HW1 & HW2`), and every word in it must be a doc id
-in MANIFEST. One with no such note solves itself (a past exam with its key) and names its key in
-a clause of its own: `key p.N`, `key pp. N-M` (lists and ranges, `key pp. 7-9, 11`, `key p.3 and
-p.4`), `key inline` (each solution sits under its question; no page is a key page) or `key
-sections` (a source without pages, such as a Word exam), as in `Practice exam 1; key pp. 7-9`.
-Only the named key pages are answers pages of such a doc, whatever any `Pages:` line says, and an
-extract's cite of one covers nothing (its block goes in a solutions file); its other pages (cover,
-rules, formula sheet) are question material. A page-less locator of such a doc (a section) is
-answers only when it names Key, Answers or Solutions (`[PE1 Key]`, not `[PE1 Instructions]`),
-whichever the key note's form. An answers doc is any Answers `yes` doc. Extract agents keep every answer out of _build/extract/<name>.md and write it to
-_build/solutions/<name>.md, one `### [<doc> Q1a]` block per question part of a solved doc holding
-a `Solution [<doc> <loc>]: ...` line or the line `No official solution.`. It fails, naming the
-file and line:
+Key says where an Answers `yes` doc's answers are, read whole (trimmed, any case; read_key()):
+- empty or `-`: no key, as an Answers `no` row has (KEY WITHOUT ANSWERS otherwise).
+- `for HW1, HW2 and HW3` (ids joined by `,`, `&`, `and` or `, and`): a separate answers file
+  solving those docs; each must be a doc id in MANIFEST (KEY NAMES NO DOC).
+- `p.N` or `pp. 7-9, 11` (items N or N-M, hyphen or en dash, ascending, joined as above; a joined
+  item may restate `p.`): the doc holds its own key on those pages.
+- `inline`: the doc holds its own key, each solution under its question; no key pages.
+- `sections: Marking scheme, Answers` (names joined by `,`): a source without pages holds its own
+  key in the sections whose block locator is one of the names (any case, runs of whitespace as
+  one). A row whose File ends in .pdf or whose Pages is a number fails SECTIONS KEY ON A PAGED
+  DOC, and a named section with no block in any solutions file fails KEY SECTION NOT FOUND.
+- anything else fails UNREAD KEY, and the row's other key checks are left out.
+Solved docs: the docs a `for` key names, and every doc whose own key is pages, `inline` or
+`sections:`. Answers pages (answers_cite()): every block and page of a `for` answers file (but a
+doc its own list names); the key pages; the key sections. Nothing else of a self-answering doc is
+answers: its cover, rules, formula sheet or a "Key formulas" section stays in the extract. Extract
+agents keep every answer out of _build/extract/<name>.md and write it to _build/solutions/<name>.md,
+one `### [<doc> Q1a]` block per question part of a solved doc holding a `Solution [<doc> <loc>]:
+...` line or the line `No official solution.`; a part's block sits in the solutions file named as
+the extract holding the part's question block. An answers file's own page or section blocks may
+sit in any solutions file (its agent writes _build/solutions/<answers file name>.md). It fails,
+naming the file and line:
 - NO SOLUTION BLOCK: a question part of a solved doc with a block in an extract and none in any
   solutions file.
 - in a solutions file: a part block naming a part no extract has (NO SUCH PART), a part with two
-  blocks (TWO SOLUTIONS BLOCKS), a part block holding neither form (EMPTY SOLUTIONS BLOCK).
+  blocks (TWO SOLUTIONS BLOCKS), a part block holding neither form (EMPTY SOLUTIONS BLOCK), a part
+  block in a solutions file other than its extract's (WRONG SOLUTIONS FILE).
 - in an extract: SOLUTION IN AN EXTRACT, a bracketed `Solution [<doc> <loc>]` or bold
   `**Solution:**` line, fenced or not, in a block of a solved doc, or in any block (a lecture's
   too) when a cite on it names a solved doc or an answers doc; CITES AN ANSWERS PAGE, a line
-  citing an answers page (answers_cite(): any page of an answers file paired with other docs; for
-  a doc with its own key, a key page its note names, or a cite naming no page and naming its key,
-  `[PE1 Key]`), a `Pages:` line holding only cites and the closing `Coverage:` line aside;
-  AN ANSWERS PAGE IN AN EXTRACT, a block of a separate answers file, or a key page's block or a
-  page-less block naming its key, of a doc with its own key.
+  citing an answers page (answers_cite()), a `Pages:` line holding only cites and the closing
+  `Coverage:` line aside; AN ANSWERS PAGE IN AN EXTRACT, a block of a separate answers file, or a
+  key page's or key section's block of a doc with its own key.
 - the lines before a file's first block header (its `# ...` title, `Sources:` and `Every page
   image was viewed.` lines pass): in an extract, a `Solution [` or `**Solution:**` line fails as
   SOLUTION IN AN EXTRACT and an answers cite as CITES AN ANSWERS PAGE, and in a file holding a
   solved doc's block they warn as that block's lines do (below); in either directory, an open
   `UNREADABLE:` flag fails and an illegible value is listed, by file and line.
-- in MANIFEST, for an in-scope Answers `yes` row the `Unverified:` skip (below) doesn't cover:
-  UNREAD NOTE, a note clause matching no form whole (the row's other note checks are left out:
-  they follow from it); NOTE NAMES NO DOC, a word in its `solutions to` list that is no doc id; NO
-  KEY NOTE, a row with neither a `solutions to` note nor a key note; ANSWERS WITH NO PAIRING, one
-  with no `solutions to` note and no question block in any extract.
+- in MANIFEST, for an in-scope row the `Unverified:` skip (below) doesn't cover: the Key checks
+  above; NO KEY, an Answers `yes` row with an empty Key cell (or no Key column); ANSWERS WITH NO
+  PAIRING, a doc with its own key and no question block in any extract.
 It warns, by file and line, outside a code fence in a solved doc's extract block (or before the
-first block of a file holding one), for a person to read: on a loose `Solution:` line (a `#### Solution` heading, `Solutions:`), and on an answer line,
-one starting (after list or quote marks) `Answer:`, `Answers:`, `Ans:`, `Final answer:`,
-`*Solution*:` or `Solution (<cite>):` with more than blanks, underscores, dots or an ellipsis (an
-answer blank) after it. It warns too on a solutions block for a stem (each part still needs its
-own). A self-answering doc with no key note is read as before the note while it fails: its key
-pages are those no question part's `Pages:` line names, across every extract (question_pages()).
+first block of a file holding one), for a person to read: on a loose `Solution:` line (a `####
+Solution` heading, `Solutions:`), and on an answer line, one starting (after list or quote marks)
+`Answer:`, `Answers:`, `Ans:`, `Final answer:`, `*Solution*:` or `Solution (<cite>):` with more than
+blanks, underscores, dots or an ellipsis (an answer blank) after it. It warns too on a solutions
+block for a stem (each part still needs its own).
 
 A doc that STATUS.md names on a line starting `Unverified: <doc>,` (material added at the
 student's request without an extract, FB-013) is reported as unverified while the files count
-no block for it (its own headers, or a page-less cite of it as an answers file), and doesn't fail,
-its Notes included; once they count one, its row is checked like any other. A STATUS.md it can't read exempts nothing.
+no block for it (its own headers, or a page-less cite of it as an answers file): it doesn't fail,
+gets no Key check and solves nothing; once they count one, its row is checked like any other. A STATUS.md it can't read exempts nothing.
 
 It prints one line per doc: what is in scope, what has a block, `(image only` entries, and
 `UNREADABLE:` flags in either directory (the brief's closing `Coverage:` line, closing(), doesn't
@@ -126,28 +128,24 @@ PAGE_FILE = re.compile(r"p-(\d+)\.png$")
 SCOPE = re.compile(r"(?:in|concepts only)\s*(?:,\s*(?P<rest>.*))?", re.I)
 SCOPE_PAGES = re.compile(r"(?:PDF\s+)?pp?\.\s*(?P<r>\d+(?:\s*-\s*\d+)?(?:\s*,\s*\d+(?:\s*-\s*\d+)?)*)")
 SCOPE_SLIDES = re.compile(r"slides\s+#/(\d+)\s*-\s*(?:#/)?(\d+)")
-# MANIFEST's Notes cell is free text, read as clauses split on `;`. A clause holding `solutions to`
-# or `solutions for` (any case), or starting with `key`, is a note this script reads, and must
-# match its form whole (UNREAD NOTE otherwise): a joiner or a remark it doesn't know would
-# otherwise end the list early and drop a solved doc or a key page with exit 0.
-# - `[official ]solutions to <id>( <join> <id>)*`, `for` in place of `to`, letter words before
-#   `solutions`, an optional closing period; a join is `,`, `&`, `and` or `, and`. Every id must
-#   be a doc id in MANIFEST (NOTE NAMES NO DOC): `solutions to Homework` names "Homework".
-# - `key p.N`, `key pp. <list>` (items N or N-M, hyphen or en dash, joined as above; a joined item
-#   may restate `p.`, as in `key p.3 and p.4`), `key inline` (each solution sits under its
-#   question: no page is a key page) or `key sections` (a source without pages, such as a Word
-#   exam: its blocks whose locator names Key, Answers or Solutions are its key).
+# MANIFEST's Key cell, read whole (trimmed, any case; read_key()): a form it doesn't know fails
+# UNREAD KEY rather than being read in part, since a joiner a parser stops at would drop a solved
+# doc or a key page with exit 0.
+# - `for <id>( <join> <id>)*`, a join being `,`, `&`, `and` or `, and`: a separate answers file.
+#   Every id must be a doc id in MANIFEST (KEY NAMES NO DOC).
+# - `p.N`, `pp. <list>` (items N or N-M, hyphen or en dash, ascending, joined as above; a joined
+#   item may restate `p.`, as in `p.3 and p.4`): the doc's own key pages.
+# - `inline`: the doc's own key, each solution under its question; no key page.
+# - `sections: <name>(, <name>)*`: a source without pages; its key is the blocks whose locator is
+#   one of the names (any case, runs of whitespace as one).
 DOC_WORD = r"[A-Za-z0-9_.-]*[A-Za-z0-9_-]"
-NOTE_JOIN = r"(?:\s*,\s*(?:and\s+)?|\s*&\s*|\s+and\s+)"
-SOLUTIONS_WORDS = re.compile(r"\bsolutions?\s+(?:to|for)\b", re.I)
-SOLUTIONS_NOTE = re.compile(r"(?:[A-Za-z]+\s+)*solutions?\s+(?:to|for)\s+(?P<list>" + DOC_WORD
-                            + r"(?:" + NOTE_JOIN + DOC_WORD + r")*)\.?", re.I)
-KEY_START = re.compile(r"key\b", re.I)
+KEY_JOIN = r"(?:\s*,\s*(?:and\s+)?|\s*&\s*|\s+and\s+)"
+KEY_FOR = re.compile(r"for\s+(?P<list>" + DOC_WORD + r"(?:" + KEY_JOIN + DOC_WORD + r")*)", re.I)
 KEY_REF = r"\d+(?:\s*[-" + chr(0x2013) + r"]\s*\d+)?"
-KEY_NOTE = re.compile(r"key:?\s+(?:(?P<word>inline|sections)|(?P<pages>pp?\.\s*" + KEY_REF
-                      + r"(?:" + NOTE_JOIN + r"(?:pp?\.\s*)?" + KEY_REF + r")*))\.?", re.I)
-# A page-less locator of a doc with its own key is answers when it names the key.
-KEY_LOC = re.compile(r"\b(?:key|answers?|solutions?)\b", re.I)
+KEY_PAGES = re.compile(r"pp?\.\s*" + KEY_REF + r"(?:" + KEY_JOIN + r"(?:pp?\.\s*)?" + KEY_REF + r")*",
+                       re.I)
+KEY_SECTIONS = re.compile(r"sections:\s*(?P<list>[^,\[\]]+(?:,[^,\[\]]+)*)", re.I)
+KEY_FORMS = ('"for HW1, HW2", "pp. 7-9, 11", "inline" or "sections: Marking scheme, Answers"')
 NOTE_RANGE = re.compile(r"\bpp\.\s*\d|\bp\.\s*\d+\s*-\s*\d")
 KINDS = ("in", "concepts", "reserved", "pending", "out")
 EN_DASH = chr(0x2013)
@@ -168,7 +166,6 @@ COVERAGE = re.compile(r"^Coverage:\s.*;\s*\d+\s+blocks?\s*;\s*\d+\s*\(?image\s+o
 PAGES_LINE = re.compile(r"^[-*\s]*Pages:(.*)")
 LOC_PAGES = re.compile(r"\bpp?\.\s*(?P<list>\d+(?:\s*[-–]\s*\d+)?"
                        r"(?:\s*,\s*\d+(?:\s*[-–]\s*\d+)?)*)", re.I)
-QUESTION_LOC = re.compile(r"Q\d", re.I)
 SEPARATORS = re.compile(r"(?:[\s,;&]|and\b)*")
 PART = re.compile(r"Q[\w.]+")
 # A solution in an extract, either form the extract format has written: the bracketed
@@ -217,48 +214,54 @@ def numbers(text):
     return out
 
 
-def read_notes(notes):
-    """A Notes cell's notes, clause by clause (split on `;`): {"answers_for": every id its
-    `solutions to` notes name (SOLUTIONS_NOTE), doc ids or not; "key": the pages its key notes
-    name (KEY_NOTE), an empty set for `key inline` or `key sections`, None with no key note;
-    "unread": each clause holding `solutions to`/`for` or starting with `key` that matches no form
-    whole}. A clause holding neither is a remark, read by nothing."""
-    out = {"answers_for": set(), "key": None, "unread": []}
-    for clause in (c.strip() for c in notes.split(";")):
-        if KEY_START.match(clause):
-            m = KEY_NOTE.fullmatch(clause)
-            pages = set()
-            for a, b in re.findall(r"(\d+)(?:\s*[-" + EN_DASH + r"]\s*(\d+))?",
-                                   (m and m.group("pages")) or ""):
-                if int(b or a) < int(a):
-                    m = None  # a range running backwards names no page: refuse it
-                    break
-                pages.update(range(int(a), int(b or a) + 1))
-            if not m:
-                out["unread"].append(clause)
-                continue
-            out["key"] = (out["key"] or set()) | pages
-        elif SOLUTIONS_WORDS.search(clause):
-            m = SOLUTIONS_NOTE.fullmatch(clause)
-            if not m or len(SOLUTIONS_WORDS.findall(clause)) > 1:
-                out["unread"].append(clause)
-                continue
-            out["answers_for"].update(w for w in re.split(NOTE_JOIN, m.group("list"), flags=re.I)
-                                      if w)
+def norm(name):
+    """A section name or block locator as a key section matches it: any case, runs of whitespace
+    as one."""
+    return " ".join(name.split()).lower()
+
+
+def read_key(cell):
+    """A Key cell, read whole: {"cell": as written, "form": None (empty or `-`), "for", "pages",
+    "inline", "sections" or "unread", "docs": the ids a `for` key names (doc ids or not), "pages":
+    the key pages, "names": {norm() of each key section: the name as written, its whitespace
+    collapsed}}."""
+    cell = cell.strip()
+    out = {"cell": cell, "form": None, "docs": set(), "pages": set(), "names": {}}
+    if cell in ("", "-"):
+        return out
+    m = KEY_FOR.fullmatch(cell)
+    if m:
+        out["form"] = "for"
+        out["docs"] = {w for w in re.split(KEY_JOIN, m.group("list"), flags=re.I) if w}
+        return out
+    if KEY_PAGES.fullmatch(cell):
+        last = 0
+        for a, b in re.findall(r"(\d+)(?:\s*[-" + EN_DASH + r"]\s*(\d+))?", cell):
+            lo, hi = int(a), int(b or a)
+            if hi < lo or lo <= last:  # a range running backwards, or items out of order
+                out["form"] = "unread"
+                return out
+            out["pages"].update(range(lo, hi + 1))
+            last = hi
+        out["form"] = "pages"
+        return out
+    if cell.lower() == "inline":
+        out["form"] = "inline"
+        return out
+    m = KEY_SECTIONS.fullmatch(cell)
+    names = [" ".join(n.split()) for n in m.group("list").split(",")] if m else []
+    if names and all(names):
+        out["form"] = "sections"
+        out["names"] = {norm(n): n for n in names}
+        return out
+    out["form"] = "unread"
     return out
 
 
-def key_pages(notes):
-    """The key pages a Notes cell's key notes name: read_notes()'s "key"."""
-    return read_notes(notes)["key"]
-
-
 def manifest_rows(path):
-    """{doc id: {"file", "pages", "scope", "kind", "answers", "answers_for", "key", "unread"}} for
-    every row of the table. Columns are found by their header names, so an older MANIFEST with
-    fewer columns reads right; `answers_for` is the words a `solutions to <doc>` note names, the
-    docs it pairs an answers file with (empty: it solves itself, solved()); `key` and `unread` are
-    read_notes()'s."""
+    """{doc id: {"file", "pages", "scope", "kind", "answers", "key"}} for every row of the table,
+    `key` read_key()'s reading of its Key cell. Columns are found by their header names, so an
+    older MANIFEST with fewer columns reads (with no Key column, every Key cell is empty)."""
     rows, cols = {}, None
     with open(path, encoding="utf-8") as f:
         for line in f:
@@ -286,18 +289,33 @@ def manifest_rows(path):
             rows[cells[0]] = {"file": cell("file").strip("`"), "pages": cell("pages"),
                               "scope": scope, "kind": word,
                               "answers": cell("answers").lower().startswith("yes"),
-                              **read_notes(cell("notes"))}
+                              "key": read_key(cell("key"))}
     return rows
 
 
+def key_of(row):
+    """A row's Key form when it answers (None for any other row)."""
+    return (row.get("key") or {}).get("form") if row and row.get("answers") else None
+
+
+def own_key(row):
+    """Whether a row is a doc holding its own key: pages, `inline` or `sections:`."""
+    return key_of(row) in ("pages", "inline", "sections")
+
+
 def solved(rows):
-    """The docs with official solutions: each doc an in-scope Answers `yes` row's `solutions to
-    <doc>` note names, or the row's own doc when it has no such note (a past exam with its key).
-    An answers row that is reserved, pending or out solves nothing: no agent reads it."""
+    """The docs with official solutions: each doc an in-scope Answers `yes` row's `for` key names,
+    and each such row's own doc when its Key is pages, `inline` or `sections:`. A row that is
+    reserved, pending or out, or whose key is missing or unread, solves nothing (main() also takes
+    the answers off a row an `Unverified:` line skips)."""
     out = set()
     for doc, row in rows.items():
-        if row.get("answers") and row.get("kind") in ("in", "concepts"):
-            out |= row.get("answers_for") or {doc}
+        if row.get("kind") not in ("in", "concepts"):
+            continue
+        if key_of(row) == "for":
+            out |= row["key"]["docs"]
+        elif own_key(row):
+            out.add(doc)
     return out
 
 
@@ -391,55 +409,29 @@ def locator(m):
     return m.group(0).split("[", 1)[1][len(m.group("doc")):].rstrip("]").strip()
 
 
-def question_pages(extracts):
-    """{doc: the pages its question blocks name on their `Pages:` lines}, read across every
-    extract, with a key (an empty set at least) for every doc with a question block (a part's or a
-    stem's) in any of them."""
-    out = {}
-    for _, lines in extracts:
-        for start, end, m in sections(lines):
-            if not m.group("q"):
-                continue
-            doc = m.group("doc")
-            pages = out.setdefault(doc, set())
-            for line in lines[start + 1:end]:
-                p = PAGES_LINE.match(line)
-                if not p:
-                    continue
-                for c in CITE.finditer(p.group(1)):
-                    if c.group("doc") == doc:
-                        pages |= loc_pages(c.group("loc"))
-    return out
+def question_docs(extracts):
+    """The docs with a question block (a part's or a stem's) in any extract."""
+    return {m.group("doc") for _, lines in extracts for _, _, m in sections(lines)
+            if m.group("q")}
 
 
-def answers_cite(doc, loc, rows, qpages):
-    """Whether a `[<doc> <loc>]` cite points into answers: any cite of an answers file whose
-    `solutions to <doc>` note names other docs only; for a doc with its own key and a key note, a
-    cite naming a key page the note names, or naming no page and naming Key, Answers or Solutions
-    (KEY_LOC: `[PE1 Key]`, `[PE1 Answers]`, not `[PE1 Instructions]`), whichever its key note's
-    form; its other pages (cover, rules, formula sheet) and sections are question material. A
-    self-answering doc
-    with no key note (which fails NO KEY NOTE) is read as before the note: any cite of it when it
-    has no question block in any extract, else one naming a page no question part's `Pages:` line
-    names, or no page and no question. `qpages` is question_pages()."""
+def answers_cite(doc, loc, rows):
+    """Whether a `[<doc> <loc>]` cite or block locator points into answers: any of an answers
+    file whose `for` key names other docs only; for a doc with its own key, one naming a key page
+    (`pp. 7-9`) or a key section (`sections: Marking scheme`, matched whole by norm()). Nothing
+    else of such a doc is answers (its cover, rules, formula sheet, a "Key formulas" section), nor
+    anything of a row whose key is missing or unread (it fails NO KEY or UNREAD KEY)."""
     row = rows.get(doc) or {}
-    if not row.get("answers"):
-        return False
-    pair = row.get("answers_for") or set()
-    if pair and doc not in pair:
-        return True
-    key = row.get("key")
-    if not pair and key is not None:
-        pages = loc_pages(loc)
-        if pages:
-            return bool(pages & key)
-        return bool(KEY_LOC.search(loc))
-    if doc not in qpages:
-        return True
+    form = key_of(row)
+    key = row.get("key") or {}
+    if form == "for":
+        return doc not in key["docs"]
     pages = loc_pages(loc)
-    if pages:
-        return not pages <= qpages[doc]
-    return not QUESTION_LOC.match(loc.strip())
+    if form == "pages":
+        return bool(pages & key["pages"])
+    if form == "sections":
+        return not pages and norm(loc) in key["names"]
+    return False
 
 
 def blocks(root, rows):
@@ -457,16 +449,14 @@ def blocks(root, rows):
 
     def answers(cited, own):
         """Whether a question block of `own` may cover pages of `cited`: its own doc, or an
-        answers file whose `solutions to <doc>` note names it."""
+        answers file whose `for` key names it."""
         row = rows.get(cited)
-        return cited == own or bool(row and row["answers"] and own in row["answers_for"])
+        return cited == own or (key_of(row) == "for" and own in row["key"]["docs"])
 
-    def own_key(doc):
-        """The key pages a doc with its own key names in its key note (none for any other)."""
-        row = rows.get(doc) or {}
-        if row.get("answers") and not row.get("answers_for"):
-            return row.get("key") or set()
-        return set()
+    def key_pages(doc):
+        """The key pages a doc with its own key names in its Key cell (none for any other)."""
+        row = rows.get(doc)
+        return row["key"]["pages"] if key_of(row) == "pages" else set()
     for kind in DIRS:
         for rel, lines in files(root, kind):
             ends = closing(lines)
@@ -500,12 +490,15 @@ def blocks(root, rows):
                         cited = c.group("doc")
                         if not answers(cited, own):
                             continue
+                        # In an extract, a cite of another doc (an answers file's page on a
+                        # part's `Pages:` line) or of its own key page covers nothing: that
+                        # page's block belongs in a solutions file.
+                        if kind == "extract" and cited != own:
+                            continue
                         p = CITE_PAGES.fullmatch(c.group("loc").strip())
                         if p:
-                            # A key page an extract cites (a part's `Pages:` line naming it)
-                            # covers nothing: its block belongs in a solutions file.
                             entry(cited)["pages"].update(
-                                set(span(p)) - (own_key(cited) if kind == "extract" else set()))
+                                set(span(p)) - (key_pages(cited) if kind == "extract" else set()))
                         elif cited != own:
                             entry(cited)["blocks"] += 1  # an answers file without pages
     return out
@@ -679,15 +672,12 @@ def parts_count(root):
 def answers_block(doc, loc, row):
     """Why a block of an answers doc that answers_cite() reads as answers is one, for AN ANSWERS
     PAGE IN AN EXTRACT."""
-    pair = row.get("answers_for") or set()
-    if pair and doc not in pair:
-        return f"a block of {doc}, a separate answers file (its `solutions to` note)"
-    if not pair and row.get("key") is not None:
-        if loc_pages(loc):
-            return f"a key page of {doc}, as its MANIFEST.md key note names it"
-        return (f"a block of {doc}, a doc with its own key, naming no page and naming its key "
-                "(Key, Answers or Solutions)")
-    return f"a block of {doc}, an answers doc, on no question part's page"
+    form = key_of(row)
+    if form == "for":
+        return f"a block of {doc}, a separate answers file (its Key cell is \"{row['key']['cell']}\")"
+    if form == "sections":
+        return f"a key section of {doc}, as its MANIFEST.md Key cell names it"
+    return f"a key page of {doc}, as its MANIFEST.md Key cell names it"
 
 
 def preamble(lines):
@@ -704,12 +694,11 @@ def solutions_check(root, rows):
     out, bad = [], False
     extracts = files(root, "extract")
     sols = files(root, "solutions")
-    qpages = question_pages(extracts)
     named = solved(rows)
 
     def cites_answers(line):
         return next((c for c in CITE.finditer(line)
-                     if answers_cite(c.group("doc"), c.group("loc"), rows, qpages)), None)
+                     if answers_cite(c.group("doc"), c.group("loc"), rows)), None)
 
     def pages_only(line):
         p = PAGES_LINE.match(line)
@@ -740,7 +729,7 @@ def solutions_check(root, rows):
                 bad = True
             for v in ILLEGIBLE.finditer(lines[i]):
                 out.append(f"{rel}:{i + 1}: {v.group(0)}, counted, not a failure")
-    have, at = set(), {}
+    have, at, homes = set(), {}, {}
     for rel, lines in extracts:
         name = rel.rsplit("/", 1)[1]
         target = f"_build/solutions/{name}"
@@ -778,8 +767,9 @@ def solutions_check(root, rows):
             if q and PART.fullmatch(q):
                 have.add((doc, q))
                 at.setdefault((doc, q), (rel, start + 1, name))
+                homes.setdefault((doc, q), set()).add(name)
             row = rows.get(doc) or {}
-            if row.get("answers") and answers_cite(doc, loc, rows, qpages):
+            if answers_cite(doc, loc, rows):
                 out.append(f"{rel}:{start + 1}: AN ANSWERS PAGE IN AN EXTRACT: [{doc} {loc}] is "
                            f"{answers_block(doc, loc, row)}; move it to {target}")
                 bad = True
@@ -836,6 +826,11 @@ def solutions_check(root, rows):
                        "one")
             bad = True
         for r, k, _, ok in found:
+            # A part's block sits beside the extract holding its question block.
+            if key in have and r.rsplit("/", 1)[1] not in homes[key]:
+                out.append(f"{r}:{k}: WRONG SOLUTIONS FILE: [{doc} {q}] belongs in "
+                           f"_build/solutions/{at[key][2]}, beside its extract")
+                bad = True
             if not ok:
                 out.append(f"{r}:{k}: EMPTY SOLUTIONS BLOCK: [{doc} {q}] holds neither a "
                            f"`Solution [<doc> <loc>]: ...` line nor the line `{NO_SOLUTION}`")
@@ -850,7 +845,38 @@ def solutions_check(root, rows):
             out.append(f"{rel}:{n}: NO SOLUTION BLOCK: write its solution or "
                        f"\"{NO_SOLUTION}\" under ### [{doc} {q}] in _build/solutions/{name}")
             bad = True
-    return out, bad, qpages
+    return out, bad
+
+
+def key_check(doc, row, rows, qdocs, keyed):
+    """The failures of an in-scope row's Key cell (read_key()). `qdocs` is question_docs(), and
+    `keyed` the (doc, norm(locator)) of every block in the solutions files."""
+    key = row["key"]
+    form = key["form"]
+    if not row["answers"]:
+        return [] if form is None else [
+            f"{doc}: KEY WITHOUT ANSWERS: its Key cell is filled but Answers isn't yes"]
+    if form is None:
+        return [f"{doc}: NO KEY: an Answers yes row fills its Key cell (\"for HW1, HW2\", "
+                "\"pp. 7-9, 11\", \"inline\" or \"sections: <name>, <name>\")"]
+    if form == "unread":
+        return [f"{doc}: UNREAD KEY: \"{key['cell']}\" isn't a Key form: write {KEY_FORMS}"]
+    if form == "for":
+        return [f"{doc}: KEY NAMES NO DOC: \"{word}\" in its Key cell is no doc id in MANIFEST.md"
+                for word in sorted(key["docs"] - set(rows))]
+    out = []
+    if form == "sections":
+        if row["file"].lower().endswith(".pdf") or row["pages"].isdigit():
+            out.append(f"{doc}: SECTIONS KEY ON A PAGED DOC: use \"pp. N-M\" or \"inline\"")
+        else:
+            out += [f"{doc}: KEY SECTION NOT FOUND: no block [{doc} {written}] in "
+                    "_build/solutions/"
+                    for name, written in sorted(key["names"].items()) if (doc, name) not in keyed]
+    if doc not in qdocs:
+        out.append(f"{doc}: ANSWERS WITH NO PAIRING: a doc with its own key (its Key cell) with no "
+                   "question block in any extract; its question parts need blocks in an extract, "
+                   "or its Key cell names the sets it solves (\"for HW1, HW2\")")
+    return out
 
 
 def unverified(root):
@@ -886,10 +912,17 @@ def main(argv=None):
         print("extract_check: MANIFEST.md has no rows under a `| Doc id | File | ... |` header")
         return 1
     found = blocks(args.root, rows)
-    lines, bad, qpages = solutions_check(args.root, rows)
     empty = {"pages": set(), "frags": set(), "blocks": 0, "questions": 0, "image_only": 0,
              "unreadable": 0, "unreadable_at": [], "illegible": 0, "illegible_at": []}
     skip = unverified(args.root)
+    idle = {doc for doc, row in rows.items() if doc in skip and row["kind"] in ("in", "concepts")
+            and not (found.get(doc) or empty)["blocks"]}
+    # A row an `Unverified:` line skips solves nothing: its answers come off for every check.
+    rows = {doc: dict(row, answers=False) if doc in idle else row for doc, row in rows.items()}
+    lines, bad = solutions_check(args.root, rows)
+    qdocs = question_docs(files(args.root, "extract"))
+    keyed = {(m.group("doc"), norm(locator(m))) for _, sol in files(args.root, "solutions")
+             for _, _, m in sections(sol)}
     for doc, row in rows.items():
         if row["kind"] not in KINDS:
             print(f"{doc}: SCOPE NOT UNDERSTOOD: {row['scope']!r}; it starts with one of "
@@ -898,35 +931,13 @@ def main(argv=None):
             continue
         if row["kind"] not in ("in", "concepts"):
             continue
-        if doc in skip and not (found.get(doc) or empty)["blocks"]:
+        if doc in idle:
             print(f"{doc}: unverified, added without an extract (STATUS `Unverified:` line, "
                   "FB-013): not checked until it has a block")
             continue
-        if row["answers"]:
-            for clause in row["unread"]:
-                print(f"{doc}: UNREAD NOTE: \"{clause}\" in Notes isn't a form extract_check "
-                      "reads: write \"solutions to HW1, HW2 and HW3\", \"key pp. 7-9, 11\", "
-                      "\"key inline\" or \"key sections\", and put any other remark after a \";\"")
-                bad = True
-            for word in sorted(row["answers_for"] - set(rows)):
-                print(f"{doc}: NOTE NAMES NO DOC: \"{word}\" in its solutions-to note is no doc "
-                      "id in MANIFEST.md (a remark after the list goes after a \";\")")
-                bad = True
-            # A row whose note went unread fails on that alone: what it lacks follows from it.
-            if not row["unread"] and not row["answers_for"] and row["key"] is None:
-                print(f"{doc}: NO KEY NOTE: a doc with its own key names its key pages in Notes "
-                      "(\"key pp. N-M\", \"key inline\" or \"key sections\")")
-                bad = True
-            if not row["unread"] and not row["answers_for"] and doc not in qpages:
-                if row["key"] is None:
-                    print(f"{doc}: ANSWERS WITH NO PAIRING: an Answers `yes` doc with no question "
-                          "block in any extract and no `solutions to <doc>` note; add the note to "
-                          "its MANIFEST.md row's Notes")
-                else:
-                    print(f"{doc}: ANSWERS WITH NO PAIRING: a doc with its own key (its key note) "
-                          "with no question block in any extract; its question parts need blocks "
-                          "in an extract (not a `solutions to` note)")
-                bad = True
+        for line in key_check(doc, row, rows, qdocs, keyed):
+            print(line)
+            bad = True
         b = found.get(doc) or empty
         line, failed = check(args.root, doc, row, b)
         print(line)
