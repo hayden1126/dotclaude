@@ -300,12 +300,23 @@ class QuestionsCheckFiles(unittest.TestCase):
                       "left behind (a run cut short) deletes it before anything else.", flat)
 
     def test_the_check_requires_an_extract(self):
-        """Round 20 dropped rendered text as an input: the check reads extracts and solutions
-        files only, and a set or an answers file with nothing extracted exits 2. 05 and 08 list
-        that cause with the others, and no workflow says the check reads rendered text."""
+        """Round 20 made an extract required: a set or an answers file with nothing extracted
+        exits 2, and 05 and 08 list that cause with the others (a course page's `.html` source
+        among the files that must be UTF-8, round 22). The check reads extracts and solutions
+        files, plus one exception since round 21: a set, or an answers file that solves one, with
+        no page or slide coverage (neither a PDF nor a reveal deck) has its rendered text read
+        too, beside its extract and never in its place. No workflow keeps round 19's wording of
+        rendered text as a fallback."""
+        exception = self.flat("05-verify.md")
+        for phrase in ("It reads extracts and solutions files, plus one exception: a set, or an "
+                       "answers file that solves one, whose File is neither a PDF nor a reveal "
+                       "deck (a Word file, a plain course page) has its rendered text read too",
+                       "beside its extract and never in its place"):
+            self.assertIn(phrase, exception)
         for name in ("05-verify.md", "08-practice.md"):
             flat = self.flat(name)
             for phrase in ("MANIFEST.md", "isn't UTF-8, named in the message", "`no page found`",
+                           "a course page's `.html` source in `sources/`",
                            "or an answers file that solves one, with nothing extracted"
                            if name == "08-practice.md" else
                            "or an answers file that solves one, has nothing extracted"):
@@ -323,8 +334,10 @@ class QuestionsCheckFiles(unittest.TestCase):
         set or an answers file that solves one and sends it to "A source added" (round 20). The
         test reads the row item 2 will write, as extract_check.py's unattempted() counts sets
         (an inline key is one), and the refusal is an ending that adds nothing, so the student
-        told to look away gets the /clear line (round 21). A question doc no answers row names,
-        Answers `no` included, is refused too: the script counts it only once extracted."""
+        told to look away gets the /clear line (round 21): the `Skip asked` line gains the
+        refusal and Done when names that ending. A question doc no answers row names, Answers
+        `no` included, is refused too: the script counts it only once extracted. A failed check
+        at item 1 is that same ending, never a wait (round 22)."""
         flat = self.flat("11-next-exam.md")
         path = flat.split("## A source added unverified", 1)[1]
         opening = path.split("1. **Check and fence.**", 1)[0]
@@ -339,8 +352,15 @@ class QuestionsCheckFiles(unittest.TestCase):
                        "that an in-scope answers row's `for` key names",
                        "which the questions check blocks",
                        'A refused doc goes to "A source added", which extracts it',
-                       "with nothing added, as its opening says"):
+                       "with nothing added, as its opening says",
+                       "the `Skip asked` line gaining `; refused: <why>, \"A source added\" "
+                       "takes it`",
+                       "A check that fails ends the addition with nothing added"):
             self.assertIn(phrase, check)
+        self.assertNotIn("the addition waits for it", check)
+        done = flat.split("A source added unverified is done when", 1)[1]
+        self.assertIn("or, refused at item 1, when the `Skip asked` line names the refusal, "
+                      "committed", done)
         self.assertIn("(a failed check, a failed fence check, item 1's refusal)", opening)
         self.assertNotIn("write nothing", check)
         table = path.split("**The pushback**", 1)[0]
