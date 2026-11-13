@@ -457,7 +457,10 @@ answers file's row, which may solve several sets.
   attempted YYYY-MM-DD`), each `_build/held.md` entry that names
   it is offered back as a patch (FB-191): a passage `05-verify` step 5 cut or held back because it
   overlapped that set. Show the student its section and its original text, and on their yes dispatch
-  it as Step 5 says. Remove the entry once its patch merges or the student declines it. While
+  it as Step 5 says. An entry held from a multi-set answers file's own file (a hit labelled with
+  that file's block, `[HWS p.N]`) names every set that file solves, never the file itself, whose
+  row records no attempt: it is offered back once all of them are attempted. Remove the entry
+  once its patch merges or the student declines it. While
   another set is unattempted, the passage runs `05-verify` step 5's questions check against that set
   first, and a hit waits for that set too.
 - This bookkeeping (the log, STATUS, MANIFEST.md's Answers cell) and `_build/verify/` are the

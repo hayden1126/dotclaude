@@ -167,8 +167,12 @@ order (`08-practice`) get the same audit when they exist.
   A hit is a blocker: rewrite the passage with fresh numbers and a fresh setup (S7), and rerun
   until it prints QUESTIONS OK. A passage cut or held back instead, which the student may want
   back once they attempt the set, goes to `_build/held.md`, one entry per passage: its section,
-  the set it overlapped and the original text. It is quarantined (hub CLAUDE.md), and `09-tutor`
-  offers it back once that set is attempted (its Step 7). A hub whose CLAUDE.md lacks the
+  the set it overlapped and the original text. A hit from a multi-set answers file's own file
+  (labelled with that file's block, `[HWS p.N]`) is held under every set that file solves, each
+  named in the entry, since that file's row never records an attempt. It is quarantined (hub
+  CLAUDE.md), and `09-tutor` offers it back once that set is attempted, or, for a hit from a
+  multi-set answers file's own file, once every set it solves is attempted (its Step 7). A hub
+  whose CLAUDE.md lacks the
   quarantine line (a hub made before it existed) gets it now, before the first entry is written:
   the `_build/held.md` bullet of `<skill>/templates/hub-CLAUDE.md.tmpl`'s Repo rules, copied as it
   stands.
