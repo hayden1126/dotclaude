@@ -224,6 +224,21 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     - No hook runs before ExitPlanMode today. Unmeasured: whether a deny lands before Hayden's
       plan dialog, as it does for AskUserQuestion. Test that first.
     - The other repo's own decision-record check is theirs to file.
+    - From a second lane's research practice (Hayden asked; the lead checked each line against
+      that lane's files on 2026-11-13). It cites no outside source on research methods. The
+      bar should add:
+      - a reviewer pass over the synthesis, not only the sources: its researchers' quotes all
+        spot-checked verbatim, yet a review of the lead-written fold found 10 findings, 3
+        medium (claims stretched past their source, dropped inference markers, stale cites,
+        arithmetic);
+      - every failed fetch logged with its reason (bot walls returned HTTP 403);
+      - the page's own date checked, not only the read date (a URL served 2020 text);
+      - a source log with stable ids (852 entries from 388 sources, merged from nine shards,
+        with id renames at merge);
+      - for a bot-walled source, an openly served official copy or Hayden pasting the text:
+        since 2026-11-04 auto mode denies headless Chrome as a way past a wall.
+      Not found in its files: its claim that Android and Google support pages returned sign-in
+      walls.
     Where it lands is Hayden's call; the lead's pick is lane practices' next PR (it owns
     `practices_check.py`), after Nov 16.
   - **The 5-hour usage limit may be gone for Hayden's account** (2026-11-12, unsettled): claude.ai
