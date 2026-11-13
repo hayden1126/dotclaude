@@ -482,16 +482,17 @@ happens:
 |---|---|---|
 | A `09-tutor` tab, or a second tab beside the cram night's (`08-practice` step 8: one tab runs it; that tab tutors under its step and is neither) | Nothing written and no pushback: a source is added before `Stage 08 built` in a session of its own, from then on in the cram night's tab, so the student asks there | The same |
 | A build under way or unfinished: `Build running` stands (the unattended build, a stage or pass run alone, "A source added" past its fence, an addition under way), or `05-verify` isn't done (`06-site` too, when the notes have a page) | Nothing written and no pushback: the ask waits until no `Build running` line stands and `05-verify` is done (`06-site` too, with a page), and the student brings it then. "A source added" past its fence stops instead on their word that it won't resume ("A stop"), and they ask again once it has | The same |
-| "A source added" before its fence, its step 1 checks passed | The pushback, with step 2's report, its `Skip asked` line committed when the report is shown | That build ends declined at step 2 (logged), then the addition |
-| The hub isn't free (`10-polish` step 1: a notes patch open, `08-practice` step 8.3 or 8.4 under way) | The pushback | The addition, once the hub is free: in this session, or at the student's next ask |
-| Any other: before `Stage 08 built`, a session of its own; from then on, the cram night's tab, between attempts | The pushback | The addition |
+| "A source added" before its fence, its step 1 checks passed | The pushback, with step 2's report, its `Skip asked` line committed when the report is shown | That build ends declined at step 2 (logged), then the addition; for a doc the skip isn't open to (the pushback says which), that build goes on instead, never declined, the student told why |
+| The hub isn't free (`10-polish` step 1: a notes patch open, `08-practice` step 8.3 or 8.4 under way) | The pushback | The addition, once the hub is free: in this session, or at the student's next ask; for a doc the skip isn't open to, "A source added" in its place |
+| Any other: before `Stage 08 built`, a session of its own; from then on, the cram night's tab, between attempts | The pushback | The addition; for a doc the skip isn't open to, "A source added" in its place |
 
 **The pushback**, before any notes are written: what the skip costs (the material goes in
 unchecked, its values quoted from the source and never computed, under an `Unverified` banner, off
 every sheet, out of the mocks and the cram order's reading rows, and out of `09`'s walk-throughs and
 quizzes while its STATUS line stands) and about how long "A source added" would take for this
-source. For an unattempted set, or an answers file that solves one, the pushback says instead
-that the skip isn't open to it (the addition's item 1 refuses it) and offers "A source added".
+source. For a doc the skip isn't open to, one whose MANIFEST.md row would mark it an unattempted
+set or the answers to one (the addition's item 1 gives the test, and refuses it), the pushback
+says instead that the skip isn't open to it and why, and offers "A source added".
 Then commit `Skip asked: <file>, <date>, pushback given` in STATUS (while a mock is untaken,
 after `08-practice` step 4's STATUS check with the untaken mocks' keys, as every STATUS write then), and wait, writing no notes. The full path, if
 they take it, is "A source added" from its step 1. The line goes when the source is in: in "A
@@ -503,9 +504,9 @@ it, since the line was committed before the fence.
 **The addition**, in the session the table names. However it ends (done, a failed check, a failed
 fence check, "A stop" below), its last act is `10-polish` step 7.5's patches and checks, which its
 fence held. While a mock is untaken, an ending that adds nothing (a failed check, a failed fence
-check) logs why in STATUS and ends its reply with one line, `Nothing was added: type /clear, then
-"why did the addition stop?"`, since the student, looking away, waits for a `/clear` line; the
-fresh session answers from STATUS, then runs step 7.5.
+check, item 1's refusal) logs why in STATUS and ends its reply with one line, `Nothing was added:
+type /clear, then "why did the addition stop?"`, since the student, looking away, waits for a
+`/clear` line; the fresh session answers from STATUS, then runs step 7.5.
 
 1. **Check and fence.** While a mock is untaken (STATUS records each attempt), the addition's first
    message, before any tool runs, is one line: `Look away from this window now: come back when a
@@ -516,13 +517,20 @@ fresh session answers from STATUS, then runs step 7.5.
    `_build/extract/` and `_build/solutions/`. Then check as "A source added" step 1 does: `05-verify`
    done (and `06-site` with a page), no `Build running` line, the hub free, the tree clean but for `_build/logs/` and
    `practice/tutor/`; note `git rev-parse HEAD`. A check that fails is told to the student, and
-   the addition waits for it. Then the doc itself: this path takes a lecture, a reading or a set
-   the student has attempted, and refuses an unattempted set (a past exam or practice set the
-   student hasn't attempted, its MANIFEST.md Answers cell, as item 2 writes it, without
-   `attempted`) or an answers file that solves one, since its notes would quote an unattempted
-   set, which the questions check blocks, and that check needs the set extracted. A refused
-   doc goes to "A source added", which extracts it: tell the student so, write nothing, and the
-   addition ends there, the `Skip asked` line kept until that path's closing commit. Pick the
+   the addition waits for it. Then the doc itself, judged by the MANIFEST.md row item 2 will write
+   for it (its Answers and Key cells as the template's legend says): this path takes a lecture, a
+   reading, a set the student has attempted or one no official solution in scope answers, and
+   refuses an unattempted set or an answers file that solves one, as `extract_check.py` counts them: a row whose Answers cell is `yes` and whose
+   Key cell either is `for` naming a set whose row lacks `attempted`, or is anything else (the
+   doc's own pages, `inline`, `sections:`, or empty or unread) with no `attempted` in its own
+   Answers cell; or a row with no `attempted` in its Answers cell that an in-scope answers row's
+   `for` key names (or will, once item 2's undo puts it back). A recitation with its worked
+   solutions inline is one. Its notes would quote such a set, which the questions check
+   blocks, and that check exits without a verdict until the doc is extracted, and this path
+   extracts only in item 2's undo, for an attempted set. A refused doc goes to "A source added", which extracts it: the addition ends there
+   with nothing added, as its opening says, the `Skip asked` line gaining `; refused: <why>, "A
+   source added" takes it` (committed, checked as the pushback's STATUS write) and kept until that
+   path's closing commit, and the student told so. Pick the
    doc's id now: a `pending` row's file keeps that row's id,
    and any other gets a new one as `01-ingest` gives (none reused); it is `<doc>` from here on, in its MANIFEST.md row and both STATUS lines, and the id
    `extract_check.py` reads. Then add `Build running: <date>` and `Unverified add: <doc>, started
@@ -638,4 +646,5 @@ published is republished, the `Build running` and `Unverified add:` lines are ou
 and, while a mock was untaken, the compare passed before that commit and the reply ended with the
 `/clear` line; or, stopped before item 5's commit, when the hub is as HEAD had it with both lines
 out; or, after a failed check or fence check, when nothing was added and both lines, if written,
-are out and committed. In each, `10-polish` step 7.5's patches and checks ran last.
+are out and committed; or, refused at item 1, when the `Skip asked` line names the refusal,
+committed. In each, `10-polish` step 7.5's patches and checks ran last.

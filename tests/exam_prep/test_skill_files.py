@@ -320,15 +320,28 @@ class QuestionsCheckFiles(unittest.TestCase):
 
     def test_the_unverified_path_refuses_an_unattempted_set(self):
         """11's "A source added unverified" can't extract, so its item 1 refuses an unattempted
-        set or an answers file that solves one and sends it to "A source added" (round 20)."""
+        set or an answers file that solves one and sends it to "A source added" (round 20). The
+        test reads the row item 2 will write, as extract_check.py's unattempted() counts sets
+        (an inline key is one), and the refusal is an ending that adds nothing, so the student
+        told to look away gets the /clear line (round 21)."""
         flat = self.flat("11-next-exam.md")
         path = flat.split("## A source added unverified", 1)[1]
+        opening = path.split("1. **Check and fence.**", 1)[0]
         check = path.split("1. **Check and fence.**", 1)[1].split("2. **Ingest**", 1)[0]
-        for phrase in ("this path takes a lecture, a reading or a set the student has attempted",
-                       "refuses an unattempted set", "or an answers file that solves one",
+        for phrase in ("this path takes a lecture, a reading, a set the student has attempted",
+                       "refuses an unattempted set or an answers file that solves one",
+                       "judged by the MANIFEST.md row item 2 will write",
+                       "a row whose Answers cell is `yes`", "`for` naming a set whose row lacks "
+                       "`attempted`", "`inline`", "or empty or unread",
+                       "that an in-scope answers row's `for` key names",
                        "which the questions check blocks",
-                       'A refused doc goes to "A source added", which extracts it'):
+                       'A refused doc goes to "A source added", which extracts it',
+                       "with nothing added, as its opening says"):
             self.assertIn(phrase, check)
+        self.assertIn("(a failed check, a failed fence check, item 1's refusal)", opening)
+        self.assertNotIn("write nothing", check)
+        table = path.split("**The pushback**", 1)[0]
+        self.assertEqual(table.count("for a doc the skip isn't open to"), 3)
 
 
 class KeySectionRule(unittest.TestCase):
