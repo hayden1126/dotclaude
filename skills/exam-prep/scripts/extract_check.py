@@ -149,7 +149,10 @@ a wrong root never reads as 0 parts.
 leak_files()) reads, one line each, `questions <path>` or `allow <path>`, the path relative to
 the root, sorted by path, each once. The unattempted sets are the in-scope question sets (named
 by an in-scope answers row's `for` key, holding their own key, or with a question block in an
-extract) whose own Answers cell lacks the attempt mark; an `Unverified:` line exempts none.
+extract) whose own Answers cell lacks the attempt mark; an `Unverified:` line exempts none. A
+known limit: a question set is found by its `Q` blocks, which the Extract brief requires, so an
+unsolved question doc extracted only as page blocks (no `Q` block, Answers `no`) is no set, and
+its extract is `allow`.
 `questions`: every extract holding any block of an unattempted set, every existing home
 solutions file of one (the homes above), and each multi-set answers file's own
 _build/solutions/<doc id lower>.md, when it exists, while any set it names is unattempted; a file
@@ -1109,7 +1112,8 @@ def unattempted(rows, extracts):
     """The question sets the student hasn't attempted, sorted: each in-scope doc that an in-scope
     answers row's `for` key names, that holds its own key, or that has a question block in an
     extract, whose own Answers cell lacks the attempt mark (ATTEMPTED). An `Unverified:` line
-    exempts none (fail closed)."""
+    exempts none (fail closed). Known limit: an unsolved doc with no `Q` block (only page blocks,
+    against the Extract brief) is no set."""
     inscope = {doc for doc, row in rows.items() if row["kind"] in ("in", "concepts")}
     sets = question_docs(extracts) & inscope
     for doc in inscope:

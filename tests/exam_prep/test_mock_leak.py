@@ -550,7 +550,9 @@ class HubQuestions(unittest.TestCase):
     extract_check.py computes (leak_files()), so a home the workflow prose never named, a deck's
     second part or a stray block's file, is read; an attempted set's files are not, and with no
     unattempted set it passes at once. It runs under `python3 -I`, where the script's own
-    directory is not on sys.path."""
+    directory is not on sys.path. Round 18: a section named `Queue.java` makes no set; an
+    unextracted set is read from its rendered text, and one with neither is bad usage, as is a
+    MANIFEST.md with no rows it reads; with no --pages the notes and the cheat sheets are read."""
 
     def setUp(self):
         tmp = tempfile.TemporaryDirectory()

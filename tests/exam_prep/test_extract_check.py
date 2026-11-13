@@ -60,7 +60,14 @@ Review round 17: an in-scope answers file keyed for a pending, reserved or out s
 A SET NOT IN SCOPE, so NO HOME FILE's "extract <SET> first" is said only of an in-scope set; a
 question block labelled with an answers file's id fails ANSWERS FILE ID ON A QUESTION wherever it
 sits; a `sections:` name's page reference is dropped as the locator's is; `--leak-files` prints
-the questions check's files from the computed homes (LeakFiles)."""
+the questions check's files from the computed homes (LeakFiles).
+
+Review round 18: a question's locator is `Q` and a number, so `[CODE Queue.java]`, `[DS Queues]`
+and `[L2 Quiz]` are no question blocks; an unattempted set no extract holds a block of is listed
+by its rendered text (`_build/text/<doc>/`, else `_build/text/<doc lower>.md`), and one with
+neither exits 2; a MANIFEST.md with no rows under a header the reader knows exits 2; KEY NAMES A
+SET NOT IN SCOPE on a Key naming that set alone says only to give the answers row the same
+Scope."""
 import contextlib
 import importlib.util
 import io
