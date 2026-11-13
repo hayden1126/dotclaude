@@ -266,8 +266,10 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     harness anchors on `/* ==== MOCK CONFIG`, and layout_check's WARN names per-screen controls;
     a question may declare the screens it shows on, so the shell jumps to one when it changes and
     draws a "Shows on:" row of screen buttons in its box.
-    Detail and source paths: `~/scratch/mocks-upgrade/ideas-2026-11-13.md` (private). A lane
-    after Nov 16, no owner yet.
+    Detail and source paths: `~/scratch/mocks-upgrade/ideas-2026-11-13.md` (private). Lane mocks
+    (`feat/mocks-upgrade`, opened 2026-11-13 on Hayden's "start lane now"): first the sort into
+    universal and specific ideas and the skill's structure, for Hayden's review. Merges after
+    demo-av PR 4.
   - **The skill-copy check calls `~/.claude/skills` a copy of itself when the cwd is home**
     (reported 2026-11-13 by session f5c6b8c5, cwd `~`): at session start it says "This project
     has its own copy of the installed practices skill auth-secrets: ~/.claude/skills/auth-secrets,
