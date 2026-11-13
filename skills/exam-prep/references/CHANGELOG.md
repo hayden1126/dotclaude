@@ -107,7 +107,8 @@ evidence ids.
   `templates/STYLE.md`,
   `templates/agent-briefs.md`, `templates/backbone.md.tmpl`, `templates/cram-order.md.tmpl`,
   `templates/hub-CLAUDE.md.tmpl`, `templates/mock-page.html`, `templates/notes-chassis.html`,
-  `workflows/00-intake.md`, `workflows/02-extract.md`, `workflows/03-backbone.md`,
+  `workflows/00-intake.md`, `workflows/01-ingest.md`, `workflows/02-extract.md`,
+  `workflows/03-backbone.md`,
   `workflows/04-write.md`, `workflows/05-verify.md`, `workflows/06-site.md`,
   `workflows/07-cheatsheet.md`, `workflows/08-practice.md`, `workflows/09-tutor.md`,
   `workflows/10-polish.md`, `workflows/11-next-exam.md`, `workflows/12-retro.md`,
@@ -119,8 +120,10 @@ evidence ids.
   `scripts/assemble.py`, `scripts/coverage_check.py`, `scripts/cram_check.py`,
   `scripts/extract_check.py`, `scripts/mock_leak.py`, `scripts/mockpage.py`,
   `scripts/verify_page.mjs`, which carry no date. Outside the skill, the tests
-  `tests/exam_prep/test_agent_briefs.py`, `test_extract_check.py`, `test_set_key.py` and
-  `test_verify_templates.py` changed with them.
+  `tests/exam_prep/test_agent_briefs.py` and `test_videos.py`, new, and `test_assemble.py`,
+  `test_coverage_check.py`, `test_cram_check.py`, `test_extract_check.py`, `test_linkcheck.py`,
+  `test_mock_leak.py`, `test_mockpage.py`, `test_set_key.py`, `test_skill_files.py`,
+  `test_verify_page.py` and `test_verify_templates.py`, with their fixtures, changed with them.
 - **Changes:**
   - FB-124 and L26: the theme chrome, CHASSIS C2 (themed scrollbars, an opaque page track), C3
     (a fixed theme icon with no words) and C4 (full screen where granted, the F and T keys), on
@@ -137,9 +140,16 @@ evidence ids.
     keeping the row's spelling (I3.C8).
   - FB-056: official solutions move out of the extracts into `_build/solutions/<name>.md`,
     written by the same extract agent as its extract (hard rule 6), one block per question part
-    of a solved doc plus an answers doc's page blocks (`02-extract`, "The solutions file").
-    `extract_check.py` checks the pairing and fails a solution or answers page left in an
-    extract, and `extract_check.py --parts` feeds `05-verify`'s PARTS (FB-100). Answer-blind
+    of a solved doc plus an answers doc's page blocks (`02-extract`, "The solutions file"). A
+    past exam with its key names its key pages in its MANIFEST row's Notes (`key pp. N-M`, or
+    `key inline`), which `01-ingest` writes after looking at the PDF: only those pages go to the
+    solutions file, and its cover, rules and formula sheet stay in the extract. A `solutions to`
+    note may list several doc ids. `extract_check.py` checks the pairing and fails a solution or
+    answers page left in an extract, a self-answering row with no key note and a note naming no
+    doc, warns on an `Answer:` line in a solved doc's extract, and `extract_check.py --parts`
+    feeds `05-verify`'s PARTS (FB-100). A part's solution is found by its block id in any
+    solutions file, and a past exam's own row records its attempt as `yes, attempted
+    YYYY-MM-DD`. Answer-blind
     briefs read the extracts and never open `_build/solutions/`; the writers, section
     reviewers, checker and tutor read both. An older hub's extracts with solutions inline aren't
     supported (I3.C18, I3.G9, I2.G10).
