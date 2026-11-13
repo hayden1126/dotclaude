@@ -241,9 +241,10 @@ class Skeleton(unittest.TestCase):
         solutions = os.path.join(self.tmp.name, "_build", "solutions")
         os.makedirs(solutions)
         with open(os.path.join(self.tmp.name, "MANIFEST.md"), "w") as f:
-            f.write("| Doc id | File | Pages | Scope | Answers | Notes |\n|---|---|---|---|---|---|\n"
-                    "| HW1 | `sources/hw1.pdf` | 2 | in | no | homework |\n"
-                    "| HW1S | `sources/hw1s.pdf` | 2 | in | yes | solutions to HW1 |\n")
+            f.write("| Doc id | File | Pages | Scope | Answers | Key | Notes |\n"
+                    "|---|---|---|---|---|---|---|\n"
+                    "| HW1 | `sources/hw1.pdf` | 2 | in | no | | homework |\n"
+                    "| HW1S | `sources/hw1s.pdf` | 2 | in | yes | for HW1 | solutions |\n")
         with open(os.path.join(solutions, "hw.md"), "w") as f:
             f.write("### [HW1 Q1 stem] s\nSolution [HW1S p.1]: the setup\n"
                     "### [HW1 Q1a] a\nSolution [HW1S p.1]: 3\n### [HW1 Q1b] b\n"
