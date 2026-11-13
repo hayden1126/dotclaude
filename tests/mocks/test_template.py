@@ -311,6 +311,65 @@ class Template(unittest.TestCase):
         self.assertEqual(tab.evaluate(SCROLLS_JS), {"frameLeft": 0, "frameTop": 0, "renderLeft": 0, "renderTop": 0})
         self.assertEqual(self.errors(tab), [])
 
+    def test_a_size_change_that_keeps_the_html_still_keeps_the_scroll(self):
+        # The template's render never reads state.frame, so a Size click doesn't reload it: the
+        # scroll that follows must be saved under the new view, not the one the page loaded with.
+        tab = self.open([(MAIN_OPEN, MAIN_OPEN + '<div style="height: 2400px"></div>')])
+        self.click(tab, "#c-frame button", "iPad")
+        tab.evaluate('document.getElementById("app").contentWindow.scrollTo(0, 400)')
+        tab.evaluate(FRAMES_JS)
+        self.click(tab, question(2), "Drop it")
+        self.assertEqual(tab.evaluate(SCROLLS_JS)["renderTop"], 400)
+        self.assertEqual(self.errors(tab), [])
+
+    def test_numeric_options_press_like_names(self):
+        tab = self.open([('options: ["Pill", "Plain text"]', "options: [14, 16]"),
+                         (DENSITY_ENTRY, '{ label: "Density", options: [1, 2], corner: true }')])
+        self.assertEqual(self.errors(tab), [])
+        self.assertEqual(self.pressed(tab, question(1)), ["14"])
+        self.assertEqual(self.pressed(tab, "#corner .m-seg button"), ["Fit", "1"])
+        self.click(tab, question(1), "16")
+        self.assertEqual(self.pressed(tab, question(1)), ["16"])
+
+    def test_a_press_on_the_render_s_other_clickables_never_pans(self):
+        # A summary and a role=button div, pressed with a jitter past the pan threshold.
+        extras = ('<details id="more"><summary id="s">More</summary>Hidden</details>'
+                  '<div id="d" role="button" onclick="this.textContent = \'pressed\'">Press</div>')
+        tab = self.open([(MAIN_OPEN, "<main>" + extras + "${page}")])
+        self.click(tab, "#c-zoom button", "200%")
+        for target in ("s", "d"):
+            with self.subTest(target):
+                p = tab.evaluate(f"""(() => {{
+                  const app = document.getElementById("app"), a = app.getBoundingClientRect(), k = a.width / app.width;
+                  const r = app.contentDocument.getElementById("{target}").getBoundingClientRect();
+                  return {{ x: a.left + (r.left + 4) * k, y: a.top + (r.top + r.height / 2) * k }};
+                }})()""")
+                self.mouse(tab, "mousePressed", p["x"], p["y"], 1)
+                self.mouse(tab, "mouseMoved", p["x"] + 6, p["y"], 1)
+                self.mouse(tab, "mouseReleased", p["x"] + 6, p["y"], 0)
+                tab.evaluate(FRAMES_JS)
+                self.assertEqual(tab.evaluate(SCROLLS_JS)["frameLeft"], 0)
+        doc = 'document.getElementById("app").contentDocument'
+        self.assertTrue(tab.evaluate(f'{doc}.getElementById("more").open'))
+        self.assertEqual(tab.evaluate(f'{doc}.getElementById("d").textContent'), "pressed")
+
+    def test_a_press_on_the_render_s_own_scrollbar_never_pans(self):
+        tab = self.open([(MAIN_OPEN, MAIN_OPEN + '<div style="height: 2400px"></div>')])
+        self.click(tab, "#c-zoom button", "200%")
+        p = tab.evaluate("""(() => {
+          const app = document.getElementById("app"), a = app.getBoundingClientRect(), k = a.width / app.width;
+          const root = app.contentDocument.documentElement;
+          return { gutter: app.width - root.clientWidth, x: a.left + (root.clientWidth + 2) * k, y: a.top + 200 * k };
+        })()""")
+        self.assertGreater(p["gutter"], 0, "the render needs its own scrollbar for this case")
+        before = tab.evaluate(SCROLLS_JS)
+        self.mouse(tab, "mousePressed", p["x"], p["y"], 1)
+        self.mouse(tab, "mouseMoved", p["x"] - 40, p["y"] + 40, 1)
+        self.mouse(tab, "mouseReleased", p["x"] - 40, p["y"] + 40, 0)
+        tab.evaluate(FRAMES_JS)
+        after = tab.evaluate(SCROLLS_JS)
+        self.assertEqual((after["frameLeft"], after["frameTop"]), (before["frameLeft"], before["frameTop"]))
+
     def test_config_mistakes_are_named(self):
         cases = {
             "screens typo": ([(CUSTOMERS_SCREENS, 'screens: ["Customer"] }')],

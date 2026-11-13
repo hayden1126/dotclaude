@@ -215,7 +215,7 @@ const ZOOMS = ["Fit", "100%", "200%", "300%"];
 // A drag on the render pans the frame once it moves this far, and never starts on the render's own
 // controls, so their clicks, focus and text selection still work.
 const PAN_START = 4;
-const NO_PAN = "a, button, input, select, textarea, label, [contenteditable]";
+const NO_PAN = "a, button, input, select, textarea, label, summary, [contenteditable], [role=button], [role=link], [onclick]";
 // Stacked and zoomed, the frame keeps this much of the window for the top row and a margin.
 const STACKED_ZOOM_MARGIN = 26;
 const RESERVED = ["frame", "mode", "zoom", "screen", "answers"];
@@ -232,8 +232,8 @@ function configProblems() {
     const name = `CONTROLS[${i}]` + (typeof c?.label === "string" ? ` ("${c.label}")` : "");
     if (typeof c?.label !== "string" || !c.label) problems.push(`${name} needs a label`);
     else if (RESERVED.includes(c.label)) problems.push(`${name}: "${c.label}" is a name the shell uses; pick another label`);
-    else if (!Array.isArray(c.options) || !c.options.length || !c.options.every((o) => typeof o === "string")) {
-      problems.push(`${name} needs options, a list of names`);
+    else if (!Array.isArray(c.options) || !c.options.length || !c.options.every((o) => typeof o === "string" || Number.isFinite(o))) {
+      problems.push(`${name} needs options, a list of names or numbers`);
     } else if (c.corner !== undefined && typeof c.corner !== "boolean") problems.push(`${name}: corner must be true or false`);
   });
   QUESTIONS.forEach((q, i) => {
@@ -271,7 +271,7 @@ function segment(options, current, onPick, className = "m-seg") {
     const b = document.createElement("button");
     b.type = "button";
     b.textContent = option;
-    b.dataset.option = option;
+    b.mockOption = option;
     b.addEventListener("click", () => {
       onPick(option);
       update();
@@ -285,7 +285,7 @@ function segment(options, current, onPick, className = "m-seg") {
 function syncPressed() {
   for (const [seg, current] of groups) {
     const now = current();
-    for (const b of seg.querySelectorAll("button")) b.setAttribute("aria-pressed", String(b.dataset.option === now));
+    for (const b of seg.querySelectorAll("button")) b.setAttribute("aria-pressed", String(b.mockOption === now));
   }
 }
 
@@ -503,9 +503,9 @@ function attachPan(doc) {
 app.addEventListener("load", () => {
   const doc = app.contentDocument, win = app.contentWindow;
   if (!doc) return;
-  const view = viewKey();
-  if (savedScroll?.view === view) win.scrollTo(savedScroll.left, savedScroll.top);
-  win.addEventListener("scroll", () => { savedScroll = { view, left: win.scrollX, top: win.scrollY }; }, { passive: true });
+  if (savedScroll?.view === viewKey()) win.scrollTo(savedScroll.left, savedScroll.top);
+  // The view is read at each scroll, not at load: a Size click that leaves the HTML alone keeps this page.
+  win.addEventListener("scroll", () => { savedScroll = { view: viewKey(), left: win.scrollX, top: win.scrollY }; }, { passive: true });
   attachPan(doc);
   setGrab();
 });

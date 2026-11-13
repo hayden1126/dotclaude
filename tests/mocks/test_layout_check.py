@@ -20,6 +20,8 @@ import unittest
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 TEMPLATE = ROOT / "skills/mocks/template/mock.html"
 CHECK = ROOT / "skills/mocks/scripts/layout_check.py"
+# The template as it shipped before the corner zoom: mocks built from it must keep passing.
+PREVIOUS_TEMPLATE = ROOT / "tests/mocks/fixtures/previous-template.html"
 
 spec = importlib.util.spec_from_file_location("layout_check", CHECK)
 layout_check = importlib.util.module_from_spec(spec)
@@ -305,6 +307,13 @@ class CleanPages(TemporaryPages):
         scrolled = [l for l in lines if l["kind"] == "questions scroll" and l["got"].startswith("scrolled ")]
         small = {l["scope"].split()[1] for l in scrolled}
         self.assertLessEqual({"1280x680", "1101x700"}, small, "the template's questions must overflow here")
+
+    def test_a_mock_from_the_previous_template_still_passes(self):
+        # Mocks built before the corner zoom have Fit and 100% in the top row and no 200%.
+        result = run_check(PREVIOUS_TEMPLATE)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(result.stdout.splitlines()[-1], "LAYOUT_OK")
+        self.assertNotIn("zoom 200%", result.stdout)
 
     def test_every_wide_assertion_runs_for_every_frame(self):
         lines = parsed(run_check(self.page()).stdout)

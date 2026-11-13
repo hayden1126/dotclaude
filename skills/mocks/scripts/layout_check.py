@@ -125,6 +125,8 @@ MEASURE_JS = """(() => {
 ZOOM_PICK_JS = """((label) => [...document.querySelectorAll("#c-zoom button")]
   .find((b) => b.textContent.trim() === label).click())"""
 
+ZOOM_HAS_200_JS = """[...document.querySelectorAll("#c-zoom button")].some((b) => b.textContent.trim() === "200%")"""
+
 # Scrolls the frame to its far corner: how much of the render that reached.
 ZOOM_REACH_JS = """(() => {
   const frame = document.getElementById("frame"), app = document.getElementById("app");
@@ -548,6 +550,9 @@ def check_zoom(report: Report, browser: Browser, url: str):
                      and reach["height"] >= reach["renderHeight"] - TOLERANCE,
                      f"reaches {reach['width']:.0f} x {reach['height']:.0f} "
                      f"of {reach['renderWidth']} x {reach['renderHeight']}")
+        # A mock from the template before the corner zoom has only Fit and 100%.
+        if not tab.evaluate(ZOOM_HAS_200_JS):
+            continue
         tab.evaluate(f"{ZOOM_PICK_JS}('200%')")
         check_settled(report, scope, tab.settle(*ZOOM_SIZE))
         reach = tab.evaluate(ZOOM_REACH_JS)

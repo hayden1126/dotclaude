@@ -21,7 +21,7 @@ The shell is fixed. Design freedom goes into the render.
    - `CONTROLS` adds a button group to the top row for a choice that applies to the whole render. With `corner: true`, the group sits in the render's corner beside the zoom instead. Its label can't be `frame`, `mode`, `zoom`, `screen` or `answers`: the shell keeps its own state under those names.
    - `ABOUT` is HTML for the intro and any secondary notes, such as swatches.
 
-   The shell adds two pieces to every mock. The corner zoom has Fit, 100%, 200% and 300%; when the render scrolls, drag it to pan, and the scroll position holds while the frame and screen stay the same. The "Copy choices" button copies every pick as plain text, to paste back in chat.
+   The shell adds two pieces to every mock. The corner zoom has Fit, 100%, 200% and 300%; when the zoomed render passes the frame, drag it to pan, and the scroll position holds while the frame and screen stay the same. The "Copy choices" button copies every pick as plain text, to paste back in chat.
 3. **Inline everything** the render needs. A published page can't reach localhost. Inside `render`'s string, write `<\/script>`: a plain closing tag ends the page's own script. Screenshots in a mock are lossless (PNG, or lossless WebP): lossy compression smears small UI text, and lossless costs only about 10% more on flat UI.
 4. **Run the check**, and fix what it reports until the last line is `LAYOUT_OK`:
    `python3 <skill dir>/scripts/layout_check.py <page>`
