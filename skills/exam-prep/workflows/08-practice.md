@@ -656,8 +656,9 @@ The products, each one the hub has:
    (`extract_check.py --leak-files` prints it, for when a hit needs explaining) and prints
    `QUESTIONS OK: no unattempted set` when there is none. An exit 2 checked nothing: fix what
    it names as `05-verify` step 5 says and rerun (MANIFEST.md; a file it reads that isn't UTF-8,
-   named in the message: an extract or solutions file rewritten as UTF-8, a page or a sheet
-   saved again as UTF-8; `no page found`, with no notes and no sheet yet; or an unattempted set,
+   named in the message: an extract or solutions file rewritten as UTF-8, a page, a sheet
+   or a course page's `.html` source in `sources/` saved again as UTF-8; `no page found`, with
+   no notes and no sheet yet; or an unattempted set,
    or an answers file that solves one, with nothing extracted: extract it, after fixing its Key
    cell as `templates/MANIFEST.md.tmpl`'s legend says when the message names that cell as empty
    or unread).

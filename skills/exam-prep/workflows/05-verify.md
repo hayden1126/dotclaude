@@ -166,8 +166,9 @@ order (`08-practice`) get the same audit when they exist.
   answers file added late (`09-tutor` step 6) is extracted first. It exits 2, with the reason
   on stderr, on four causes, each fixed and then rerun: the hub has no MANIFEST.md or one it
   can't read (fix MANIFEST.md as the reason says); a file it reads isn't UTF-8, named in the
-  message (an extract or solutions file: rewrite it as UTF-8; a page or a sheet: save it as
-  UTF-8); no page is found (`no page found`: no notes and no sheet yet; run it from `<root>`
+  message (an extract or solutions file: rewrite it as UTF-8; a page, a sheet or a course
+  page's `.html` source in `sources/`: save it as UTF-8); no page is found (`no page found`: no
+  notes and no sheet yet; run it from `<root>`
   once the notes exist); or an unattempted set, or an answers file that solves one, has nothing
   extracted (`no file holds <DOC>, ...; extract it, then rerun`: extract it, `02-extract`; when
   the message says its Key cell is empty or isn't read, so it counts as a set, first fix that
