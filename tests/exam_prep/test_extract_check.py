@@ -16,7 +16,14 @@ and the closing line aside, question pages read across extracts), and on an answ
 block on no question part's page (a separate answers file's, a past exam's key page); a loose
 `Solution:` line outside a fence warns. An answers file with no question block and no `solutions
 to` note fails. Flags in either directory count; illegible values are listed by file and line;
-`--parts` counts the part blocks holding a `Solution [` line."""
+`--parts` counts the part blocks holding a `Solution [` line, and exits 2 with no MANIFEST.md.
+
+Review round 11: a self-answering row names its key pages in Notes (`key pp. N-M`, `key inline`),
+and only those are answers pages, whatever a `Pages:` line says; a row with neither note fails. A
+`solutions to` note reads a list, and a word in it that is no doc id fails. The lines before a
+file's first block are checked as a block's are. A bracketed or bold solution citing a solved or
+answers doc fails in any block. An answer line (`Answer:`, `Final answer:`, ...) in a solved doc's
+block warns unless it is an answer blank. A `yes, attempted` row still answers."""
 import contextlib
 import importlib.util
 import io
@@ -472,7 +479,7 @@ SOL_MANIFEST = """| Doc id | File | Pages | Scope | Answers | Rendered | Notes |
 | HW1 | `sources/hw1.pdf` | 1 | in | no | yes | Homework 1 |
 | HW1S | `sources/hw1s.pdf` | 1 | in | yes | yes | official solutions to HW1 |
 """
-PE_ROW = "| PE1 | `sources/pe1.pdf` | 3 | in | yes | yes | practice exam with its key |\n"
+PE_ROW = "| PE1 | `sources/pe1.pdf` | 3 | in | yes | yes | practice exam; key p.3 |\n"
 CLOSE = "Coverage: p.1; 2 blocks; 0 image only; 0 flagged unreadable.\n"
 CLEAN = ("# HW1 Homework 1, p.1 (extract)\nSources: HW1 1. Every page image was viewed.\n"
          "### [HW1 p.1] Homework 1\n\"Show your work.\"\n"
@@ -696,14 +703,15 @@ class SolutionsFiles(unittest.TestCase):
         self.add_pe1(key_in_extract=True)
         code, out = self.check()
         self.assertEqual(code, 1, out)
-        self.assertIn("_build/extract/pe1.md:6: AN ANSWERS PAGE IN AN EXTRACT: [PE1 p.3] is a "
-                      "block of PE1, an answers doc, on no question part's page; move it to "
+        self.assertIn("_build/extract/pe1.md:6: AN ANSWERS PAGE IN AN EXTRACT: [PE1 p.3] is a key "
+                      "page of PE1, as its MANIFEST.md key note names it; move it to "
                       "_build/solutions/pe1.md", out)
         self.assertNotIn("pe1.md:1:", out)
         # A page-less section block of it is a key too.
         self.add_pe1()
         self.write("_build/extract/pe1.md", PE + "### [PE1 Key] the key\n\"Q1: s, a, b\"\n")
-        self.assertIn("_build/extract/pe1.md:6: AN ANSWERS PAGE IN AN EXTRACT: [PE1 Key]",
+        self.assertIn("_build/extract/pe1.md:6: AN ANSWERS PAGE IN AN EXTRACT: [PE1 Key] is a "
+                      "block of PE1, a doc with its own key, naming no page or question part",
                       self.check()[1])
 
     def test_an_answers_files_page_in_an_extract_fails(self):
@@ -712,8 +720,8 @@ class SolutionsFiles(unittest.TestCase):
         code, out = self.check()
         self.assertEqual(code, 1, out)
         self.assertIn("_build/extract/hw1.md:9: AN ANSWERS PAGE IN AN EXTRACT: [HW1S p.1] is a "
-                      "block of HW1S, an answers doc, on no question part's page; move it to "
-                      "_build/solutions/hw1.md", out)
+                      "block of HW1S, a separate answers file (its `solutions to` note); move it "
+                      "to _build/solutions/hw1.md", out)
         # Its lines move with it: no second failure for each.
         self.assertNotIn("hw1.md:10:", out)
         # In the solutions file it covers the page and passes.
@@ -801,9 +809,241 @@ class SolutionsFiles(unittest.TestCase):
             ["### [D3 p.2] x\n", "Coverage: p.2; 1 blocks; 0 image only; 0 unreadable.\n",
              "more\n"]), set())
 
-    def test_parts_needs_no_manifest(self):
+    def test_parts_without_a_manifest_exits_2(self):
+        # Review round 11: `--parts` printed 0 for a wrong root, which a self-test read as PARTS.
         self.remove("MANIFEST.md")
-        self.assertEqual(self.check("--parts"), (0, "1\n"))
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            self.assertEqual(self.check("--parts"), (2, ""))
+        self.assertIn("extract_check: no MANIFEST.md in", err.getvalue())
+
+    # ---- review round 11 ----
+
+    def test_a_self_answering_row_with_no_key_note_fails(self):
+        self.add_pe1()
+        self.write("MANIFEST.md", SOL_MANIFEST + PE_ROW.replace("key p.3", "with its key"))
+        code, out = self.check()
+        self.assertEqual(code, 1, out)
+        self.assertIn("PE1: NO KEY NOTE: a doc with its own key names its key pages in Notes "
+                      "(\"key pp. N-M\", or \"key inline\")", out)
+        # Each form of the note passes; a row with a `solutions to` note needs none.
+        # The note sits anywhere in the Notes remark, after other text and a `;`.
+        for note in ("key p.3", "key pp. 3-3", "Key: p.3", "key pp. 3" + chr(0x2013) + "3",
+                     "Practice exam 1; key pp. 3-3", "past exam with its key; key p.3"):
+            with self.subTest(note):
+                self.write("MANIFEST.md", SOL_MANIFEST + PE_ROW.replace("practice exam; key p.3",
+                                                                        note))
+                rows = extract_check.manifest_rows(os.path.join(self.root, "MANIFEST.md"))
+                self.assertEqual(rows["PE1"]["key"], {3})
+                code, out = self.check()
+                self.assertEqual(code, 0, out)
+                self.assertNotIn("NO KEY NOTE", out)
+
+    def test_a_key_inline_doc_passes_with_part_blocks_only(self):
+        # `key inline`: each solution sits under its question, so no page is a key page; the
+        # extract holds the cover page and the part blocks, the solutions file only part blocks
+        # (no answers page, no closing line).
+        self.write("MANIFEST.md", SOL_MANIFEST + PE_ROW.replace(
+            "| 3 | in | yes | yes | practice exam; key p.3 |",
+            "| 2 | in | yes | yes | past exam with its key; key inline |"))
+        for page in (1, 2):
+            self.write(f"_build/pages/PE1/p-{page:03d}.png", "")
+        self.write("_build/extract/pe1.md",
+                   "# PE1 Practice exam (extract)\nSources: PE1 2. Every page image was viewed.\n"
+                   "### [PE1 p.1] Cover\n\"Time: 50 minutes.\"\n"
+                   "### [PE1 Q1] Trace\nPages: [PE1 p.2]\n\"Trace a breadth-first search from s.\"\n"
+                   "### [PE1 Q2] Flow\nPages: [PE1 p.2]\n\"Find a maximum flow.\"\n"
+                   "Coverage: pp.1-2; 3 blocks; 0 image only; 0 flagged unreadable.\n")
+        self.write("_build/solutions/pe1.md",
+                   "# PE1 solutions (extract)\nSources: PE1 2.\n"
+                   "### [PE1 Q1] Trace\nSolution [PE1 p.2]: s, a, b\n"
+                   "### [PE1 Q2] Flow\nSolution [PE1 p.2]: f = 7\n")
+        code, out = self.check()
+        self.assertEqual(code, 0, out)
+        self.assertIn("PE1: 2 pages in scope, 2 rendered, 2 with a block, 2 question blocks", out)
+        self.assertEqual(self.check("--parts"), (0, "3\n"))  # HW1's part and PE1's two
+        # Its must-fail twin: a part with no solutions block.
+        self.write("_build/solutions/pe1.md", "### [PE1 Q1] Trace\nSolution [PE1 p.2]: s, a, b\n")
+        code, out = self.check()
+        self.assertEqual(code, 1, out)
+        self.assertIn("_build/extract/pe1.md:8: NO SOLUTION BLOCK", out)
+
+    def test_the_key_note_names_the_answers_pages_whatever_a_pages_line_says(self):
+        # Review round 11: a key page named on a part's `Pages:` line read as a question page, so
+        # its block passed in the extract (Pages-line laundering). The key note decides now.
+        self.add_pe1(key_in_extract=True)
+        self.write("_build/extract/pe1.md", PE.replace("Pages: [PE1 p.1-2]", "Pages: [PE1 p.1-3]")
+                   + PE_KEY)
+        code, out = self.check()
+        self.assertEqual(code, 1, out)
+        self.assertIn("_build/extract/pe1.md:6: AN ANSWERS PAGE IN AN EXTRACT: [PE1 p.3] is a key "
+                      "page of PE1", out)
+        # Its twin, the key page in the solutions file, passes.
+        self.add_pe1()
+        self.write("_build/extract/pe1.md", PE.replace("Pages: [PE1 p.1-2]", "Pages: [PE1 p.1-3]"))
+        code, out = self.check()
+        self.assertEqual(code, 0, out)
+
+    def test_a_page_the_key_note_doesnt_name_is_question_material(self):
+        # A formula sheet on p.4, on no part's `Pages:` line, sits in the extract, and a line may
+        # cite it; once the note names it a key page, both fail.
+        self.add_pe1()
+        self.write("MANIFEST.md", SOL_MANIFEST + PE_ROW.replace("| 3 |", "| 4 |"))
+        self.write("_build/pages/PE1/p-004.png", "")
+        sheet = "### [PE1 p.4] Formula sheet\n\"Max-flow min-cut: f = c(S, T).\"\n"
+        self.write("_build/extract/pe1.md", PE + "As on the sheet [PE1 p.4].\n" + sheet)
+        code, out = self.check()
+        self.assertEqual(code, 0, out)
+        self.assertIn("PE1: 4 pages in scope, 4 rendered, 4 with a block", out)
+        self.write("MANIFEST.md", SOL_MANIFEST + PE_ROW.replace("| 3 |", "| 4 |").replace(
+            "key p.3", "key pp. 3-4"))
+        code, out = self.check()
+        self.assertEqual(code, 1, out)
+        self.assertIn("_build/extract/pe1.md:6: CITES AN ANSWERS PAGE: [PE1 p.4]", out)
+        self.assertIn("_build/extract/pe1.md:7: AN ANSWERS PAGE IN AN EXTRACT: [PE1 p.4] is a key "
+                      "page of PE1", out)
+
+    def test_the_answers_cite_reads_the_key_note(self):
+        rows = {"PE1": {"answers": True, "answers_for": set(), "key": {3}},
+                "PE2": {"answers": True, "answers_for": set(), "key": set()}}
+        qpages = {"PE1": {1, 2, 3}}  # a Pages line naming p.3 changes nothing
+        for loc in ("p.3", "pp. 2-3", "Key", "answer key"):
+            self.assertTrue(extract_check.answers_cite("PE1", loc, rows, qpages), loc)
+        for loc in ("p.1", "p.4", "Q1", "Q1a"):
+            self.assertFalse(extract_check.answers_cite("PE1", loc, rows, qpages), loc)
+        # `key inline`: no page is a key page; a page-less non-question cite still is answers.
+        self.assertFalse(extract_check.answers_cite("PE2", "p.3", rows, {}))
+        self.assertTrue(extract_check.answers_cite("PE2", "Key", rows, {}))
+        self.assertEqual(extract_check.key_pages("past exam; key pp. 7-9, 11"), {7, 8, 9, 11})
+        self.assertEqual(extract_check.key_pages("key inline"), set())
+        self.assertIsNone(extract_check.key_pages("practice exam with its key"))
+
+    def test_a_solutions_note_naming_no_doc_fails(self):
+        # Review round 11: `solutions to Homework 1 (HW1)` paired HW1S with "Homework", leaving
+        # HW1 silently unsolved.
+        self.write("MANIFEST.md", SOL_MANIFEST.replace("official solutions to HW1",
+                                                       "solutions to Homework 1 (HW1)"))
+        code, out = self.check()
+        self.assertEqual(code, 1, out)
+        self.assertIn("HW1S: NOTE NAMES NO DOC: \"Homework\" in its solutions-to note is no doc id "
+                      "in MANIFEST.md", out)
+        # Its twin, the bare id, passes.
+        self.write("MANIFEST.md", SOL_MANIFEST.replace("official solutions to HW1",
+                                                       "solutions to HW1 (Homework 1)"))
+        code, out = self.check()
+        self.assertEqual(code, 0, out)
+
+    def test_a_solutions_note_reads_a_list(self):
+        extra = ("| HW2 | `sources/hw2.pdf` | 1 | in | no | yes | |\n"
+                 "| HW3 | `sources/hw3.pdf` | 1 | in | no | yes | |\n")
+        for note in ("solutions to HW1, HW2 and HW3", "solutions to HW1, HW2, and HW3.",
+                     "solutions to HW1 & HW2 & HW3"):
+            with self.subTest(note):
+                self.write("MANIFEST.md", SOL_MANIFEST.replace("official solutions to HW1", note)
+                           + extra)
+                rows = extract_check.manifest_rows(os.path.join(self.root, "MANIFEST.md"))
+                self.assertEqual(rows["HW1S"]["answers_for"], {"HW1", "HW2", "HW3"})
+                self.assertEqual(extract_check.solved(rows), {"HW1", "HW2", "HW3"})
+        # A listed id MANIFEST lacks fails.
+        self.write("MANIFEST.md", SOL_MANIFEST.replace("official solutions to HW1",
+                                                       "solutions to HW1 & HW4"))
+        code, out = self.check()
+        self.assertEqual(code, 1, out)
+        self.assertIn("HW1S: NOTE NAMES NO DOC: \"HW4\"", out)
+
+    def test_the_lines_before_the_first_block_are_checked(self):
+        # Review round 11: lines before a file's first `### [` header were read by no check.
+        for line, needle in (
+                ("Solution [HW1S p.1]: 42", "_build/extract/hw1.md:3: SOLUTION IN AN EXTRACT: a "
+                 "solution before the file's first block; move it to its part's block in "
+                 "_build/solutions/hw1.md"),
+                ("**Solution:** 42", "_build/extract/hw1.md:3: SOLUTION IN AN EXTRACT: a solution "
+                 "before"),
+                ("The key gives 42 [HW1S p.1].", "_build/extract/hw1.md:3: CITES AN ANSWERS PAGE: "
+                 "[HW1S p.1]"),
+                ("UNREADABLE: the set's due date", "_build/extract/hw1.md:3: UNREADABLE flag still "
+                 "open")):
+            with self.subTest(line):
+                self.write("_build/extract/hw1.md", CLEAN.replace(
+                    "### [HW1 p.1]", f"{line}\n### [HW1 p.1]"))
+                code, out = self.check()
+                self.assertEqual(code, 1, out)
+                self.assertIn(needle, out)
+        # The title, Sources and viewed lines pass (CLEAN has them), as does the twin with the
+        # line in its part's solutions block.
+        self.write("_build/extract/hw1.md", CLEAN.replace(
+            "### [HW1 p.1]", "Every page image was viewed.\n### [HW1 p.1]"))
+        code, out = self.check()
+        self.assertEqual(code, 0, out)
+        # A solutions file's opening lines count their flags too.
+        self.write("_build/solutions/hw1.md", "UNREADABLE: the total\n"
+                   "(illegible at 300 dpi: a date)\n" + SOLVED)
+        code, out = self.check()
+        self.assertEqual(code, 1, out)
+        self.assertIn("_build/solutions/hw1.md:1: UNREADABLE flag still open", out)
+        self.assertIn("_build/solutions/hw1.md:2: (illegible at 300 dpi: a date), counted, not a "
+                      "failure", out)
+
+    def test_a_solution_citing_a_solved_or_answers_doc_fails_in_any_block(self):
+        # Review round 11: a lecture's block (no solved doc) quoting a homework's solution passed.
+        self.write("MANIFEST.md", SOL_MANIFEST + "| D1 | `sources/d1.pdf` | 1 | in | no | yes | |\n")
+        self.write("_build/pages/D1/p-001.png", "")
+        for line, needle in (
+                ("Solution [HW1 p.1]: 42", "_build/extract/d1.md:2: SOLUTION IN AN EXTRACT: [D1 "
+                 "p.1] holds a solution citing [HW1 p.1], a doc with official solutions; a "
+                 "solution goes only in its part's block under _build/solutions/"),
+                ("**Solution:** as in [HW1S p.1]", "_build/extract/d1.md:2: SOLUTION IN AN "
+                 "EXTRACT: [D1 p.1] holds a solution citing [HW1S p.1], an answers doc")):
+            with self.subTest(line):
+                self.write("_build/extract/d1.md", f"### [D1 p.1] Flows\n{line}\n")
+                code, out = self.check()
+                self.assertEqual(code, 1, out)
+                self.assertIn(needle, out)
+        # Its twin, the lecture's own worked solution, passes.
+        self.write("_build/extract/d1.md", "### [D1 p.1] Flows\nSolution [D1 p.1]: augment twice.\n")
+        code, out = self.check()
+        self.assertEqual(code, 0, out)
+
+    def test_an_answer_line_in_a_solved_docs_block_warns(self):
+        warn = ("warning: _build/extract/hw1.md:9: an answer line in a block of HW1, a doc with "
+                "official solutions: if it is an answer, move it to its part's block in "
+                "_build/solutions/hw1.md")
+        for line in ("Answer: f = 42", "- Answers: 3, 4", "> Ans: 7", "1. Final answer: 7",
+                     "**Final answer:** 7", "*Solution*: push flow along s-a-t",
+                     "Solution (HW1S p.1): 7"):
+            with self.subTest(line):
+                self.write("_build/extract/hw1.md", CLEAN.replace(
+                    "**Shape:** compute\n", f"**Shape:** compute\n{line}\n"))
+                code, out = self.check()
+                self.assertEqual(code, 0, out)  # a warning, not a failure
+                self.assertIn(warn, out)
+        # An answer blank, a fenced line, or a block of a doc nothing solves, doesn't warn.
+        for line in ("Answer: ____", "Answer: ...", "Answer: " + chr(0x2026), "Answer:",
+                     "- Answer: \\_\\_\\_", "```\nAnswer: 42\n```"):
+            with self.subTest(line):
+                self.write("_build/extract/hw1.md", CLEAN.replace(
+                    "**Shape:** compute\n", f"**Shape:** compute\n{line}\n"))
+                code, out = self.check()
+                self.assertEqual(code, 0, out)
+                self.assertNotIn("an answer line", out)
+        self.write("MANIFEST.md", SOL_MANIFEST.replace("| 1 | in | yes |", "| 1 | out | yes |"))
+        self.write("_build/extract/hw1.md", CLEAN.replace(
+            "**Shape:** compute\n", "**Shape:** compute\nAnswer: f = 42\n"))
+        self.assertNotIn("an answer line", self.check()[1])
+
+    def test_an_attempted_answers_row_still_answers(self):
+        # The tutor writes `yes, attempted` once the set is attempted: still an answers row.
+        self.write("MANIFEST.md", SOL_MANIFEST.replace("| in | yes | yes | official",
+                                                       "| in | yes, attempted | yes | official"))
+        rows = extract_check.manifest_rows(os.path.join(self.root, "MANIFEST.md"))
+        self.assertTrue(rows["HW1S"]["answers"])
+        self.assertEqual(extract_check.solved(rows), {"HW1"})
+        code, out = self.check()
+        self.assertEqual(code, 0, out)
+        self.write("_build/solutions/hw1.md", "# HW1 solutions (extract)\n")
+        code, out = self.check()
+        self.assertEqual(code, 1, out)
+        self.assertIn("NO SOLUTION BLOCK", out)
 
 
 if __name__ == "__main__":
