@@ -16,12 +16,16 @@ derivations.
 - Write the reference in `_build/verify/`. Every convention an answer depends on (a tie-break
   order, when a check runs, a numbering) is an explicit parameter, never a hidden default: the
   backbone's Conventions block names them.
-- Copy `<skill>/templates/verify-selftest.py` to `_build/verify/selftest.py`. Add one `check` per
+- Copy `<skill>/templates/verify-selftest.py` to `_build/verify/selftest.py`. The official
+  answers are the part blocks of the solutions files, `_build/solutions/<name>.md` (`02-extract`,
+  "The solutions file"), which the checker reads beside the extracts. Add one `check` per
   official answer part, cited to its page, and a `skip` with its shape for a part the reference
-  can't compute (a proof); set `PARTS` to the number `python3 -I <skill>/scripts/qonly.py --parts`
-  prints from the hub root: one per question part of a doc with solutions whose marker `qonly.py`
-  cuts, plus each `Solution [` line in an answers-file block, never a lecture's worked example
-  (`02-extract`, "Solutions in an extract"; FB-100). Add an `example`
+  can't compute (a proof). A part whose official value is marked `(illegible at 300 dpi: ...)` is
+  a `skip` naming that mark until the student supplies the value (`02-extract` step 3.2), then a
+  `check`. Set `PARTS` to the number
+  `python3 -I <skill>/scripts/extract_check.py --parts` prints from the hub root: one per question
+  part whose solutions block holds a `Solution [` line, never a lecture's worked example
+  (FB-100). Add an `example`
   for each worked example the course itself shows: before any official solutions are out, those
   are what test the reference. `python3 -I _build/verify/selftest.py` must print `ALL PASS` with
   every part covered once before anything uses the reference.
@@ -97,9 +101,9 @@ Its findings are majors, settled and applied in step 5 like the section reviewer
 Fresh reviewers, not the section reviewers, spawned together with step 3's (they read different
 things), check every condensation against the sources: here
 the Must-know checklists, one reviewer per two or three sections, from the brief's "Audit"
-variant (FB-105), its `{{Q-ONLY FILES}}` slot filled with the copies under `_build/q-only/`
-(`02-extract` step 3.4, FB-056) of the extracts its sections cite that hold solutions. The cheat sheet (`07-cheatsheet`) and the cram order (`08-practice`) get the
-same audit when they exist.
+variant (FB-105), its `{{EXTRACT FILES}}` slot filled with the extracts its sections cite
+(`_build/extract/`, which hold no answer; FB-056). The cheat sheet (`07-cheatsheet`) and the cram
+order (`08-practice`) get the same audit when they exist.
 
 ## Step 5: Apply the fixes
 
@@ -125,11 +129,12 @@ same audit when they exist.
   `00-intake` and `11-next-exam` write it from the student's word, `09-tutor` Step 7 when its last
   part is done).
   With no such set, skip the run and log `no unattempted set` in STATUS. Otherwise give each set's
-  extract
-  (`_build/extract/<name>.md`) as a question file, and the lecture extracts the notes cite as
+  extract (`_build/extract/<name>.md`) and its solutions file, if it has one
+  (`_build/solutions/<name>.md`), as question files, and the lecture extracts the notes cite as
   allowed sources:
-  `python3 -I <skill>/scripts/mock_leak.py --questions <the sets' extracts> --allow <the lecture
-  extracts> --pages notes/*.md`. The main session runs it, since reviewers never open `practice/`.
+  `python3 -I <skill>/scripts/mock_leak.py --questions <the sets' extracts and solutions files>
+  --allow <the lecture extracts> --pages notes/*.md`. The main session runs it, since reviewers
+  never open `practice/`.
   Each hit names a notes line and a set's part, never the text. The Review view (`07-cheatsheet`)
   only tags blocks of the notes, so this check covers it, and every later change runs it as
   `08-practice`'s "Changing the notes or a sheet" item 4 says.
@@ -147,9 +152,10 @@ same audit when they exist.
 
 ## Official solutions that arrive late
 
-Add them to the self-test (and rerun `qonly.py --parts` for `PARTS`), diff every answer against
-the notes and any solved key, and record the verdict in STATUS: what matched, what was wrong, what
-changed (FB-107). One that changes the reference or a convention reruns the examples as in step 5.
+Extract them first: one extract agent writes the set's pair again, its extract and
+`_build/solutions/<name>.md` (`02-extract`, hard rule 6). Add them to the self-test (and rerun
+`extract_check.py --parts` for `PARTS`), diff every answer against the notes and any solved key,
+and record the verdict in STATUS: what matched, what was wrong, what changed (FB-107). One that changes the reference or a convention reruns the examples as in step 5.
 
 ## The mock
 
