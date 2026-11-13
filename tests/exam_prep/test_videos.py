@@ -9,8 +9,10 @@ accent rule per topic, each pick's link with &t=<start>s, the kind chips, flags,
 timestamp order across topics with its gaps marked "Skipped", and the footer's counts. With the
 sample hub's notes page built at _build/notes.html, its ids are checked and its headings name the
 links. Broken one way at a time, the sample fails with exit 1, writes nothing, and names the file
-and field of each problem; several problems are all listed. With EXAM_PREP_PLAYWRIGHT set (and
-MathJax's and the fonts' hosts allowed), verify_page.mjs and verify_videos.mjs pass on the page."""
+and field of each problem; several problems are all listed. Braces in the data ("{{1,2}}") build
+and show; a placeholder the chassis itself leaves unfilled fails. With EXAM_PREP_PLAYWRIGHT set
+(and MathJax's and the fonts' hosts allowed), verify_page.mjs and verify_videos.mjs pass on the
+page, and verify_videos.mjs fails it with a skipped stretch's row taken out or no toggle pressed."""
 import contextlib
 import copy
 import importlib.util
@@ -160,9 +162,11 @@ class Builds(unittest.TestCase):
     def test_by_lecture_in_timestamp_order(self):
         view = self.html.split('<div id="view-lecture">', 1)[1].split("</div>", 1)[0]
         self.assertIn("<h2>Lecture 3: counting and graphs</h2>", view)
-        rows = re.findall(r'<li class="(lgap|lrow)"(?: data-start="(\d+)")?>(.*?)</li>', view)
-        self.assertEqual([(k, s) for k, s, _ in rows],
-                         [("lgap", ""), ("lrow", "300"), ("lgap", ""), ("lrow", "1500")])
+        rows = re.findall(r'<li class="(lgap|lrow)" data-start="(\d+)"(?: data-end="(\d+)")?>(.*?)</li>', view)
+        self.assertEqual([r[:3] for r in rows],
+                         [("lgap", "0", "300"), ("lrow", "300", "720"), ("lgap", "720", "1500"),
+                          ("lrow", "1500", "1800")])
+        rows = [(k, s, t) for k, s, _, t in rows]
         self.assertEqual(rows[0][2], "Skipped 0:00–5:00 (5:00)")
         self.assertEqual(rows[2][2], "Skipped 12:00–25:00 (13:00)")
         # graphs (the second topic) comes first: timestamp order across topics, each row linking back
@@ -184,6 +188,34 @@ class Builds(unittest.TestCase):
             self.assertIn("&lt;b&gt;bold&lt;/b&gt; &amp; co", hub.page())
         finally:
             hub.close()
+
+    def test_braces_in_the_data_build(self):
+        # The leftover-placeholder check used to run after the data went in, so a line holding
+        # "{{1,2}}" crashed the build with a traceback instead of building.
+        data = sample()
+        pick(data, 0, 0, 0)["why"] = "Shows the set {{1,2}} as the notes write it."
+        hub = Hub(data)
+        try:
+            code, _, err = hub.run()
+            self.assertEqual(code, 0, err)
+            self.assertIn("Shows the set {{1,2}} as the notes write it.", hub.page())
+        finally:
+            hub.close()
+
+    def test_a_chassis_placeholder_left_unfilled_still_fails(self):
+        with open(videos.CHASSIS, encoding="utf-8") as f:
+            chassis = f.read()
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "chassis.html")
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(chassis.replace("<!-- SECTIONS -->", "<!-- SECTIONS -->{{NEW SLOT}}", 1))
+            old, videos.CHASSIS, hub = videos.CHASSIS, path, Hub()
+            try:
+                with self.assertRaisesRegex(RuntimeError, r"\{\{NEW SLOT\}\}"):
+                    hub.run()
+            finally:
+                videos.CHASSIS = old
+                hub.close()
 
     def test_no_segments_no_toggle(self):
         data = sample()
@@ -394,8 +426,45 @@ class Browser(unittest.TestCase):
             self.assertIn("ALL VIDEO CHECKS PASS", r.stdout)
             for width in (390, 1280):
                 self.assertIn(f"ok {width}-light: By lecture shows the lecture view alone", r.stdout)
+                self.assertIn(f"ok {width}-light: #l-lec-3 in timestamp order (300, 1500), 2 skipped, every gap "
+                              "marked", r.stdout)
         finally:
             hub.close()
+
+    def videos_fails(self, edit, *want):
+        """verify_videos.mjs on the sample page with one edit: exit 1 and each FAIL line."""
+        hub = Hub()
+        try:
+            code, _, err = hub.run()
+            self.assertEqual(code, 0, err)
+            page = hub.page()
+            edited = edit(page)
+            self.assertNotEqual(edited, page)
+            with open(hub.page_path, "w", encoding="utf-8") as f:
+                f.write(edited)
+            r = subprocess.run(["node", os.path.join(SCRIPTS, "verify_videos.mjs"), hub.page_path,
+                                os.path.join(hub.root, "shots")], capture_output=True, text=True, timeout=300)
+            self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+            for w in want:
+                self.assertIn(w, r.stdout)
+        finally:
+            hub.close()
+
+    def test_a_missing_gap_row_fails(self):
+        # The gap between the two rows taken out: the rows alone still run in timestamp order.
+        def edit(page):
+            return re.sub(r'<li class="lgap" data-start="720"[^>]*>[^<]*</li>\n', "", page, count=1)
+        self.videos_fails(edit, "FAIL 390-light: #l-lec-3's skipped stretches don't match its rows: shown "
+                          "Skipped 0:00\u20135:00 | row 300 | row 1500; expected Skipped 0:00\u20135:00 | row 300 | "
+                          "Skipped 12:00\u201325:00 | row 1500")
+
+    def test_no_toggle_pressed_fails(self):
+        # Every aria-pressed false: no button pressed for another view, yet none for the shown one.
+        def edit(page):
+            self.assertEqual(page.count("String(b.dataset.vview===v)"), 1)
+            return page.replace("String(b.dataset.vview===v)", "'false'").replace('aria-pressed="true"', 'aria-pressed="false"')
+        self.videos_fails(edit, "FAIL 390-light: doesn't open in the by-idea view alone",
+                          "FAIL 1280-dark: By lecture didn't show the lecture view alone")
 
 
 if __name__ == "__main__":

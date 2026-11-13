@@ -47,7 +47,8 @@ plain video), visuals, why, flags as chips, then the thread, differs, tested and
 notes row's explain renders as CHASSIS.md C6's concise box. The by-lecture view, when any
 segment exists, lists each lecture's segments across topics in timestamp order, the gaps before
 and between them marked "Skipped" (a gap after a segment with no end can't be known and isn't
-shown), each row linking back to its idea; the view is remembered per viewer in localStorage.
+shown), each row linking back to its idea and carrying its seconds (data-start, data-end when
+known; a gap row its own) for verify_videos.mjs; the view is remembered per viewer in localStorage.
 A footer counts the picks and topics.
 
 Checks (exit 1, every problem listed as `<file>: <path.to.field>: <message>`, nothing written):
@@ -468,12 +469,14 @@ def render(top, topics, titles):
         for p, t, idea, iid, pid in segs:
             s, end = p["start"] or 0, p["end"]
             if pos is not None and s > pos:
-                rows.append(f'<li class="lgap">Skipped {clock(pos)}–{clock(s)} ({clock(s - pos)})</li>')
+                rows.append(f'<li class="lgap" data-start="{pos}" data-end="{s}">Skipped {clock(pos)}–{clock(s)} '
+                            f'({clock(s - pos)})</li>')
             if pos is not None:
                 pos = max(pos, end) if end is not None else None
             rng = clock(s) + (f"–{clock(end)}" if end is not None else " on")
             chap = f'<span class="lchap">{e(p["chapter"])}</span>' if p.get("chapter") else ""
-            rows.append(f'<li class="lrow" data-start="{s}"><a class="ltime" href="{e(watch_url(vid, s))}" '
+            stamp = f'data-start="{s}"' + (f' data-end="{end}"' if end is not None else "")
+            rows.append(f'<li class="lrow" {stamp}><a class="ltime" href="{e(watch_url(vid, s))}" '
                         f'target="_blank" rel="noopener">{rng}</a>{chap}<a class="lback" href="#{pid}">'
                         f'{e(idea["idea"] or "")}</a><span class="lsec">{e(t["section"] or "")} '
                         f'{e(t["name"] or "")}</span></li>')
@@ -515,6 +518,20 @@ TOGGLE_HTML = ('<div class="vidtog" role="group" aria-label="Arrange the videos"
                'data-vview="lecture" aria-pressed="false">By lecture</button></div>')
 
 
+def fill(page, has_lectures, title, small, head, style, accents, body, script):
+    """The chassis with its placeholders and markers filled."""
+    page = page.replace("{{TITLE}}", title, 1)
+    page = page.replace("{{BRAND}}<small>{{COURSE}} · {{EXAM}}</small>", f"Watch list<small>{small}</small>", 1)
+    page = page.replace("{{BRAND}}", "Watch list", 1)
+    page = PAGEHEAD.sub(lambda m: head, page, count=1)
+    page = TOGGLE.sub(lambda m: TOGGLE_HTML if has_lectures and "viewtog" in m.group(1) else "", page)
+    page = page.replace("</style>", "</style>\n" + style, 1)
+    page = page.replace("/* SECTION ACCENTS */", accents, 1)
+    page = page.replace("<!-- EXAM-DAY MAP -->\n", "", 1)
+    page = page.replace("<!-- SECTIONS -->", body, 1)
+    return page.replace("<!-- FIGURE SCRIPTS -->", script, 1)
+
+
 def build(top, topics, titles, assemble):
     body, has_lectures, total = render(top, topics, titles)
     with open(CHASSIS, encoding="utf-8") as f:
@@ -524,21 +541,16 @@ def build(top, topics, titles, assemble):
     style = re.search(r"<style>.*?</style>", addon, re.S).group(0)
     script = re.search(r"<script>.*?</script>", addon, re.S).group(0)
     page = re.sub(r"\A<!--.*?-->\n", "", page, count=1, flags=re.S)
-    exam = e(top["exam"] or "")
-    page = page.replace("{{TITLE}}", (f'{e(top["course"])} ' if top["course"] else "") + f"{exam} watch list", 1)
-    small = (f'{e(top["course"])} · ' if top["course"] else "") + exam
-    page = page.replace("{{BRAND}}<small>{{COURSE}} · {{EXAM}}</small>", f"Watch list<small>{small}</small>", 1)
-    page = page.replace("{{BRAND}}", "Watch list", 1)
-    page = PAGEHEAD.sub(lambda m: pagehead(top, has_lectures), page, count=1)
-    page = TOGGLE.sub(lambda m: TOGGLE_HTML if has_lectures and "viewtog" in m.group(1) else "", page)
-    page = page.replace("</style>", "</style>\n" + style, 1)
-    page = page.replace("/* SECTION ACCENTS */", assemble.accents(len(topics)), 1)
-    page = page.replace("<!-- EXAM-DAY MAP -->\n", "", 1)
-    page = page.replace("<!-- SECTIONS -->", body, 1)
-    page = page.replace("<!-- FIGURE SCRIPTS -->", script, 1)
-    left = sorted(set(re.findall(r"\{\{[^}]*\}\}", page)))
+    # The chassis's own placeholders, checked with none of the data in: the student's text may hold
+    # braces ("{{1,2}}"), which e() leaves as they are.
+    left = sorted(set(re.findall(r"\{\{[^}]*\}\}", fill(page, has_lectures, "", "", "", style, "", "", script))))
     if left:
         raise RuntimeError(f"chassis placeholders left unfilled: {', '.join(left)}")
+    exam = e(top["exam"] or "")
+    title = (f'{e(top["course"])} ' if top["course"] else "") + f"{exam} watch list"
+    small = (f'{e(top["course"])} · ' if top["course"] else "") + exam
+    page = fill(page, has_lectures, title, small, pagehead(top, has_lectures), style,
+                assemble.accents(len(topics)), body, script)
     return page, total
 
 
