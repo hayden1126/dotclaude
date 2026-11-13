@@ -115,8 +115,9 @@ evidence ids.
   figure shots (`-fig-1-slide`, `-fig-2-triangle`) at each width;
   `scripts/qonly.py`, `scripts/videos.py` and `scripts/verify_videos.mjs`, new, and
   `scripts/assemble.py`, `scripts/coverage_check.py`, `scripts/cram_check.py`,
-  `scripts/extract_check.py`, `scripts/mock_leak.py`, `scripts/mockpage.py` and
-  `scripts/verify_page.mjs`, which carry no date.
+  `scripts/extract_check.py`, `scripts/mock_leak.py`, `scripts/mockpage.py`,
+  `scripts/verify_page.mjs`, `templates/verify-selftest.py` and `templates/verify-set-key.py`,
+  which carry no date.
 - **Changes:**
   - FB-124 and L26: the theme chrome, CHASSIS C2 (themed scrollbars, an opaque page track), C3
     (a fixed theme icon with no words) and C4 (full screen where granted, the F and T keys), on

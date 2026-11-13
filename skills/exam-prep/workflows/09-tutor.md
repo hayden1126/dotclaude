@@ -48,7 +48,7 @@ picks it up.
     _build/frag/`, and read a passage with `git show HEAD:<path> | sed -n
     '<from>,<to>p'`. `_build/extract/` is searched and read
     from disk with the Grep and Read tools, whose output stays folded (Step 3): a part's block holds
-    its `Solution [` line; but not a file `git status --short -- _build/extract/` lists, which a
+    its solution; but not a file `git status --short -- _build/extract/` lists, which a
     build's `02-extract` is still writing (`11-next-exam`'s builds too);
   - it dispatches no patch: one the student approves waits under `## Pending patches` in the log
     (Step 5.3), a one-line sheet addition marked `sheet line`, and the build session never
@@ -103,8 +103,8 @@ Settle it before the first part:
 - A taken mock: its key, `practice/mock-<slug>-key.md`. An untaken mock is never walked through:
   it is a timed rehearsal (`08-practice` step 8.1).
 - A set whose official solutions are extracted (MANIFEST.md marks their file `Answers: yes`, with
-  `solutions to <doc>` in its Notes): the `Solution [` line under each part's block in
-  `_build/extract/`.
+  `solutions to <doc>` in its Notes): the solution under each part's block in `_build/extract/`
+  (its `Solution [` line, or any marker `qonly.py` cuts).
 - Any other set, with a checker: its values from the reference, before the first part (hard rule 3),
   once `selftest.py` prints `ALL PASS` (`05-verify` step 1) and no build runs (Step 1). Copy
   `<skill>/templates/verify-set-key.py` to `_build/verify/set_key.py` once, add the set's doc id to

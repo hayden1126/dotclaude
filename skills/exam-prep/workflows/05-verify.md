@@ -18,11 +18,11 @@ derivations.
   backbone's Conventions block names them.
 - Copy `<skill>/templates/verify-selftest.py` to `_build/verify/selftest.py`. Add one `check` per
   official answer part, cited to its page, and a `skip` with its shape for a part the reference
-  can't compute (a proof); set `PARTS` to the number of official parts, counted as its docstring
-  says (FB-100). Add an `example` for each worked example the course itself shows: before any
-  official solutions are out, those are what test the reference. `python3 -I
-  _build/verify/selftest.py` must print `ALL PASS` with every part covered once before anything
-  uses the reference.
+  can't compute (a proof); set `PARTS` to the number `python3 -I <skill>/scripts/qonly.py --parts`
+  prints from the hub root, one per solution marker `qonly.py` cuts (FB-100). Add an `example`
+  for each worked example the course itself shows: before any official solutions are out, those
+  are what test the reference. `python3 -I _build/verify/selftest.py` must print `ALL PASS` with
+  every part covered once before anything uses the reference.
 - A FAIL means a convention the reference doesn't model yet or a misread extract: fix that. An
   expected value changes only when a 300 dpi re-read of its page shows the extract misread it
   (fix the extract too), or when the official answer itself is wrong (an erratum, logged in
@@ -145,9 +145,9 @@ same audit when they exist.
 
 ## Official solutions that arrive late
 
-Add them to the self-test (and to `PARTS`), diff every answer against the notes and any solved
-key, and record the verdict in STATUS: what matched, what was wrong, what changed (FB-107). One
-that changes the reference or a convention reruns the examples as in step 5.
+Add them to the self-test (and rerun `qonly.py --parts` for `PARTS`), diff every answer against
+the notes and any solved key, and record the verdict in STATUS: what matched, what was wrong, what
+changed (FB-107). One that changes the reference or a convention reruns the examples as in step 5.
 
 ## The mock
 

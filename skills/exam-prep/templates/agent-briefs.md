@@ -112,8 +112,11 @@ Transcribe; never summarize.
     `Solution [{{SOLDOC}} p.N]: ...`, or `Solution [{{SOLDOC}} <its section>]: ...` for a file
     without pages ({{SOLDOC}} is {{DOC}} when the solutions sit in the same file), starting
     exactly `Solution [` with no words between `Solution` and the cite (the check fails any other
-    line that cites {{SOLDOC}}'s pages, `Pages:` lines aside). Only a part's
-    block holds a `Solution [` line, never a stem's or a page's: the self-test counts those lines
+    line that cites an answers page of {{SOLDOC}}, a page no question part's `Pages:` line names
+    or any page of a separate solutions file, `Pages:` lines aside, and warns on a solution with
+    another marker or with none; a solution citing only its own question page is caught only by
+    that warning, so always start it `Solution [`). Only a part's block holds a `Solution [`
+    line, never a stem's or a page's: `qonly.py --parts` counts those markers for the self-test
     as the official parts. The solution is the last thing in the part's block, its working (a
     table, a fenced trace) under its line: the question-only copy drops everything from that
     line to the next `###` header, so nothing of the question may follow it.}}
@@ -306,7 +309,7 @@ main session checks each finding and applies the fixes.
   5. Wording against the official solutions: compare the section's wording with the `Answers:
      yes` files its extract blocks cover ({{ANSWER FILES: each file MANIFEST.md marks `Answers:
      yes` whose blocks the coverage matrix maps into §{{N}}, or "none": drop this item}}), their
-     `Solution [` lines and answers-file blocks. Wording that tracks an official solution (its
+     solutions (from each part's marker to its block's end) and answers-file blocks. Wording that tracks an official solution (its
      phrasing, its sentence order, its steps as it writes them) is a finding, major: the fix
      rewords from the slide or derives the step plainly, never paraphrases the solution (FB-071).
 - Answers: the notes quote an answer only from a set MANIFEST.md marks `yes, attempted`.
