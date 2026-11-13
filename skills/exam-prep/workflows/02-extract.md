@@ -100,7 +100,8 @@ scheme] ...`. A block whose locator is such a name followed, after any spaces, b
 character that is no letter or digit (`### [PE3 Marking scheme (continued)]`, `[PE3 Marking
 scheme: Q2]`, `[PE3 #/5/0]` under `sections: #/5`) or by `Q` and a digit (`[PE3 Marking scheme
 Q2]`) is key material too, and goes to the solutions file; `Key formulas` under `sections: Key`
-is not, and stays in the extract. A `reserved`,
+is not, and stays in the extract. The rule has one exception: a locator naming a key section is
+key material whatever page reference it carries (`[PE3 Marking scheme p.2]` is key). A `reserved`,
 `pending` or `out` answers file solves nothing, nor does a row on a STATUS `Unverified:` line
 until it is verified. The brief's `{{KEY PAGES}}` slot gives the agent what the Key cell names:
 the pages, `none` for `inline`, or the key sections by locator. Only those pages or sections go
@@ -196,9 +197,13 @@ STATUS).
      `pp.` key on a row whose File isn't a PDF, whatever its Pages holds. A Word file or a slide deck
      names its key sections or slides by their exact locators: `sections: Marking scheme`,
      `sections: #/5, #/6`.
-   - `<doc>: KEY SECTION NOT FOUND: no block [<doc> <name>] in _build/solutions/`: a section the
-     Key cell names has no block with that exact locator in the solutions files. Give the key
-     section's block that locator, in the doc's solutions file, or fix the name in the cell.
+   - `<doc>: KEY SECTION NOT FOUND: no block [<doc> <name>] in its home solutions file`: a
+     section the Key cell names has no block in the doc's home solutions file ("The solutions
+     file": the one beside each extract holding a block of the doc; no other solutions file is
+     read), neither one with that exact locator nor one of the section (`[<doc> Marking scheme Q1]`, `[<doc> Marking scheme
+     (continued)]`, `[<doc> #/5/0]` under `sections: #/5`), by the key-section rule and its one
+     exception (a page reference: `[<doc> Marking scheme p.2]` is key). Give the key section's
+     block that locator, in the doc's home solutions file, or fix the name in the cell.
    - `<doc>: ANSWERS WITH NO PAIRING: ...`: an in-scope Answers `yes` doc that holds its own key
      by its Key cell, yet has no question block in any extract: its question parts need blocks in
      an extract, as the line says (a separate answers file needs a `for ...` cell instead).
