@@ -1,12 +1,14 @@
 """skills/exam-prep/templates/agent-briefs.md: the briefs of agents that must not see answers.
 
 Hard rule 4 and FB-191 keep the answers of a set the student hasn't attempted out of what they
-read, and an agent that greps an extract prints its Solution lines. Pinned: each answer-blind
-brief that reads course sources (the sheet gap scan, the mock writer, the audit variant behind
-the Must-know, sheet and cram audits) names the question-only copies, `_build/q-only/`, and keeps
-the extracts of sources with copies out of its reading and its searches; the two cold briefs open
-nothing under `_build/` at all. Every brief keeps the standing blocks' shape: a fenced text block
-under its heading."""
+read. Official solutions live only in `_build/solutions/`, which the extract agent writes beside
+each extract (FB-056). Pinned: the Extract brief names that file; each answer-blind brief that
+reads course sources (the sheet gap scan, the mock writer, the audit variant behind the
+Must-know, sheet and cram audits) reads the extracts and names `_build/solutions/` only as
+something it never opens, keeping it out of its scope and its searches; the briefs that need a
+set's conventions (the writer, the section reviewer) read the solutions files; the two cold
+briefs open nothing under `_build/` at all. Every brief keeps the standing blocks' shape: a
+fenced text block under its heading."""
 import os
 import re
 import unittest
@@ -46,26 +48,52 @@ class AnswerBlindBriefs(unittest.TestCase):
         for name in READERS + COLD:
             self.assertIn(name, self.briefs)
 
-    def test_each_source_reader_reads_the_question_only_copies(self):
+    def test_each_source_reader_reads_the_extracts(self):
         for name in READERS:
             text = self.briefs[name]
-            self.assertIn("{{ROOT}}/_build/q-only/", text, name)
-            self.assertRegex(text, r"never (?:in )?its extract|their extracts under", name)
+            self.assertIn("{{ROOT}}/_build/extract/", text, name)
             self.assertIn("Out of scope", text, name)
 
-    def test_each_source_reader_keeps_its_searches_off_the_extracts(self):
+    def test_no_source_reader_reads_the_solutions_files(self):
+        """Each bullet of an answer-blind brief that names `_build/solutions/` either says the
+        agent never opens it or is the Out of scope bullet."""
+        for name in READERS:
+            text = self.briefs[name]
+            bullets = re.split(r"\n(?=- )", text)
+            named = [b for b in bullets if "_build/solutions/" in b]
+            self.assertTrue(named, name)
+            for b in named:
+                flat = " ".join(b.split())
+                self.assertTrue("never open" in flat or b.startswith("- Out of scope:"), (name, b))
+            scope = text.split("- Out of scope:", 1)[1]
+            self.assertIn("_build/solutions/", scope, name)
+
+    def test_each_source_reader_keeps_its_searches_off_the_solutions(self):
         for name in ("## Sheet gap scan (stage 07)", "**Audit variant**"):
             scope = self.briefs[name].split("- Out of scope:", 1)[1]
-            self.assertIn("{{ROOT}}/_build/q-only/", scope, name)
-            self.assertIn("all of\n  {{ROOT}}/_build/extract/ returns answer lines", scope, name)
+            search = " ".join(scope.split()).split("A search (Grep, Glob) stays inside", 1)[1]
+            self.assertIn("{{ROOT}}/_build/extract/", search, name)
+            self.assertIn("all of {{ROOT}}/_build/ returns answer lines", search, name)
+            self.assertNotIn("solutions", search.split("returns")[0], name)
         scope = self.briefs["## Mock writer (stage 08)"].split("- Out of scope:", 1)[1]
-        self.assertIn("those question-only copies", scope)
+        self.assertIn("those extracts ({{ROOT}}/_build/solutions/", " ".join(scope.split()))
+
+    def test_the_extract_brief_writes_the_solutions_file(self):
+        text = self.briefs["## Extract (stage 02)"]
+        self.assertIn("{{ROOT}}/_build/solutions/{{OUT}}", text)
+        self.assertIn("`No official solution.`", text)
+        self.assertIn("`Solution [{{SOLDOC}} p.N]: ...`", text)
+
+    def test_the_answer_needing_briefs_read_the_solutions_files(self):
+        for name in ("## Write (stage 04)", "## Review (stage 05)"):
+            self.assertIn("{{SOLUTIONS FILES", self.briefs[name], name)
+            self.assertIn("{{ROOT}}/_build/solutions/", self.briefs[name], name)
 
     def test_the_cold_briefs_open_nothing_under_build(self):
         for name in COLD:
             scope = self.briefs[name].split("- Out of scope:", 1)[1]
             self.assertIn("{{ROOT}}/_build/", scope, name)
-            self.assertNotIn("q-only", self.briefs[name], name)
+            self.assertNotIn("_build/solutions/", self.briefs[name], name)
 
     def test_every_brief_is_a_fenced_text_block(self):
         for name, text in self.briefs.items():

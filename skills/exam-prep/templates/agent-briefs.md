@@ -29,8 +29,9 @@ around a denial. Finish the rest of the task if you can, and report `blocked` or
 
 ## Extract (stage 02)
 
-Role: `general-purpose`, because it reads sources and writes one output file (the delegation
-skill's sources-to-file use). One per deck or deck part, or per homework with its solutions. Keep
+Role: `general-purpose`, because it reads sources and writes its own output files (the delegation
+skill's sources-to-file use): the extract, and for a doc with official solutions the solutions
+file beside it (hard rule 6). One per deck or deck part, or per homework with its solutions. Keep
 the bracketed slots that apply and delete the rest.
 
 ```text
@@ -39,22 +40,26 @@ the bracketed slots that apply and delete the rest.
 ## Purpose
 These extracts are the only copy of the course content the notes are written from. A later stage
 reorders them by topic, so a fact missing or misread here is missing or wrong in every product.
-Transcribe; never summarize.
+Transcribe; never summarize.{{SOLUTIONS: The official solutions go in a file of their own: agents
+that must not see answers read the extract, so it holds none.}}
 
 ## End state
 - Done means: every unit of {{DOC}} {{RANGE}} has a block (a page, a slide, a question part, or a
   section of a source without pages), in source order, in the format below, ending with the
-  coverage line.{{SOLUTIONS: Each official solution in {{SOLDOC}} {{SOLRANGE}} sits under the
-  question part it answers.}}
-- Artifact path: {{ROOT}}/_build/extract/{{OUT}}. Write it as you go, block by block, so a crash
-  loses nothing.
+  coverage line.{{SOLUTIONS: Every question part of {{DOC}} also has a block in the solutions
+  file, keyed by the part's block id, holding its official solution from {{SOLDOC}} {{SOLRANGE}}
+  or `No official solution.`}}
+- Artifact path: {{ROOT}}/_build/extract/{{OUT}}{{SOLUTIONS: , and the solutions file
+  {{ROOT}}/_build/solutions/{{OUT}} (the same name)}}. Write as you go, block by block, so a
+  crash loses nothing.
 - Report: end your reply with the JSON block (status, summary, artifacts, blocked_actions). The
-  summary repeats the coverage line and names any in-scope material you saw outside your range.
+  summary repeats the coverage line{{SOLUTIONS: of each file}} and names any in-scope material
+  you saw outside your range.
 
 ## Scope
-- Role: you are a general-purpose agent because this task reads sources and writes one output
-  file. Write nothing else.
-- Work in: {{ROOT}}. Read only, except your one output file.
+- Role: you are a general-purpose agent because this task reads sources and writes its output
+  files. Write nothing else.
+- Work in: {{ROOT}}. Read only, except your output files above.
 - In scope: {{DOC}} {{RANGE}}{{SOLUTIONS: and its official solutions, {{SOLDOC}} {{SOLRANGE}}}}.
   How to read it:
   - {{PDF: for every page read both the text ({{ROOT}}/_build/text/<doc>/p-NNN.txt) and the image
@@ -101,7 +106,8 @@ Transcribe; never summarize.
   instead of one per page: `### [{{DOC}} Q3a] <short title>`, with a shared stem as
   `### [{{DOC}} Q3 stem] <title>`; a deeper part is `Q3b.1` or `Q3bii`, a numbered part `Q2.1`,
   and a part the source numbers in roman `Q3ii`. A page with no question on it still gets its
-  page block (`(blank)` or `(image only: ...)`), and text on a question page outside every part
+  page block (`(blank)` or `(image only: ...)`){{SOLUTIONS: , in the solutions file when it is a
+  page of {{SOLDOC}} (below)}}, and text on a question page outside every part
   (the title, the instructions) goes in that page's block, `### [{{DOC}} p.N] <title>`, before
   its parts. Each question block holds
   - `Pages: [{{DOC}} p.N]`, the page or pages the part sits on;
@@ -110,20 +116,29 @@ Transcribe; never summarize.
     table, prove, compute, justify a label, ...>`
   - `**Conventions:** <every convention the answer depends on, such as a tie-break order, which
     check runs when, or how a board is numbered; or "none">`
-  - {{SOLUTIONS: and its official solution under it, on a line of its own, cited to its pages:
-    `Solution [{{SOLDOC}} p.N]: ...`, or `Solution [{{SOLDOC}} <its section>]: ...` for a file
-    without pages ({{SOLDOC}} is {{DOC}} when the solutions sit in the same file), starting
-    exactly `Solution [` with no words between `Solution` and the cite (the check fails any other
-    line that cites an answers page of {{SOLDOC}}, a page no question part's `Pages:` line names
-    or any page of a separate solutions file, `Pages:` lines aside, and warns on a solution with
-    another marker or with none; a solution citing only its own question page is caught only by
-    that warning, so always start it `Solution [`). Only a part's block holds a `Solution [`
-    line, never a stem's or a page's: `qonly.py --parts` counts those markers for the self-test
-    as the official parts. The solution is the last thing in the part's block, its working (a
-    table, a fenced trace) under its line: the question-only copy drops everything from that
-    line to the next `###` header, so nothing of the question may follow it.}}
 - Last line: `Coverage: {{RANGE}}; N blocks; K image only (<why, per page>); U flagged unreadable.`
   (a flag's detail may follow, in parentheses).
+- {{SOLUTIONS: The extract holds no answer, and the check fails each one it finds there. Never
+  write in it a `Solution [` or `**Solution:**` line, or a line that cites an answers page
+  (`Pages:` lines aside): any page of a separate solutions file, or a page of {{SOLDOC}} that no
+  question part's `Pages:` line names (a key page of a past exam).
+- The solutions file, {{ROOT}}/_build/solutions/{{OUT}}:
+  - First lines: `# {{DOC}} solutions (extract)`, then the extract's `Sources:` line.
+  - One block per question part of {{DOC}}, in the extract's order, its header the part's own
+    block id from the extract, `### [{{DOC}} Q3a]` (a title after it is optional). A stem gets
+    no block: each of its parts gets its own. The block holds one of two things:
+    - the official solution on a line of its own, cited to its pages:
+      `Solution [{{SOLDOC}} p.N]: ...`, or `Solution [{{SOLDOC}} <its section>]: ...` for a file
+      without pages ({{SOLDOC}} is {{DOC}} when the solutions sit in the same file). It starts
+      exactly `Solution [`, with no words between `Solution` and the cite, and its working (a
+      table, a fenced trace) follows under it. The self-test counts each part whose block holds
+      a `Solution [` line as an official part;
+    - the exact line `No official solution.` for a part the official solutions skip.
+  - Every page or section of {{SOLDOC}} with no question part on it gets its own block here,
+    never in the extract, as the extract's page blocks are written: `### [{{SOLDOC}} p.N]
+    <title>`. That is every page of a separate solutions file, and each key page of a past exam.
+  - `UNREADABLE:` flags as in the extract.
+  - Last line: the extract's `Coverage:` line, for {{SOLDOC}} {{SOLRANGE}}.}}
 ```
 
 ## Write (stage 04)
@@ -153,8 +168,9 @@ alone, so it must be correct, cover what the exam tests, and make the ideas easy
   section §{{N}} (its table, lettered sets, figures and worked examples), the Conventions block,
   the cross-section links and the How it's tested table.
 - Sources: {{EXTRACT BLOCKS: the coverage-matrix rows that map into §{{N}}, as files and block
-  ranges}} in {{ROOT}}/_build/extract/, and {{EXAMPLES: the parts of
-  {{ROOT}}/_build/verify/examples.out.md your worked examples use}}.
+  ranges}} in {{ROOT}}/_build/extract/, {{SOLUTIONS FILES: the solutions files of the question
+  sets among them, in {{ROOT}}/_build/solutions/, or "none": drop this item}}, and {{EXAMPLES: the
+  parts of {{ROOT}}/_build/verify/examples.out.md your worked examples use}}.
 - {{PATTERNS, on a hub `11-next-exam` reopened, when the tutor log has them: Where this student
   stalled before, from the tutor log's ## Patterns, quoted: {{LINES}}. This is evidence from one
   past exam, never an exam-format claim (FB-182): write so a reader doesn't stall there, and never say the
@@ -288,7 +304,8 @@ main session checks each finding and applies the fixes.
 ## Scope
 - Work in: {{ROOT}}, read only.
 - Review {{ROOT}}/notes/{{FILE}} against its extract blocks ({{EXTRACT BLOCKS}} in
-  {{ROOT}}/_build/extract/), {{ROOT}}/_build/backbone.md (§{{N}} and the Conventions block) and
+  {{ROOT}}/_build/extract/) and their sets' solutions files ({{SOLUTIONS FILES}} in
+  {{ROOT}}/_build/solutions/, or none), {{ROOT}}/_build/backbone.md (§{{N}} and the Conventions block) and
   {{ROOT}}/_build/STYLE.md. {{CHECKER: Every worked example's numbers come from
   {{ROOT}}/_build/verify/examples.out.md. | NO CHECKER: Nothing in this course is computable, so
   there is no checker output: redo every step of each worked example from its cited sources, and
@@ -310,13 +327,14 @@ main session checks each finding and applies the fixes.
      A skill rule id in the text, such as (S12) or (FB-123), is a finding.
   5. Wording against the official solutions: compare the section's wording with the `Answers:
      yes` files its extract blocks cover ({{ANSWER FILES: each file MANIFEST.md marks `Answers:
-     yes` whose blocks the coverage matrix maps into §{{N}}, or "none": drop this item}}), their
-     solutions (from each part's marker to its block's end) and answers-file blocks. Wording that tracks an official solution (its
-     phrasing, its sentence order, its steps as it writes them) is a finding, major: the fix
+     yes` whose blocks the coverage matrix maps into §{{N}}, or "none": drop this item}}), whose
+     solutions are their blocks in {{ROOT}}/_build/solutions/. Wording that tracks an official
+     solution (its phrasing, its sentence order, its steps as it writes them) is a finding, major:
+     the fix
      rewords from the slide or derives the step plainly, never paraphrases the solution (FB-071).
 - Answers: the notes quote an answer only from a set MANIFEST.md marks `yes, attempted`.
-  {{UNATTEMPTED: The student hasn't attempted <those sets>: their official answers sit in the
-  extracts for their conventions only, a quote from one in the notes is a blocker, and no finding
+  {{UNATTEMPTED: The student hasn't attempted <those sets>: their official answers sit in
+  {{ROOT}}/_build/solutions/ for their conventions only, a quote from one in the notes is a blocker, and no finding
   may propose adding one. | ALL ATTEMPTED: drop this sentence.}}
 - Out of scope: other sections' files, except to check a link's target. Never open anything under
   {{ROOT}}/practice/, which holds answer keys, {{ROOT}}/_build/verify/mock_key.py, which computes
@@ -325,7 +343,7 @@ main session checks each finding and applies the fixes.
 
 **Audit variant** (a condensation: Must-know checklists here, the cheat sheet in 07, the cram
 order in 08). Same role and shape, a fresh agent that hasn't reviewed the sections. It must not see
-answers: for a source with solutions it reads the question-only copy (`02-extract` step 3.4, FB-056).
+answers: it reads the extracts, which hold none, and never opens `_build/solutions/` (FB-056).
 Replace the title, Purpose, the End state's "Done means", and the Scope's review, check-order,
 Answers and out-of-scope lines with:
 
@@ -344,16 +362,15 @@ often than any other. Every line must be true, carry its conditions, and point w
   or links somewhere that doesn't say it, and each point the section teaches as must-know that
   the condensation leaves out (not for the cram order, whose rows each name one thing on
   purpose).
-- Answers: read a source with official solutions only in its question-only copy (FB-056),
-  {{ROOT}}/_build/q-only/<name>.md ({{Q-ONLY FILES: the copies of the extracts above that hold
-  solutions}}), never its extract {{ROOT}}/_build/extract/<name>.md: the copy holds the questions
-  without their answers. A source with no copy has no solutions: read its extract.
+- Answers: read no official answer. Read a source in its extract,
+  {{ROOT}}/_build/extract/<name>.md ({{EXTRACT FILES: the extracts above}}), which holds its
+  questions without their answers; the official solutions live in {{ROOT}}/_build/solutions/,
+  which you never open (FB-056).
 - Out of scope: open nothing under {{ROOT}}/practice/ but {{CONDENSATION}} itself when it lives
-  there (never a `*-key.md` file or the mock), not {{ROOT}}/_build/verify/mock_key.py, not the
-  extract of a source that has a question-only copy, and no file MANIFEST.md marks `reserved`. A
-  search (Grep, Glob) stays inside the notes, {{CONDENSATION}}, {{ROOT}}/_build/q-only/ and the
-  extracts with no copy there, named one by one: one over {{ROOT}} or all of
-  {{ROOT}}/_build/extract/ returns answer lines.
+  there (never a `*-key.md` file or the mock), not {{ROOT}}/_build/verify/mock_key.py, nothing
+  under {{ROOT}}/_build/solutions/, and no file MANIFEST.md marks `reserved`. A search (Grep,
+  Glob) stays inside the notes, {{CONDENSATION}} and {{ROOT}}/_build/extract/: one over {{ROOT}}
+  or all of {{ROOT}}/_build/ returns answer lines.
 ```
 
 ## Cold read (stage 05)
@@ -431,14 +448,14 @@ written separately, from the checker.
   you clone, in {{ROOT}}/_build/backbone.md the How it's tested table and the section numbers
   (`Topic: §N`), and the figure rows of {{ROOT}}/_build/CHASSIS.md.
 - Sources: the notes, {{ROOT}}/notes/*.md, the plan's quoted questions, and for a question you
-  clone whose set has official solutions, that set's question-only copy
-  {{ROOT}}/_build/q-only/<name>.md ({{Q-ONLY FILES: the copies of the sets the plan clones}}), for
-  its full setup and figures. Nothing else: the source documents and their extracts under
-  {{ROOT}}/_build/extract/ hold official solutions beside the questions.
+  clone, its set's extract {{ROOT}}/_build/extract/<name>.md ({{EXTRACT FILES: the extracts of
+  the sets the plan clones}}), for its full setup and figures. Nothing else: the source documents
+  hold official solutions beside the questions, and {{ROOT}}/_build/solutions/, which you never
+  open, holds them alone.
 - Out of scope: everything under {{ROOT}}/practice/ but your own file (the keys and the other
   mocks), {{ROOT}}/sources/, and under {{ROOT}}/_build/ everything but the four files above and
-  those question-only copies (the extracts, renders and the checker's values hold answers). A
-  search (Grep, Glob) stays inside the files you may read: one over {{ROOT}} returns key lines.
+  those extracts ({{ROOT}}/_build/solutions/, the renders and the checker's values hold answers).
+  A search (Grep, Glob) stays inside the files you may read: one over {{ROOT}} returns key lines.
 
 ## Format
 - MOCK.md's format exactly. Header: the exam's title, its minutes and total points, its rules,
@@ -463,7 +480,7 @@ written separately, from the checker.
 ## Cold solver (stage 08, from 05-verify "The mock")
 
 Role: `reviewer`: it solves on paper and reports. Its scope is a list of the files it may open,
-since the key's values also sit in the checker and the extracts.
+since the key's values also sit in the checker and the solutions files.
 
 ```text
 # Brief: solve the {{EXAM}} mock practice/mock-{{SLUG}}.md cold, without the key
@@ -486,9 +503,10 @@ how those surface.
   {{ROOT}}/practice/mock-{{SLUG}}.md; the notes, {{ROOT}}/notes/*.md{{SHEET: ; and the
   sheet the student may bring, {{ROOT}}/cheatsheet/{{SHEET FILE}}}}.
 - Solve the mock from those, as the student would. A search (Grep, Glob) stays inside those
-  paths: one over {{ROOT}} would return key and extract lines.
+  paths: one over {{ROOT}} would return key and solution lines.
 - Out of scope: every other file. Above all, nothing else under {{ROOT}}/practice/ (the key) or
-  {{ROOT}}/_build/ (the checker and the extracts hold official answers and the key's values),
+  {{ROOT}}/_build/ (the checker and the solutions files hold official answers and the key's
+  values),
   nothing under {{ROOT}}/sources/, and no file MANIFEST.md marks `reserved`.
 ```
 
@@ -719,9 +737,9 @@ session assembles the page and checks it in a browser.
   `<div class="concise"><ul><li><strong>Rule:</strong> ...</li></ul></div>`, one `li` per bullet,
   its label and colon in `strong`, the "In short" heading dropped, never tagged `rv`, as
   CONVERT.md's "The concise box" says.
-- Out of scope: every other notes file and fragment, the chassis, sources/, _build/extract/ and
-  _build/verify/ (a figure's data comes from the notes alone), everything under practice/, and
-  every file MANIFEST.md marks `reserved`. A search (Grep, Glob) stays inside the files above:
+- Out of scope: every other notes file and fragment, the chassis, sources/, _build/extract/,
+  _build/solutions/ and _build/verify/ (a figure's data comes from the notes alone), everything
+  under practice/, and every file MANIFEST.md marks `reserved`. A search (Grep, Glob) stays inside the files above:
   one over {{ROOT}} returns key lines. Never add what CONVERT.md's Output paragraph forbids (a
   script, a style, an event attribute, a class outside CHASSIS.md's table).
 ```
@@ -756,23 +774,20 @@ decides what goes on.
 - {{CONTENT: Read {{ROOT}}/notes/{{FILES}}, their Must-know lines first. Report what a student
   needs cold from these sections that the outline lacks: conditions, traps, formulas, decision
   rules. | QUESTION TYPE: Read the "How it's tested" table in {{ROOT}}/_build/backbone.md and the
-  question sets it names ({{QUESTION DOCS}}): a set with official solutions in its question-only
-  copy, {{ROOT}}/_build/q-only/<name>.md ({{Q-ONLY FILES}}), never its extract
-  {{ROOT}}/_build/extract/<name>.md; a set with no copy there, which has none, in its extract
-  ({{EXTRACT FILES}}). Per question type
+  question sets it names ({{QUESTION DOCS}}), each in its extract,
+  {{ROOT}}/_build/extract/<name>.md ({{EXTRACT FILES}}). Per question type
   (trace, compute, justify, prove, fill a table, true or false, formulate, as the course has
   them), propose an answer template, the pros and cons a "compare" question needs, and a worked
   pattern, each only where the outline lacks it.}}
-- Answers: read no official answer: a set with solutions is read in its question-only copy under
-  {{ROOT}}/_build/q-only/, never in its extract (FB-056). {{UNATTEMPTED: The student hasn't attempted
+- Answers: read no official answer. The extracts hold none; the official solutions live in
+  {{ROOT}}/_build/solutions/, which you never open (FB-056). {{UNATTEMPTED: The student hasn't attempted
   <those sets>: read their questions only, and propose nothing from their official answers. | ALL
   ATTEMPTED: drop this sentence.}}
 - Out of scope: nothing under {{ROOT}}/practice/ (the mock sheet holds nothing derived from the
-  mock, and keys live there), nothing under {{ROOT}}/sources/, no extract under
-  {{ROOT}}/_build/extract/ of a set with a question-only copy, and no file MANIFEST.md marks
-  `reserved`. A search (Grep, Glob) stays inside the notes, the outline, the backbone,
-  {{ROOT}}/_build/q-only/ and the extracts named above: one over {{ROOT}} or all of
-  {{ROOT}}/_build/extract/ returns answer lines.
+  mock, and keys live there), nothing under {{ROOT}}/sources/ or {{ROOT}}/_build/solutions/, and
+  no file MANIFEST.md marks `reserved`. A search (Grep, Glob) stays inside the notes, the outline,
+  the backbone and {{ROOT}}/_build/extract/: one over {{ROOT}} or all of {{ROOT}}/_build/ returns
+  answer lines.
 ```
 
 ## Notes patch (stages 08 and 09)
