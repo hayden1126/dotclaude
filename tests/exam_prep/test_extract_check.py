@@ -52,7 +52,8 @@ then no letter or digit (`(continued)`, `: Q2`, a deck's `#/5/0`) is key materia
 Review round 16: a doc's homes are the extracts holding any block of it (a page, section, slide or
 question block), not only its question blocks, so a page-only set or a deck split over two
 extracts has a home; a stem's, a single-set answers page's or a key block whose set has no block
-in any extract fails NO HOME FILE, and KEY SECTION NOT FOUND looks in every home."""
+in any extract fails NO HOME FILE, and KEY SECTION NOT FOUND looks in every home. A key
+section's locator is key material whatever page reference it carries (`Marking scheme p.2`)."""
 import contextlib
 import importlib.util
 import io
@@ -1679,9 +1680,9 @@ class SolutionsFiles(unittest.TestCase):
         key = extract_check.read_key
         rows = {"PE3": {"answers": True, "key": key("sections: Marking scheme")}}
         for loc in ("Marking scheme Q1", "marking  SCHEME Q2b", "Marking scheme, part 2",
-                    "Marking scheme , part 2"):
+                    "Marking scheme , part 2", "Marking scheme Q1 p.3"):
             self.assertTrue(extract_check.answers_cite("PE3", loc, rows), loc)
-        for loc in ("Marking schemes", "Marking scheme 2", "Marking scheme Q1 p.3"):
+        for loc in ("Marking schemes", "Marking scheme 2"):
             self.assertFalse(extract_check.answers_cite("PE3", loc, rows), loc)
         rows = {"PE3": {"answers": True, "key": key("sections: Key")}}
         self.assertFalse(extract_check.answers_cite("PE3", "Key formulas", rows))
@@ -1710,10 +1711,10 @@ class SolutionsFiles(unittest.TestCase):
         rows = {"PE3": {"answers": True, "key": key("sections: Marking scheme")}}
         for loc in ("Marking scheme", "Marking scheme (continued)", "Marking scheme: Q2",
                     "Marking scheme - Q2", "Marking scheme, part 2", "Marking scheme Q1",
-                    "Marking schemeQ1", "Marking scheme  (cont.)"):
+                    "Marking schemeQ1", "Marking scheme  (cont.)", "Marking scheme (continued) p.3"):
             self.assertTrue(extract_check.answers_cite("PE3", loc, rows), loc)
         for loc in ("Marking schemes", "Marking scheme 2", "Marking scheme Questions",
-                    "Marking scheme q1", "Marking scheme (continued) p.3", "Marking", "Rules"):
+                    "Marking scheme q1", "Marking", "Rules"):
             self.assertFalse(extract_check.answers_cite("PE3", loc, rows), loc)
         rows = {"R3": {"answers": True, "key": key("sections: #/5")}}
         for loc in ("#/5", "#/5/0", "#/5/1"):
@@ -1846,6 +1847,35 @@ class SolutionsFiles(unittest.TestCase):
                       "_build/solutions/r3.md, beside its own extract", out)
         self.assertIn("R3: KEY SECTION NOT FOUND: no block [R3 #/5]", out)
 
+
+    def test_a_key_section_with_a_page_reference_is_still_key_material(self):
+        # r16-1 #3: answers_cite() read a `sections:` locator carrying a page reference as question
+        # material, so `### [PE3 Marking scheme p.2]` passed in an extract.
+        key = extract_check.read_key
+        rows = {"PE3": {"answers": True, "key": key("sections: Marking scheme")}}
+        for loc in ("Marking scheme p.2", "Marking scheme pp. 2-3", "Marking scheme, p.2",
+                    "p.2 Marking scheme", "Marking scheme (continued) p.3"):
+            self.assertTrue(extract_check.answers_cite("PE3", loc, rows), loc)
+        for loc in ("p.2", "pp. 2-3", "Marking scheme 2 p.3", "Rules p.1"):
+            self.assertFalse(extract_check.answers_cite("PE3", loc, rows), loc)
+        self.write("MANIFEST.md", SOL_MANIFEST + "| PE3 | `sources/pe3.docx` | n/a | in | yes | "
+                                                 "sections: Marking scheme | n/a | |\n")
+        question = "### [PE3 Q1] Trace\n\"Trace a BFS.\"\n"
+        self.write("_build/extract/pe3.md", question
+                   + "### [PE3 Marking scheme p.2] Key\n\"Q2: t\"\n")
+        self.write("_build/solutions/pe3.md", "### [PE3 Q1] Trace\n"
+                   "Solution [PE3 Marking scheme]: s\n### [PE3 Marking scheme] Key\n\"Q1: s\"\n")
+        code, out = self.check()
+        self.assertEqual(code, 1, out)
+        self.assertIn("_build/extract/pe3.md:3: AN ANSWERS PAGE IN AN EXTRACT: [PE3 Marking scheme "
+                      "p.2] is a key section of PE3", out)
+        # Its twin: the page's block beside the rest of the key, in the solutions file, passes.
+        self.write("_build/extract/pe3.md", question)
+        self.write("_build/solutions/pe3.md", "### [PE3 Q1] Trace\n"
+                   "Solution [PE3 Marking scheme]: s\n### [PE3 Marking scheme] Key\n\"Q1: s\"\n"
+                   "### [PE3 Marking scheme p.2] Key\n\"Q2: t\"\n")
+        code, out = self.check()
+        self.assertEqual(code, 0, out)
 
 if __name__ == "__main__":
     unittest.main()

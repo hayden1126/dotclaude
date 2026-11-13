@@ -51,10 +51,11 @@ Key says where an Answers `yes` doc's answers are, read whole (trimmed, any case
   key in the sections whose block locator is one of the names (any case, runs of whitespace as
   one), then, past any spaces, nothing, a character that is no letter or digit (`Marking scheme
   (continued)`, `Marking scheme: Q2`, `Marking scheme, part 2`) or `Q` and a digit (`Marking
-  scheme Q1`); `Key formulas` under `sections: Key` is no key section (key_section()). A deck's
-  solution slides are named by fragment (`sections: #/5, #/6`; `#/5/0` is part of `#/5`). A row
-  whose File ends in .pdf fails SECTIONS KEY ON A PAGED DOC, and a named section with no block in
-  any of the doc's home solutions files (below) fails KEY SECTION NOT FOUND.
+  scheme Q1`), whatever page reference the locator carries (`Marking scheme p.2`); `Key
+  formulas` under `sections: Key` is no key section (key_section()). A deck's solution slides are
+  named by fragment (`sections: #/5, #/6`; `#/5/0` is part of `#/5`). A row whose File ends in
+  .pdf fails SECTIONS KEY ON A PAGED DOC, and a named section with no block in any of the doc's
+  home solutions files (below) fails KEY SECTION NOT FOUND.
 - anything else fails UNREAD KEY, and the row's other key checks are left out.
 Solved docs: the docs a `for` key names, and every doc whose own key is pages, `inline` or
 `sections:`. Answers pages (answers_cite()): every block and page of a `for` answers file; the
@@ -483,12 +484,13 @@ def block_home(m, rows, homes):
     return None
 
 def key_section(loc, names):
-    """Whether a page-less locator is key material under a `sections:` key's names (read_key()):
+    """Whether a locator is key material under a `sections:` key's names (read_key()), whatever
+    page reference it carries (its page lists, LOC_PAGES, are dropped first: `Marking scheme p.2`):
     a name (any case, runs of whitespace as one), then, past any spaces, nothing, a character that
     is no letter or digit (`Marking scheme (continued)`, `: Q2`, `- Q2`, `, part 2`, a deck's
     child slide `#/5/0` under `#/5`), or `Q` and a digit (`Marking scheme Q1`). Another name that
     starts with a key name (`Key formulas` under `sections: Key`, `Marking scheme 2`) is not."""
-    loc = " ".join(loc.split())
+    loc = " ".join(LOC_PAGES.sub(" ", loc).split())
     for written in names.values():
         m = re.match(re.escape(written), loc, re.I)
         if not m:
@@ -503,19 +505,19 @@ def answers_cite(doc, loc, rows):
     """Whether a `[<doc> <loc>]` cite or block locator points into answers: any of an answers
     file (a `for` key; one naming its own doc fails KEY NAMES ITS OWN DOC, and every block and
     cite of it reads as answers meanwhile, failing closed); for a doc with its own key, one naming
-    a key page (`pp. 7-9`) or a key section (`sections: Marking scheme`, key_section()). Nothing
-    else of such a doc is answers (its cover, rules, formula sheet, a "Key formulas" section), nor
-    anything of a row whose key is missing or unread (it fails NO KEY or UNREAD KEY)."""
+    a key page (`pp. 7-9`) or a key section (`sections: Marking scheme`, key_section(), whatever
+    page reference the locator carries). Nothing else of such a doc is answers (its cover, rules,
+    formula sheet, a "Key formulas" section), nor anything of a row whose key is missing or unread
+    (it fails NO KEY or UNREAD KEY)."""
     row = rows.get(doc) or {}
     form = key_of(row)
     key = row.get("key") or {}
     if form == "for":
         return True
-    pages = loc_pages(loc)
     if form == "pages":
-        return bool(pages & key["pages"])
+        return bool(loc_pages(loc) & key["pages"])
     if form == "sections":
-        return not pages and key_section(loc, key["names"])
+        return key_section(loc, key["names"])
     return False
 
 
