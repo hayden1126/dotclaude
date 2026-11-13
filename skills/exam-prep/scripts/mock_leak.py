@@ -69,7 +69,8 @@ The same check on the files the hub's own homes give (extract_check.py's leak_fi
 as --allow, so the list never drifts from the homes the extract check computes (a deck's second
 part, a stray block's solutions file). With no unattempted set it prints `QUESTIONS OK: no
 unattempted set` and exits 0. Output and exit codes otherwise as --questions; bad usage too is a
-hub with no MANIFEST.md or one it can't read, --hub with --questions or --allow, or unattempted
+hub with no MANIFEST.md or one it can't read (a table header it doesn't know, which gives no
+rows, among them), --hub with --questions or --allow, or unattempted
 sets no file holds a block of. It can't be combined with the other forms.
 Stdlib only, plus extract_check.py from this directory (loaded by its path) for --hub."""
 import bisect

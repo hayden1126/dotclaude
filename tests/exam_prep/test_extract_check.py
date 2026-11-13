@@ -2203,6 +2203,27 @@ class LeakFiles(unittest.TestCase):
         self.write("_build/extract/code.md", "### [CODE Q1] Queue\n\"Trace it.\"\n")
         self.assertIn("questions _build/extract/code.md\n", self.leak()[1])
 
+    def test_a_manifest_with_no_rows_it_reads_exits_2(self):
+        # r18-1 #3: a header the reader doesn't know gave no rows, so `--leak-files` printed
+        # nothing and exited 0 while the main check failed "no rows".
+        reason = "extract_check: MANIFEST.md has no rows under a `| Doc id | File | ... |` header\n"
+        self.write("MANIFEST.md", SOL_MANIFEST.replace("| Doc id |", "| Id |"))
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            self.assertEqual(self.leak(), (2, ""))
+        self.assertEqual(err.getvalue(), reason)
+        self.assertEqual(self.leak_check(), (1, reason))
+        # Its twin: the header it knows lists the files.
+        self.manifest()
+        self.assertEqual(self.leak()[0], 0)
+        self.assertIn("questions _build/extract/hw1.md\n", self.leak()[1])
+
+    def leak_check(self):
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            code = extract_check.main(["--root", self.root])
+        return code, out.getvalue()
+
     def test_no_manifest_exits_2(self):
         os.remove(os.path.join(self.root, "MANIFEST.md"))
         err = io.StringIO()

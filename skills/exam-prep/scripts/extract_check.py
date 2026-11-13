@@ -152,7 +152,8 @@ extract) whose own Answers cell lacks the attempt mark; an `Unverified:` line ex
 solutions file of one (the homes above), and each multi-set answers file's own
 _build/solutions/<doc id lower>.md, when it exists, while any set it names is unattempted; a file
 serving an attempted set too is still listed. `allow`: every other extract. With no unattempted
-set it prints nothing; it exits 0, 2 with no MANIFEST.md, 1 on a MANIFEST.md it can't read.
+set it prints nothing; it exits 0, 2 with no MANIFEST.md or one with no rows under a header it
+knows (the main check's reason, on stderr), 1 on a MANIFEST.md it can't read.
 Stdlib only, plus reveal_slice.py from this directory."""
 import argparse
 import contextlib
@@ -264,6 +265,9 @@ PREAMBLE_OK = re.compile(r"^(?:#\s|Sources:|Every page image was viewed\.)")
 OPENER = re.compile(r"^ {0,3}(?P<mark>`{3,}(?=[^`]*$)|~{3,})")
 CLOSER = re.compile(r"^ {0,3}(?P<mark>`{3,}|~{3,})[ \t]*$")
 DIRS = ("extract", "solutions")
+# A MANIFEST.md whose table header this reader doesn't know (`| Id | File | ... |`) yields no rows;
+# every mode refuses it rather than reading it as a hub with no docs.
+NO_ROWS = "MANIFEST.md has no rows under a `| Doc id | File | ... |` header"
 
 def numbers(text):
     """`17-20, 23` -> {17, 18, 19, 20, 23}."""
@@ -1113,9 +1117,12 @@ def leak_files(root, rows=None):
     multi-set answers file's own _build/solutions/<doc id lower>.md, when it exists, while any set
     it names is unattempted; a file serving an attempted set too is listed (fail closed).
     `allow`: every other extract. With no unattempted set the list is empty. `rows` is
-    manifest_rows() (read from root's MANIFEST.md when None; it raises as that does)."""
+    manifest_rows() (read from root's MANIFEST.md when None; it raises as that does, and raises
+    ValueError(NO_ROWS) on no rows)."""
     if rows is None:
         rows = manifest_rows(os.path.join(root, "MANIFEST.md"))
+    if not rows:
+        raise ValueError(NO_ROWS)
     extracts = files(root, "extract")
     sets = unattempted(rows, extracts)
     if not sets:
@@ -1164,10 +1171,14 @@ def main(argv=None):
         return 0
     if args.leak_files:
         try:
-            _, listed = leak_files(args.root)
+            rows = manifest_rows(manifest)
         except ValueError as e:
             print(f"extract_check: {e}", file=sys.stderr)
             return 1
+        if not rows:
+            print(f"extract_check: {NO_ROWS}", file=sys.stderr)
+            return 2
+        _, listed = leak_files(args.root, rows)
         for kind, path in listed:
             print(f"{kind} {path}")
         return 0
@@ -1177,7 +1188,7 @@ def main(argv=None):
         print(f"extract_check: {e}")
         return 1
     if not rows:
-        print("extract_check: MANIFEST.md has no rows under a `| Doc id | File | ... |` header")
+        print(f"extract_check: {NO_ROWS}")
         return 1
     found = blocks(args.root, rows)
     empty = {"pages": set(), "frags": set(), "blocks": 0, "questions": 0, "image_only": 0,

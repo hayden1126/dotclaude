@@ -661,6 +661,20 @@ class HubQuestions(unittest.TestCase):
         rc, out, err = self.hub(page_text=page)
         self.assertEqual((rc, err), (1, ""), out)
 
+    def test_a_manifest_with_no_rows_it_reads_is_bad_usage(self):
+        # r18-1 #3: `| Id | File | ... |` gave no rows, so --hub passed with "no unattempted set".
+        rows = "|---|---|---|---|---|---|---|---|\n| HW1 | `sources/hw1.pdf` | 1 | in | no | | yes | |\n"
+        self.write("_build/extract/hw1.md", "### [HW1 Q1a] Round\nPages: [HW1 p.1]\n")
+        self.write("MANIFEST.md", HUB_HEAD.split("\n")[0].replace("| Doc id |", "| Id |") + "\n" + rows)
+        rc, out, err = self.hub()
+        self.assertEqual((rc, out), (2, ""), err)
+        self.assertIn("MANIFEST.md has no rows under a `| Doc id | File | ... |` header", err)
+        # Its twin: the header it knows reads the set.
+        self.write("MANIFEST.md", HUB_HEAD.split("\n")[0] + "\n" + rows)
+        rc, out, err = self.hub()
+        self.assertEqual((rc, err), (0, ""), out)
+        self.assertEqual(out, "QUESTIONS OK: 1 pages checked against 1 question files\n")
+
     def test_bad_usage(self):
         self.write("_build/extract/hw1.md", "### [HW1 Q1a] Round\n")
         for name, args, message in (
