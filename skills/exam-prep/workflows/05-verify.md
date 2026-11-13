@@ -161,11 +161,14 @@ order (`08-practice`) get the same audit when they exist.
   unattempted set with no extract (a doc `11-next-exam`'s "A source added unverified" brought
   in, rendered and never extracted) is checked against its rendered text, `_build/text/<doc>/`,
   and the unverified material quoting that doc is checked like any other notes: a hit is a
-  blocker while that set is unattempted. It exits 2, with the reason on stderr, when the hub
-  has no MANIFEST.md or one it can't read (fix MANIFEST.md as the reason says, then rerun), or
-  when an unattempted set has neither an extract nor rendered text (render it as `01-ingest`
-  step 2 does, or extract it, `02-extract`, then rerun). An exit 2 checked nothing, wherever
-  the command runs: nothing publishes or commits on it. A hit from
+  blocker while that set is unattempted. It exits 2, with the reason on stderr, on five causes,
+  each fixed and then rerun: the hub has no MANIFEST.md or one it can't read (fix MANIFEST.md as
+  the reason says); no page is found (`no page found`: no notes and no sheet yet; run it from
+  `<root>` once the notes exist); a page isn't UTF-8 (a sheet saved in another encoding: save it
+  as UTF-8); an unattempted set, or an answers file that solves one, has only thin rendered text
+  (a scanned PDF's) and no extract (extract it, `02-extract`); or one has no rendered text and
+  nothing extracted (a deck with nothing extracted, or a source never rendered: extract it). An
+  exit 2 checked nothing, wherever the command runs: nothing publishes or commits on it. A hit from
   a shared answers file's own file is a blocker like any other, even when the set it quotes is
   attempted: the notes quote an attempted set's official text only once every set its answers
   file solves is attempted.
