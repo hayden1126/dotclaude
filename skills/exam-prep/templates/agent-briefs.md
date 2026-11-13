@@ -230,9 +230,9 @@ These are the Markdown forms the page's converter reads (06-site); use them exac
   every value from a cited source; a step that derives one shows its working, so the reviewers
   can check it against the source.}}
 - Worked examples use {{the checker's data | an instance you build from the sources}}, never a
-  homework's or a recitation's numbers. Quote an answer only from a set MANIFEST.md marks
-  `yes, attempted`; {{UNATTEMPTED: the answer sets the student hasn't attempted yet}} are read
-  for their conventions only, never quoted. No mock key appears in the notes.
+  homework's or a recitation's numbers. Quote a set's official solution only once that set's own
+  MANIFEST.md row says `attempted` (an answers file's row stays `yes`); {{UNATTEMPTED: the sets
+  the student hasn't attempted yet}} are read for their conventions only, never quoted. No mock key appears in the notes.
 - Depth: {{concise | full}}, as the backbone marks it. A slide-only derivation that no practice
   question asks for goes in a Background quote (Format).
 - Depth label (STYLE.md S33): each subsection opens, under its heading, with `**Depth:** <Know
@@ -342,7 +342,8 @@ main session checks each finding and applies the fixes.
      solution (its phrasing, its sentence order, its steps as it writes them) is a finding, major:
      the fix
      rewords from the slide or derives the step plainly, never paraphrases the solution (FB-071).
-- Answers: the notes quote an answer only from a set MANIFEST.md marks `yes, attempted`.
+- Answers: the notes quote a set's official solution only once that set's own MANIFEST.md row
+  says `attempted` (an answers file's row stays `yes`).
   {{UNATTEMPTED: The student hasn't attempted <those sets>: their official answers sit in
   {{ROOT}}/_build/solutions/ for their conventions only, a quote from one in the notes is a blocker, and no finding
   may propose adding one. | ALL ATTEMPTED: drop this sentence.}}

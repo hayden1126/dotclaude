@@ -86,10 +86,10 @@ questions, each only when the reading left it open:
    `out` or was `in` for the finished exam: on this exam, or not. That answer makes the exam
    cumulative or not, row by row. For a row this exam covers only in part, ask for its first and
    its last in-scope slide, each as the PDF page or the printed slide number (FB-024: a deck split
-   across exams starts partway). Ask too which answer sets the student has attempted since (their
-   Answers cells become `yes, attempted`), and which question sets with no solutions row (their
-   own Answers cells become `yes, attempted YYYY-MM-DD` for a past exam with its key, else `no,
-   attempted YYYY-MM-DD`).
+   across exams starts partway). Ask too which question sets the student has attempted in full
+   since: each such set's own Answers cell becomes `yes, attempted YYYY-MM-DD` for a past exam
+   holding its own key, else `no, attempted YYYY-MM-DD`; a separate answers file's row stays
+   `yes`, since it may solve several sets.
 3. Missing sources (question 3).
 4. This exam's rules (question 4): date and time, length, room (where it is split, the student's
    by last name), what to bring and what is banned, sheet, calculator, book, question types: the
@@ -129,9 +129,10 @@ Draft each of these in `<root>`, as `00-intake` step 4 does, before showing anyt
   this exam; each row for this exam in an `in` form; new files as new rows with new doc ids (none
   renumbered or reused: citations use them); the finished exam's rows `in` when this exam covers
   them, else `out` with "on <old exam>" as Notes' remark; each carried row's Notes as
-  `<what it is>[; <remark>]`, what it is filled where the old row lacks it, and its By; Answers cells carried, each set the student
-  has attempted since marked `yes, attempted`, or with no solutions row in its own cell `yes,
-  attempted YYYY-MM-DD` (a past exam with its key) or `no, attempted YYYY-MM-DD` (question 2); topic cuts for this exam only. A
+  `<what it is>[; <remark>]`, what it is filled where the old row lacks it, and its By; Answers
+  cells carried, each set the student has attempted since marked in its own row's cell, `yes,
+  attempted YYYY-MM-DD` (a past exam holding its own key) or `no, attempted YYYY-MM-DD`, an
+  answers file's row left `yes` (question 2); topic cuts for this exam only. A
   cumulative exam needs no other scope word: its old rows are `in`.
 - **`CLAUDE.md`**: its Exam facts become this exam's, from
   `<skill>/templates/hub-CLAUDE.md.tmpl`, with a line `Earlier exams:` naming each earlier exam,
@@ -530,7 +531,7 @@ fresh session answers from STATUS, then runs step 7.5.
      its citation; never computed, and the checker isn't extended for it. This is the one exception
      to hard rule 3, to STYLE S7's first two sentences and to "Changing the notes or a sheet" item
      2. An answer to a set's question (the doc's own, when its Answers cell is `yes`) is quoted
-     only once that set is marked `yes, attempted` (S7); until then it is cited by page and left
+     only once that set's own row says `attempted` (S7); until then it is cited by page and left
      out.
 4. **Rebuild** the notes page as `08-practice`'s "Changing the notes or a sheet" item 3 says (with
    plain-text notes, `notes/combined.md`); a hub whose `_build/CONVERT.md` lacks the `Unverified`

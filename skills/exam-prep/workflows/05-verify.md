@@ -70,8 +70,8 @@ Spawn one `reviewer` per section file, all at once (FB-102), each from
 3. **Direction and causation:** which condition guarantees which result (S5).
 4. **STYLE:** the rest of `_build/STYLE.md`, each subsection's depth label (S33) among it.
 
-Each brief names the answer sets the student hasn't attempted: the notes quote none of them, and
-a quote is a blocker. Its `{{SOLUTIONS FILES}}` slot names the solutions files that hold the
+Each brief names the sets the student hasn't attempted (each one whose own MANIFEST.md row lacks
+`attempted`): the notes quote none of their official solutions, and a quote is a blocker. Its `{{SOLUTIONS FILES}}` slot names the solutions files that hold the
 blocks of the question parts and answers docs the section's extract blocks cite: for each part
 the coverage matrix maps into the section (`[HW1 Q2a]`) and each answers doc page its blocks cite
 (`[HW1S p.2]`), the file under `_build/solutions/` holding its `### [<id>]` block, found by block
@@ -119,7 +119,7 @@ order (`08-practice`) get the same audit when they exist.
   fact: the notes, the Must-know line, a pitfall box, the sheet. Grep for the old value or phrase to
   find them (FB-106), and leave a finished exam's archive (`practice/<exam-slug>/`,
   `cheatsheet/<exam-slug>/`, `11-next-exam`) as it is: it is frozen. No fix quotes an answer from a
-  set MANIFEST doesn't mark `yes, attempted`.
+  set whose own MANIFEST.md row doesn't say `attempted`.
 - A change to the reference or to a convention reruns `selftest.py` and `examples.py`, then step
   2's comparison of every worked example and every filled `value-` (STATUS's TODO-VERIFY list)
   with the new `examples.out.md`: the notes copied the old one. Once `08-practice` has keys,
@@ -128,19 +128,19 @@ order (`08-practice`) get the same audit when they exist.
   source gives, or the working that derives it.
 - Before anything is published, the questions check: check the notes against every set the
   student hasn't attempted (FB-191), since a worked example has rebuilt a practice question's
-  setup, and a gloss has named a practice step. Those sets, all read from MANIFEST.md: each set
-  answered by a row whose Answers cell is exactly `yes` (a `solutions to <doc>` row, or a past
-  exam's own row with its key; once attempted, the cell reads `yes, attempted`, dated on a past
-  exam's own row); and each question set with Answers `no` that no row's `solutions to <doc>`
-  names, unless its cell reads `no, attempted YYYY-MM-DD`. A set with no solutions row records its
-  attempt in its own row, as `yes, attempted YYYY-MM-DD` or `no, attempted YYYY-MM-DD`:
-  `00-intake` and `11-next-exam` write it from the student's word, `09-tutor` Step 7 when its last
-  part is done.
+  setup, and a gloss has named a practice step. Those sets, all read from MANIFEST.md: each
+  question set (one a `solutions to` note names, a past exam holding its own key, or a set with no
+  answers anywhere) whose own row's Answers cell lacks `attempted`. A set records its attempt in
+  its own row only, as `no, attempted YYYY-MM-DD` (no key of its own) or `yes, attempted
+  YYYY-MM-DD` (a doc holding its own key): `00-intake` and `11-next-exam` write it from the
+  student's word, `09-tutor` Step 7 when its last part is done. A separate answers file's row
+  stays `yes` and never records an attempt, since it may solve several sets.
   With no such set, skip the run and log `no unattempted set` in STATUS. Otherwise give each set's
   extract (`_build/extract/<name>.md`) and each solutions file that holds a block of its parts,
   `### [<doc> <part>]` (find them by block id: `grep -l -F '### [<doc> ' _build/solutions/*.md`,
-  since a separate answers file's agent may have written them under another name), as question
-  files, and the lecture extracts the notes cite as
+  since an answers file that solves several sets has its own agent, which writes every one of
+  their blocks to `_build/solutions/<answers file name>.md`), as question files, and the lecture
+  extracts the notes cite as
   allowed sources:
   `python3 -I <skill>/scripts/mock_leak.py --questions <the sets' extracts and solutions files>
   --allow <the lecture extracts> --pages notes/*.md`. The main session runs it, since reviewers
@@ -149,7 +149,9 @@ order (`08-practice`) get the same audit when they exist.
   only tags blocks of the notes, so this check covers it, and every later change runs it as
   `08-practice`'s "Changing the notes or a sheet" item 4 says.
   A hit is a blocker: rewrite the passage with fresh numbers and a fresh setup (S7), and rerun
-  until it prints QUESTIONS OK. A passage cut or held back instead, which the student may want
+  until it prints QUESTIONS OK. One file may hold several sets' blocks, so a hit can come from an
+  attempted set's solutions block: that one is allowed, since the notes may quote an attempted
+  set's official solution, and is logged in STATUS by its notes line and part. A passage cut or held back instead, which the student may want
   back once they attempt the set, goes to `_build/held.md`, one entry per passage: its section,
   the set it overlapped and the original text. It is quarantined (hub CLAUDE.md), and `09-tutor`
   offers it back once that set is attempted (its Step 7). A hub whose CLAUDE.md lacks the
@@ -162,8 +164,11 @@ order (`08-practice`) get the same audit when they exist.
 
 ## Official solutions that arrive late
 
-Extract them first: one extract agent writes the set's pair again, its extract and
-`_build/solutions/<name>.md` (`02-extract`, hard rule 6). Add them to the self-test (and rerun
+Extract them first, as `02-extract` step 1 says (hard rule 6): an answers file that solves one
+set shares that set's agent, which writes the pair again, its extract and
+`_build/solutions/<name>.md`; one that solves several sets gets its own agent, which writes
+`_build/solutions/<answers file name>.md`, and each set's own agent then writes its extract
+again. Add them to the self-test (and rerun
 `extract_check.py --parts` for `PARTS`), diff every answer against the notes and any solved key,
 and record the verdict in STATUS: what matched, what was wrong, what changed (FB-107). One that changes the reference or a convention reruns the examples as in step 5.
 

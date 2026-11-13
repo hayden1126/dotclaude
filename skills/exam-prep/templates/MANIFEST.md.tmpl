@@ -53,11 +53,13 @@ Topic cuts: {{none | one line each:}}
     each part's solution under its part), never into an extract. A past exam's other pages (the
     cover, the rules, a formula sheet) stay in its extract (`02-extract`). Mock writers never read
     `_build/solutions/`.
-  - Nothing published quotes an answer until the student has attempted that set, which a cell
-    then records: a `solutions to` row's as `yes, attempted`, a past exam's own row's as `yes,
-    attempted YYYY-MM-DD`. A question set with no answers anywhere (Answers `no`, named by no
-    `solutions to` note) records the attempt in its own cell, `no, attempted YYYY-MM-DD`. Until
-    then `05-verify` step 5's questions check treats the set as unattempted.
+  - Nothing published quotes a set's official solution until the student has attempted every part
+    of that set, which the set's own row then records in its Answers cell: `no, attempted
+    YYYY-MM-DD` for a set with no key of its own (`HW1` above), `yes, attempted YYYY-MM-DD` for a
+    doc holding its own key (a past exam). A separate answers file's row (one with a `solutions
+    to` note) stays `yes` and never records an attempt, since it may solve several sets. Until the
+    set's own row says `attempted`, `05-verify` step 5's questions check treats it as
+    unattempted.
 - **Topic cuts** name what the exam leaves out inside an `in` range, which no page range can say
   ("negative weights are not on Exam 1", from a staff post). They are a list under the table, never
   a second table, and scope like the rows: `03-backbone` marks the subsections a cut reaches and

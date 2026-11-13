@@ -56,7 +56,8 @@ show a sheet line it changes, exactly, before making it (FB-137; while a mock is
   attempt, `practice/*-key.md`). The set holds for the pass: `08-practice` step 8.1 starts no
   attempt while the `Build running` line stands, and a mock the student takes anyway is recorded
   once the pass ends.
-- MANIFEST.md's Answers cells: a fix quotes an answer only from a set marked `yes, attempted`.
+- MANIFEST.md's Answers cells: a fix quotes a set's official solution only once that set's own row
+  says `attempted` (an answers file's row stays `yes`).
 - PLAN.md's Checker line: a new number or trace in a fix comes from the checker, or with none from
   a cited source, its working shown (hard rule 3).
 
@@ -260,7 +261,7 @@ rows from the new Depth lines. Items 4 to 6 run as for any pass.
 3. One fix at a time, as `05-verify` step 5 says, in every copy of the fact that `08-practice`'s
    "Changing the notes or a sheet" item 2 searches for (the one list of the published products and
    what a change does to each), a new number or trace as step 1 says, never an answer from a set
-   MANIFEST.md doesn't mark `yes, attempted`. While a mock is untaken, each fix is that section's
+   whose own MANIFEST.md row lacks `attempted`. While a mock is untaken, each fix is that section's
    item 2: a method taught in general or with an example of its own, never a mock's instance. A
    fix that changes the reference (`05-verify` step 5) adds `08-practice` step 4's `Reference
    changed:` line once `Stage 08 built` stands, made at item 6 like the other changes outside the

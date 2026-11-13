@@ -148,8 +148,10 @@ evidence ids.
     answers page left in an extract, a self-answering row with no key note and a note naming no
     doc, warns on an `Answer:` line in a solved doc's extract, and `extract_check.py --parts`
     feeds `05-verify`'s PARTS (FB-100). A part's solution is found by its block id in any
-    solutions file, and a past exam's own row records its attempt as `yes, attempted
-    YYYY-MM-DD`. Answer-blind
+    solutions file. A set's attempt is recorded in that set's own row only, `no, attempted
+    YYYY-MM-DD` (no key of its own) or `yes, attempted YYYY-MM-DD` (a doc holding its own key);
+    a separate answers file's row stays `yes`, since it may solve several sets, and the notes
+    quote a set's official solution only once its own row says `attempted`. Answer-blind
     briefs read the extracts and never open `_build/solutions/`; the writers, section
     reviewers, checker and tutor read both. An older hub's extracts with solutions inline aren't
     supported (I3.C18, I3.G9, I2.G10).

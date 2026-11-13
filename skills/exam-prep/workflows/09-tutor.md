@@ -56,7 +56,7 @@ picks it up.
   - it dispatches no patch: one the student approves waits under `## Pending patches` in the log
     (Step 5.3), a one-line sheet addition marked `sheet line`, and the build session never
     dispatches one either (it can't show the student a change or ask them); official
-    solutions that arrive, and the `yes, attempted` cell of a set the student finishes (Step 7),
+    solutions that arrive, and the `attempted` cell of a set the student finishes (Step 7),
     wait under `## Waiting checks`;
   - it writes no STATUS (the log says where the student is) and runs no handoff skill, whose check
     wants a STATUS edit and a clean tree, both the build's: it ends with the log's commit alone,
@@ -125,7 +125,7 @@ Settle it before the first part:
   compare part by part, then delete the copy. Tell the student which parts the log grades whose
   value changed, by part id, and pose those parts again. A part the reference can't compute yet is a
   `pending()` call while the reference is extended as `08-practice` step 4.1 says (tested first on a
-  worked example from a lecture or from a set MANIFEST.md marks `yes, attempted`, the self-test
+  worked example from a lecture or from a set whose own MANIFEST.md row says `attempted`, the self-test
   rerun: any other set's would show its official answer in the self-test's edit, so ask first, as
   Step 6 does), and once mocks exist `08-practice` step 4's rerun clause for a changed reference
   follows (items 2 and 4; on the cram night a changed part of an untaken mock is left to the key
@@ -416,8 +416,9 @@ Waiting checks` (Step 7): ask, and run them on their go (the edits may show answ
 part is attempted. The self-test's output goes to its file (Step 3), and STATUS records the verdict
 by part only (`HW3: Q1a and Q2a match; Q2b differs, §2.3 fixed`). Show the student the table of
 parts and whether each matched; the official answers themselves only for parts they have attempted,
-or on request (Step 3). Each fix to the notes is offered and dispatched as Step 5 says. A set
-already attempted in full gets `yes, attempted` in the new row at once (Step 7).
+or on request (Step 3). Each fix to the notes is offered and dispatched as Step 5 says. The new
+answers row stays `yes`: a set's attempt is marked in that set's own row (Step 7), never in an
+answers file's row, which may solve several sets.
 
 ## Step 7: The log and the session's end
 
@@ -436,17 +437,16 @@ already attempted in full gets `yes, attempted` in the new row at once (Step 7).
   (_build/logs/tutor.md)`, current as each part closes. It is never the next-step line: routing
   and the cram night own that.
 - When every part of a set has been attempted or its solution shown, in walk-throughs and quizzes
-  together, the MANIFEST.md row whose Notes say `solutions to <that set>`, if there is one, gets
-  `yes, attempted` in its Answers cell: the notes and sheets may quote it from then on (`04-write`).
-  With no such row, the set's own row's Answers cell records it, with today's date: a set that
-  holds its own key (Answers `yes`, a past exam) becomes `yes, attempted YYYY-MM-DD`, and a set
-  with no answers anywhere (Answers `no`) becomes `no, attempted YYYY-MM-DD`. `05-verify` step 5's
-  questions check reads these cells. A check waiting on the set
-  (Step 6) runs then. During a build the cell waits under `## Waiting checks` for the build's end
-  (Step 1).
-- Once a set is attempted (its solutions row reads `yes, attempted`, or with no solutions row its
-  own row's Answers cell reads `yes, attempted YYYY-MM-DD` or `no, attempted YYYY-MM-DD`), each
-  `_build/held.md` entry that names
+  together, that set's own MANIFEST.md row records it in its Answers cell, with today's date: a
+  set with no key of its own (Answers `no`) becomes `no, attempted YYYY-MM-DD`, and a doc that
+  holds its own key (Answers `yes`, a past exam) becomes `yes, attempted YYYY-MM-DD`. A separate
+  answers file's row (one with a `solutions to` note) stays `yes` and never records an attempt,
+  since it may solve several sets. The notes and sheets may quote the set's official solution from
+  then on (`04-write`), and `05-verify` step 5's questions check reads these cells. A check
+  waiting on the set (Step 6) runs then. During a build the cell waits under `## Waiting checks`
+  for the build's end (Step 1).
+- Once a set is attempted (its own row's Answers cell reads `no, attempted YYYY-MM-DD` or `yes,
+  attempted YYYY-MM-DD`), each `_build/held.md` entry that names
   it is offered back as a patch (FB-191): a passage `05-verify` step 5 cut or held back because it
   overlapped that set. Show the student its section and its original text, and on their yes dispatch
   it as Step 5 says. Remove the entry once its patch merges or the student declines it. While

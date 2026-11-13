@@ -35,7 +35,8 @@ from later corrections. A retired rule is struck through and keeps its number. A
 - **S7. Worked examples** use fresh numbers, never a homework's or a recitation's, with numbered
   steps and a bold **Result**. Their data and traces come from the checker (in a course with
   none, from the cited sources). On the page they are collapsible and closed by default. The
-  notes quote an answer only from a set the student has attempted (MANIFEST's `yes, attempted`);
+  notes quote a set's official solution only once that set's own MANIFEST row says `attempted`
+  (`no, attempted YYYY-MM-DD` or `yes, attempted YYYY-MM-DD`; an answers file's row stays `yes`);
   the mock's key lives in its own quarantined file.
 - **S8. Conventions.** Every convention an answer depends on is stated once, in the subsection the
   backbone names, and every use says which convention applies, with a link there. Example (a

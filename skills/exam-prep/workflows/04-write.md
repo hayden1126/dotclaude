@@ -50,9 +50,10 @@ lines). What every writer is held to, beyond STYLE:
   working for `05-verify`'s reviewers.
 - **Fresh numbers** (FB-071). Worked examples use the checker's data (with no checker, an instance
   built from the sources), never a homework's or a recitation's numbers.
-- **Answers.** The notes quote an answer only from a set MANIFEST marks `yes, attempted`. A set
-  the student hasn't attempted (`Answers: yes`) is read for its conventions (S32), never quoted,
-  and the mock's key never appears: it lives in `practice/`, quarantined.
+- **Answers.** The notes quote a set's official solution only once that set's own MANIFEST row
+  says `attempted` (`no, attempted YYYY-MM-DD` or `yes, attempted YYYY-MM-DD`; an answers file's
+  row stays `yes`). A set the student hasn't attempted is read for its conventions (S32), never
+  quoted, and the mock's key never appears: it lives in `practice/`, quarantined.
 - **Tested versus background.** Depth follows the backbone's `concise` or `full` mark and its "How
   it's tested" lines. A slide-only derivation no practice question asks for goes in a
   `> **Background:**` quote that opens with that evidence (FB-077).

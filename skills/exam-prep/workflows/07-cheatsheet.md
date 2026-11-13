@@ -20,7 +20,7 @@ Review view instead ("Tag the review" below).
   stage, or run alone, removing the `Build running` line).
 - `05-verify` is done. The sheet derives from the notes and the checker's output
   (`_build/verify/examples.out.md`) only: never from a key, the mock, or a source MANIFEST marks
-  `reserved`, and never an answer from a set it doesn't mark `yes, attempted`.
+  `reserved`, and never an official solution from a set whose own row there lacks `attempted`.
 - The profile (`~/scratch/exam-prep/profile.md`) holds the font floor, color or grayscale, the
   engine, and the "Never print" forms of the name and id (`00-intake`, question 5, FB-131). Any missing: the defaults, a 6 pt floor, colors that
   read in grayscale, HTML built here and printed by Chromium, logged in STATUS. When the engine is
