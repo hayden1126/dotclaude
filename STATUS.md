@@ -237,8 +237,9 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
         with id renames at merge);
       - for a bot-walled source, an openly served official copy or Hayden pasting the text:
         since 2026-11-04 auto mode denies headless Chrome as a way past a wall.
-      Not found in its files: its claim that Android and Google support pages returned sign-in
-      walls.
+      Also confirmed (that lane's corrected path): a browser user agent got a sign-in redirect
+      or an empty JavaScript shell from some vendor docs, and a refetch without it got the
+      text. So the bar includes trying a plain fetch before calling a page unreachable.
     Where it lands is Hayden's call; the lead's pick is lane practices' next PR (it owns
     `practices_check.py`), after Nov 16.
   - **The 5-hour usage limit may be gone for Hayden's account** (2026-11-12, unsettled): claude.ai
