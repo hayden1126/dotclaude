@@ -36,9 +36,10 @@ student hasn't attempted, its answer or not.
   mock_leak.py --questions <file or dir>... [--allow <file or dir>...] --pages <page>...
 
 Each page (a notes section, a fragment, the assembled page) is compared with the text of each
-question file (a set's extract, `_build/extract/<name>.md`); a directory stands for every .md,
-.txt, .tex and .html file under it. A page is read as written (.md, .txt), with its tags, scripts,
-styles and comments dropped (.html), or with its % comments and command names dropped (.tex);
+question file (a set's extract or solutions file, `_build/extract/<name>.md` or
+`_build/solutions/<name>.md`); a directory stands for every .md, .txt, .tex and .html file under
+it. A page is read as written (.md, .txt), with its tags, scripts, styles and comments dropped
+(.html), or with its % comments and command names dropped (.tex);
 every reading keeps its line breaks, so a hit names a line. A hit is either of these:
 - 8 words in a row that the question file also holds in a row, after case, whitespace and
   punctuation are dropped (Markdown marks among them). Eight, because a shorter run is common
