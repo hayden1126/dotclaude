@@ -228,10 +228,11 @@ STATUS).
      `pp.` key on a row whose File isn't a PDF, whatever its Pages holds. A Word file or a slide deck
      names its key sections or slides by their exact locators: `sections: Marking scheme`,
      `sections: #/5, #/6`.
-   - `<doc>: KEY SECTION NOT FOUND: no block [<doc> <name>] in its home solutions file`: a
-     section the Key cell names has no block in the doc's home solutions file ("The solutions
-     file": the one beside each extract holding a block of the doc; no other solutions file is
-     read), neither one with that exact locator nor one of the section (`[<doc> Marking scheme Q1]`, `[<doc> Marking scheme
+   - `<doc>: KEY SECTION NOT FOUND: no block [<doc> <name>] in its home solutions file`, or
+     `... in its home solutions files` when the doc has several homes (a deck split over two
+     extracts): a section the Key cell names has no block in the doc's home solutions files ("The
+     solutions file": the one beside each extract holding a block of the doc; no other solutions
+     file is read), neither one with that exact locator nor one of the section (`[<doc> Marking scheme Q1]`, `[<doc> Marking scheme
      (continued)]`, `[<doc> #/5/0]` under `sections: #/5`), by the key-section rule and its one
      exception (a page reference: `[<doc> Marking scheme p.2]` is key). Give the key section's
      block that locator, in the doc's home solutions file, or fix the name in the cell.
