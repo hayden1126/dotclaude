@@ -130,7 +130,9 @@ names (00 runs 01's Ed pull; 02 starts 05's checker).
 
    A student who asks to skip the extract, the backbone or the reviews for a source added to the
    exam gets one pushback before any notes are written, and a `Skip asked` line in STATUS; asked
-   again, the material goes in under an `Unverified` banner. Where the ask comes decides when, and
+   again, the material goes in under an `Unverified` banner, unless it is a set the student
+   hasn't attempted or an answers file that solves one: that goes through "A source added", which
+   extracts it, since the questions check needs its extract. Where the ask comes decides when, and
    whether, either happens: `11-next-exam`'s "A source added unverified" (FB-013). Material under
    that banner stays off every sheet and the Review view, out of the mocks' plan and the cram
    order's reading rows, and

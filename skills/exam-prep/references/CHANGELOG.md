@@ -199,7 +199,7 @@ evidence ids.
     unreadable MANIFEST.md makes it exit 2; `09-tutor` checks a held passage alone (`--pages
     _build/held-check.md`) before offering it back (round 18 review).
   - FB-191 and FB-056: the questions check requires an extract: it reads extracts and solutions
-    files only, and an unattempted set with no block in any extract, or an answers file that
+    files only (one exception came later, below), and an unattempted set with no block in any extract, or an answers file that
     solves one with no block in any solutions file, makes it exit 2 (`no file holds <DOC>, ...;
     extract it, then rerun`), so `09-tutor` step 6 extracts late official solutions before the
     next check. `11-next-exam`'s "A source added unverified", which can't extract, refuses an
@@ -207,6 +207,19 @@ evidence ids.
     takes lectures, readings and attempted sets. `05-verify` and `08-practice` list every exit 2
     cause with its fix: MANIFEST.md, a file the check reads that isn't UTF-8 (named), `no page
     found` and a set with nothing extracted (round 19 and 20 reviews).
+  - FB-013, FB-056 and FB-191: an Unverified row's Key cell gets the Key checks that read
+    MANIFEST.md alone, and an Answers `yes` row whose Key cell is empty or unread counts as an
+    unattempted set, so the check exits 2 until that cell is fixed and the doc extracted.
+    `11-next-exam`'s unverified path judges a doc by the MANIFEST.md row it will write, as
+    `extract_check.py` counts sets (a recitation with its solutions inline is one), refuses it as
+    an ending that adds nothing (logged on the `Skip asked` line, the `/clear` line while a mock
+    is untaken), and a second ask for a doc the skip isn't open to runs "A source added"; a late
+    set's undo runs on that path only for an attempted set (round 21 review).
+  - FB-056 and FB-191: the questions check also reads the rendered text of an unattempted set,
+    or of an answers file that solves one, whose File is neither a PDF nor a reveal deck (a Word
+    file, a plain course page: `_build/text/<doc>.md`, or a non-deck `.html` page's own file),
+    beside its extract and never in its place, so it still needs the extract (Hayden,
+    2026-11-13).
   - FB-056: an answers file solves only in-scope sets: a Key cell `for ...` naming a `pending`,
     `reserved` or `out` set fails `KEY NAMES A SET NOT IN SCOPE`, fixed by dropping the set from
     the cell and cutting its pages from the answers file's Scope, or by giving the answers file
