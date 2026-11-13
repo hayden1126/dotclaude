@@ -38,10 +38,16 @@ another doc's page covers nothing.
 Review round 14: a `for` key naming its own doc fails KEY NAMES ITS OWN DOC and reads all of that
 doc as answers meanwhile; only a PDF is paged, so a page key on any other row fails PAGES KEY ON
 AN UNPAGED DOC, and a deck (its Pages a slide count) names its solution slides as sections
-(`sections: #/5`); a multi-set answers file's page blocks hold no text (SHARED ANSWERS PAGE HOLDS
-TEXT); a stem's solutions block warns only while a part lacks its own; a key section's `<name> Q1`
-and `<name>, ...` are key material; an idle unverified answers file solves nothing, yet a cite of
-its page still fails; a part in two extracts takes either extract's solutions file."""
+(`sections: #/5`); a stem's solutions block warns only while a part lacks its own; a key
+section's `<name> Q1` and `<name>, ...` are key material; an idle unverified answers file solves
+nothing, yet a cite of its page still fails; a part in two extracts takes either extract's
+solutions file.
+
+Review round 15: every block in a solutions file has one home file (WRONG SOLUTIONS FILE): a
+stem's beside its set's extract, a single-set answers file's page beside its set, a multi-set
+answers file's page, in full, in its own lower-case file, a self-keyed doc's key page or key
+section beside its own extract (KEY SECTION NOT FOUND looks there only). A key section's name
+then no letter or digit (`(continued)`, `: Q2`, a deck's `#/5/0`) is key material."""
 import contextlib
 import importlib.util
 import io
@@ -1397,17 +1403,22 @@ class SolutionsFiles(unittest.TestCase):
         self.assertIn("_build/solutions/hw1.md:6: WRONG SOLUTIONS FILE: [HW2 Q1a] belongs in "
                       "_build/solutions/hw2.md, beside its extract", out)
         self.assertNotIn("WRONG SOLUTIONS FILE: [HW1", out)
-        # Its twin passes, with the answers file's own page block in either solutions file or
-        # in one of its own name (holding no text, since it solves two sets).
-        shared = "### [HW1S p.1] Solutions\n(transcribed under the sets' blocks)\n"
-        self.write("_build/solutions/hw2.md", part + shared)
-        self.write("_build/solutions/hw1.md", SOLVED)
-        code, out = self.check()
-        self.assertEqual(code, 0, out)
+        # Its twin passes, with the answers file's own page block, in full, in its own file
+        # (it solves two sets); in a set's solutions file that block is wrong too.
+        shared = "### [HW1S p.1] Solutions\n\"Q1a: f = 42\"\n"
         self.write("_build/solutions/hw2.md", part)
+        self.write("_build/solutions/hw1.md", SOLVED)
         self.write("_build/solutions/hw1s.md", shared)
         code, out = self.check()
         self.assertEqual(code, 0, out)
+        self.write("_build/solutions/hw2.md", part + shared)
+        self.remove("_build/solutions/hw1s.md")
+        code, out = self.check()
+        self.assertEqual(code, 1, out)
+        self.assertIn("_build/solutions/hw2.md:3: WRONG SOLUTIONS FILE: [HW1S p.1] belongs in "
+                      "_build/solutions/hw1s.md, its own file, since it solves several sets", out)
+        self.write("_build/solutions/hw2.md", part)
+        self.write("_build/solutions/hw1s.md", shared)
         # With no block, the failure names the part's own solutions file, not another set's.
         self.remove("_build/solutions/hw2.md")
         code, out = self.check()
@@ -1522,41 +1533,116 @@ class SolutionsFiles(unittest.TestCase):
                                                  "p.5 | n/a | recitation |\n")
         self.assertIn("R3: PAGES KEY ON AN UNPAGED DOC", self.check()[1])
 
-    def test_a_multi_set_answers_files_page_blocks_hold_no_text(self):
-        # r14-2 #1: a page block of an answers file solving several sets sits in its own
-        # solutions file, which no question check reads, so it holds no official text.
+    def test_a_multi_set_answers_file_holds_its_pages_in_full_in_its_own_file(self):
+        # Round 15 (Hayden, 2026-11-13): an answers file solving several sets keeps its pages in
+        # full in _build/solutions/<its doc id in lower case>.md, which the questions check reads
+        # while any set it solves is unattempted; no pointer line, no text rule.
         self.write("MANIFEST.md", SOL_MANIFEST.replace("| for HW1 |", "| for HW1 and HW2 |")
                    + "| HW2 | `sources/hw2.pdf` | 1 | in | no | | yes | |\n")
         self.write("_build/pages/HW2/p-001.png", "")
         self.write("_build/extract/hw2.md", "### [HW2 Q1a] Flow\nPages: [HW2 p.1]\n")
         self.write("_build/solutions/hw2.md", "### [HW2 Q1a] Flow\nSolution [HW1S p.1]: 7\n")
-        ok = ("# HW1S\n### [HW1S p.1] Solutions\n(transcribed under the sets' blocks)\n\n"
-              "(blank)\n(image only: a graph of f(x))\n(illegible at 300 dpi: the total)\n"
-              "Coverage: p.1; 1 blocks; 1 image only; 0 flagged unreadable.\n")
-        self.write("_build/solutions/hw1s.md", ok)
+        full = ("# HW1S\n### [HW1S p.1] Solutions\n\"Q1a: f = 42, by the min-cut bound.\"\n"
+                "\"Q1a (HW2): 7\"\n(image only: a graph of f(x))\n"
+                "Coverage: p.1; 1 blocks; 1 image only; 0 flagged unreadable.\n")
+        self.write("_build/solutions/hw1s.md", full)
         code, out = self.check()
         self.assertEqual(code, 0, out)
-        for line in ("\"Q1a: f = 42\"", "f = 42", "unreadable: 42",
-                     "(transcribed under the sets' blocks) f = 42"):
-            with self.subTest(line):
-                self.write("_build/solutions/hw1s.md", ok.replace("(blank)\n", line + "\n"))
+        self.assertIn("HW1S: 1 pages in scope, 1 rendered, 1 with a block, 1 image only", out)
+        # The must-fail: the same page in a set's solutions file, or under another name.
+        hw2 = "### [HW2 Q1a] Flow\nSolution [HW1S p.1]: 7\n"
+        for name in ("hw1.md", "hw2.md", "HW1S.md", "answers.md"):
+            with self.subTest(name):
+                self.remove("_build/solutions/hw1s.md")
+                texts = {"hw1.md": SOLVED, "hw2.md": hw2}
+                texts[name] = texts.get(name, "") + full
+                for n, text in texts.items():
+                    self.write(f"_build/solutions/{n}", text)
                 code, out = self.check()
                 self.assertEqual(code, 1, out)
-                self.assertIn("_build/solutions/hw1s.md:5: SHARED ANSWERS PAGE HOLDS TEXT: a page "
-                              "block of HW1S, which solves several sets, holds only "
-                              "\"(transcribed under the sets' blocks)\"; put this under its set's "
-                              "stem or part block in _build/solutions/<set>.md", out)
-        # An open flag fails as a flag, not as text.
-        self.write("_build/solutions/hw1s.md", ok.replace("(blank)\n", "UNREADABLE: p.1 total\n"))
+                self.assertRegex(out, re.escape(f"_build/solutions/{name}:") + r"\d+: "
+                                 + re.escape("WRONG SOLUTIONS FILE: [HW1S p.1] belongs in "
+                                             "_build/solutions/hw1s.md, its own file, since it "
+                                             "solves several sets"))
+                if name not in ("hw1.md", "hw2.md"):
+                    self.remove(f"_build/solutions/{name}")
+                self.write("_build/solutions/hw1.md", SOLVED)
+                self.write("_build/solutions/hw2.md", hw2)
+                self.write("_build/solutions/hw1s.md", full)
+        # The text rule is gone: a page line no pointer form allows is no failure of its own.
+        self.assertNotIn("SHARED", self.check()[1])
+
+    def test_a_single_set_answers_files_page_sits_beside_its_set(self):
+        # r15-1 #2: a single-set answers file's page block passed in any solutions file, so its
+        # official text sat in a file the questions check never reads.
+        self.write("_build/solutions/hw1s.md", "### [HW1S p.1] Solutions\n\"Q1a: f = 42\"\n")
         code, out = self.check()
         self.assertEqual(code, 1, out)
-        self.assertNotIn("SHARED ANSWERS PAGE", out)
-        self.assertIn("_build/solutions/hw1s.md:5: UNREADABLE flag still open", out)
-        # A single-set answers file's page block, beside its set's part blocks, holds its text.
-        self.write("MANIFEST.md", SOL_MANIFEST)
-        self.remove("_build/extract/hw2.md")
-        self.remove("_build/solutions/hw2.md")
-        self.write("_build/solutions/hw1s.md", "### [HW1S p.1] Solutions\n\"Q1a: f = 42\"\n")
+        self.assertIn("_build/solutions/hw1s.md:1: WRONG SOLUTIONS FILE: [HW1S p.1] belongs in "
+                      "_build/solutions/hw1.md, beside the one set it solves", out)
+        # Its twin, the page block in the set's own solutions file, passes.
+        self.remove("_build/solutions/hw1s.md")
+        self.write("_build/solutions/hw1.md",
+                   SOLVED + "### [HW1S p.1] Solutions\n\"Q1a: f = 42\"\n")
+        code, out = self.check()
+        self.assertEqual(code, 0, out)
+
+    def test_a_stem_block_sits_beside_its_sets_extract(self):
+        # r15-1 #1: a stem block with official text passed in any solutions file.
+        self.write("_build/extract/hw1.md", CLEAN.replace(
+            "### [HW1 Q1a]", "### [HW1 Q1 stem] Setup\nPages: [HW1 p.1]\n### [HW1 Q1a]"))
+        stem = "### [HW1 Q1 stem] Setup\nSolution [HW1S p.1]: f = 42 throughout.\n"
+        self.write("_build/solutions/hw1s.md", stem)
+        code, out = self.check()
+        self.assertEqual(code, 1, out)
+        self.assertIn("_build/solutions/hw1s.md:1: WRONG SOLUTIONS FILE: [HW1 Q1 stem] belongs in "
+                      "_build/solutions/hw1.md, beside its extract", out)
+        # Its twin, the stem block in the set's solutions file, passes.
+        self.remove("_build/solutions/hw1s.md")
+        self.write("_build/solutions/hw1.md", stem + SOLVED)
+        code, out = self.check()
+        self.assertEqual(code, 0, out)
+        # A stem whose own question block is elsewhere may sit beside any extract of its set.
+        self.write("_build/extract/hw1b.md", "### [HW1 Q2 stem] More\nPages: [HW1 p.1]\n")
+        self.write("_build/solutions/hw1.md", stem + SOLVED + "### [HW1 Q2 stem] More\nx\n")
+        code, out = self.check()
+        self.assertEqual(code, 0, out)
+
+    def test_a_self_keyed_docs_key_page_sits_beside_its_own_extract(self):
+        # r15-1 #1 variant: a key page block passed in any solutions file.
+        self.add_pe1()
+        self.write("_build/solutions/pe1.md", PE_SOLS)
+        self.write("_build/solutions/keys.md", PE_KEY)
+        code, out = self.check()
+        self.assertEqual(code, 1, out)
+        self.assertIn("_build/solutions/keys.md:1: WRONG SOLUTIONS FILE: [PE1 p.3] belongs in "
+                      "_build/solutions/pe1.md, beside its own extract", out)
+        # Its twin passes; a page that is no key page (the cover) is placed nowhere.
+        self.write("_build/solutions/keys.md", "### [PE1 p.1] Practice exam\n\"Time: 50.\"\n")
+        self.write("_build/solutions/pe1.md", PE_SOLS + PE_KEY)
+        code, out = self.check()
+        self.assertEqual(code, 0, out)
+
+    def test_a_key_section_is_found_only_beside_its_own_extract(self):
+        self.write("MANIFEST.md", SOL_MANIFEST + "| PE3 | `sources/pe3.docx` | n/a | in | yes | "
+                                                 "sections: Marking scheme | n/a | |\n")
+        self.write("_build/extract/pe3.md", "### [PE3 Q1] Trace\n\"Trace a BFS.\"\n")
+        sols = "### [PE3 Q1] Trace\nSolution [PE3 Marking scheme]: s\n"
+        scheme = "### [PE3 Marking scheme] Key\n\"Q1: s\"\n"
+        self.write("_build/solutions/pe3.md", sols)
+        self.write("_build/solutions/keys.md", scheme)
+        code, out = self.check()
+        self.assertEqual(code, 1, out)
+        self.assertIn("_build/solutions/keys.md:1: WRONG SOLUTIONS FILE: [PE3 Marking scheme] "
+                      "belongs in _build/solutions/pe3.md, beside its own extract", out)
+        self.assertIn("PE3: KEY SECTION NOT FOUND: no block [PE3 Marking scheme]", out)
+        # Its twin passes; so does a key section found only by its parts.
+        self.remove("_build/solutions/keys.md")
+        self.write("_build/solutions/pe3.md", sols + scheme)
+        code, out = self.check()
+        self.assertEqual(code, 0, out)
+        self.write("_build/solutions/pe3.md", sols + "### [PE3 Marking scheme Q1] Key\n\"s\"\n"
+                   "### [PE3 Marking scheme (continued)] Key\n\"t\"\n")
         code, out = self.check()
         self.assertEqual(code, 0, out)
 

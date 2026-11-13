@@ -54,7 +54,7 @@ Key says where an Answers `yes` doc's answers are, read whole (trimmed, any case
   scheme Q1`); `Key formulas` under `sections: Key` is no key section (key_section()). A deck's
   solution slides are named by fragment (`sections: #/5, #/6`; `#/5/0` is part of `#/5`). A row
   whose File ends in .pdf fails SECTIONS KEY ON A PAGED DOC, and a named section with no block in
-  any solutions file (its name or a block of it) fails KEY SECTION NOT FOUND.
+  the doc's own solutions file (below) fails KEY SECTION NOT FOUND.
 - anything else fails UNREAD KEY, and the row's other key checks are left out.
 Solved docs: the docs a `for` key names, and every doc whose own key is pages, `inline` or
 `sections:`. Answers pages (answers_cite()): every block and page of a `for` answers file; the
@@ -62,22 +62,23 @@ key pages; the key sections. Nothing else of a self-answering doc is answers: it
 formula sheet or a "Key formulas" section stays in the extract. Extract agents keep every answer
 out of _build/extract/<name>.md and write it to _build/solutions/<name>.md, one `### [<doc> Q1a]`
 block per question part of a solved doc holding a `Solution [<doc> <loc>]: ...` line or the line
-`No official solution.`; a part's block sits in the solutions file named as the extract holding
-the part's question block (either one, when two extracts hold it). Official text a question's
-parts share goes in a stem block, `### [<doc> Q3 stem]`, in that same solutions file. An answers
-file's own page or section blocks may sit in any solutions file (its agent writes
-_build/solutions/<answers file name>.md). One whose `for` key names two or more docs is read by
-no question check there, so each of its page or section blocks holds only the line
-`(transcribed under the sets' blocks)`, blank lines, `(blank)`, `(image only: ...)` entries,
-`UNREADABLE:` flags and `(illegible at 300 dpi: ...)` values (SHARED_OK); its official text goes
-under each set's stem or part blocks. It fails, naming the file and line:
+`No official solution.`. Every block in _build/solutions/ holding official text has one home
+file (set_homes(), block_home()), and fails WRONG SOLUTIONS FILE anywhere else:
+- a part's block, or a stem's (`### [<doc> Q3 stem]`, official text a question's parts share):
+  the solutions file named as the extract holding the doc's question blocks (for a part, its own
+  question block; either one when two extracts hold it).
+- a page or section block of an answers file whose `for` key names one doc: that set's home.
+- a page or section block of an answers file whose `for` key names two or more docs:
+  _build/solutions/<its doc id in lower case>.md, its own file, holding its pages in full (the
+  questions check reads it while any set it solves is unattempted).
+- a key page's or key section's block of a doc with its own key: the doc's own home.
+A stem's, a single-set page's or a key block whose set has no question block in any extract has
+no home, so none is named for it. It fails, naming the file and line:
 - NO SOLUTION BLOCK: a question part of a solved doc with a block in an extract and none in any
   solutions file.
 - in a solutions file: a part block naming a part no extract has (NO SUCH PART), a part with two
-  blocks (TWO SOLUTIONS BLOCKS), a part block holding neither form (EMPTY SOLUTIONS BLOCK), a part
-  block in a solutions file other than its extract's (WRONG SOLUTIONS FILE), a line of a
-  multi-set answers file's page or section block that SHARED_OK refuses (SHARED ANSWERS PAGE
-  HOLDS TEXT).
+  blocks (TWO SOLUTIONS BLOCKS), a part block holding neither form (EMPTY SOLUTIONS BLOCK), a
+  block outside its home file (WRONG SOLUTIONS FILE, above).
 - in an extract: SOLUTION IN AN EXTRACT, a bracketed `Solution [<doc> <loc>]` or bold
   `**Solution:**` line, fenced or not, in a block of a solved doc, or in any block (a lecture's
   too) when a cite on it names a solved doc or an answers doc; CITES AN ANSWERS PAGE, a line
@@ -225,18 +226,6 @@ PREAMBLE_OK = re.compile(r"^(?:#\s|Sources:|Every page image was viewed\.)")
 OPENER = re.compile(r"^ {0,3}(?P<mark>`{3,}(?=[^`]*$)|~{3,})")
 CLOSER = re.compile(r"^ {0,3}(?P<mark>`{3,}|~{3,})[ \t]*$")
 DIRS = ("extract", "solutions")
-# The lines a page or section block of a multi-set answers file (its `for` key names two or more
-# docs) may hold, each whole: `(transcribed under the sets' blocks)`, a blank line, `(blank)`, an
-# `(image only: ...)` entry, an `UNREADABLE:` flag or an `(illegible at 300 dpi: ...)` value. Its
-# agent writes those blocks to _build/solutions/<answers file name>.md, which no question check
-# reads, so its official text goes under each set's stem or part block instead.
-SHARED = "(transcribed under the sets' blocks)"
-# `UNREADABLE:` is matched as written, so a lower-case `unreadable:` line, which no flag count
-# reads, is text.
-SHARED_OK = re.compile(r"\s*(?:" + re.escape(SHARED) + r"|\(blank\)"
-                       r"|(?i:\(image only\b(?:[^()]|\([^()]*\))*\))|UNREADABLE:.*"
-                       r"|(?i:\(illegible at 300 dpi:\s*[^)\s][^)]*\)))?\s*")
-
 
 def numbers(text):
     """`17-20, 23` -> {17, 18, 19, 20, 23}."""
@@ -447,6 +436,41 @@ def question_docs(extracts):
     return {m.group("doc") for _, lines in extracts for _, _, m in sections(lines)
             if m.group("q")}
 
+
+def set_homes(extracts):
+    """{doc: [the names of the extracts holding a question block of it (a part's or a stem's), in
+    file order]}: a doc's home solutions files are _build/solutions/ under those names."""
+    out = {}
+    for rel, lines in extracts:
+        name = rel.rsplit("/", 1)[1]
+        for _, _, m in sections(lines):
+            if m.group("q") and name not in out.setdefault(m.group("doc"), []):
+                out[m.group("doc")].append(name)
+    return out
+
+
+def block_home(m, rows, homes):
+    """(the names a block in _build/solutions/ may sit under, why) for a stem's block, a page or
+    section block of a `for` answers file, or a key page's or key section's block of a doc with its
+    own key; None for a part's block (solutions_check() places it by its own question block) and
+    any other block, or when no extract gives the doc a home. `homes` is set_homes()."""
+    doc, q = m.group("doc"), m.group("q")
+    if q:
+        if PART.fullmatch(q) or doc not in homes:
+            return None
+        return homes[doc], "beside its extract"
+    row = rows.get(doc) or {}
+    if row.get("kind") not in ("in", "concepts"):
+        return None
+    if key_of(row) == "for":
+        docs = row["key"]["docs"]
+        if len(docs) > 1:
+            return [f"{doc.lower()}.md"], "its own file, since it solves several sets"
+        one = next(iter(docs))
+        return (homes[one], "beside the one set it solves") if one in homes else None
+    if own_key(row) and doc in homes and answers_cite(doc, locator(m), rows):
+        return homes[doc], "beside its own extract"
+    return None
 
 def key_section(loc, names):
     """Whether a page-less locator is key material under a `sections:` key's names (read_key()):
@@ -864,6 +888,7 @@ def solutions_check(root, rows, idle=frozenset()):
                 if w:
                     out.append(w)
     parts, stems = solution_blocks(sols)
+    sethomes = set_homes(extracts)
     for key, found in sorted(parts.items()):
         doc, q = key
         rel, n = found[0][:2]
@@ -896,22 +921,14 @@ def solutions_check(root, rows, idle=frozenset()):
         if not mine or any(k not in parts for k in mine):
             out.append(f"warning: {rel}:{n}: a solutions block for the stem [{doc} {stem}]: each "
                        "part still needs its own block")
-    # A multi-set answers file's page or section blocks sit in a solutions file no question check
-    # reads, so they hold no official text (SHARED_OK).
-    shared = {doc for doc, row in rows.items() if row.get("kind") in ("in", "concepts")
-              and key_of(row) == "for" and len(row["key"]["docs"]) > 1}
+    # Every other block with official text has one home too (block_home()): a stem's, an answers
+    # file's page or section, a self-keyed doc's key page or key section.
     for rel, lines in sols:
-        ends = closing(lines)
-        for start, end, m in sections(lines):
-            doc = m.group("doc")
-            if doc not in shared or m.group("q"):
-                continue
-            for i in range(start + 1, end):
-                if i in ends or SHARED_OK.fullmatch(lines[i].rstrip("\r\n")):
-                    continue
-                out.append(f"{rel}:{i + 1}: SHARED ANSWERS PAGE HOLDS TEXT: a page block of {doc}, "
-                           f"which solves several sets, holds only \"{SHARED}\"; put this under "
-                           "its set's stem or part block in _build/solutions/<set>.md")
+        for start, _, m in sections(lines):
+            home = block_home(m, rows, sethomes)
+            if home and rel.rsplit("/", 1)[1] not in home[0]:
+                out.append(f"{rel}:{start + 1}: WRONG SOLUTIONS FILE: [{m.group('doc')} "
+                           f"{locator(m)}] belongs in _build/solutions/{home[0][0]}, {home[1]}")
                 bad = True
     for key in sorted(have):
         doc, q = key
@@ -925,9 +942,9 @@ def solutions_check(root, rows, idle=frozenset()):
 
 def key_check(doc, row, rows, qdocs, keyed):
     """The failures of an in-scope row's Key cell (read_key()). `qdocs` is question_docs(), and
-    `keyed` {doc: the locators of its blocks in the solutions files}: a key section is found by
-    its name or a block of it (key_section(), `Marking scheme Q1`, a deck's `#/5/0` under
-    `#/5`)."""
+    `keyed` {doc: the locators of its blocks in its home solutions files (set_homes())}: a key
+    section is found there only, by its name or a block of it (key_section(), `Marking scheme Q1`,
+    a deck's `#/5/0` under `#/5`)."""
     key = row["key"]
     form = key["form"]
     if not row["answers"]:
@@ -1009,11 +1026,14 @@ def main(argv=None):
     # A row an `Unverified:` line skips solves nothing and gets no Key check; every other check
     # reads it as written, so its pages are still answers pages.
     lines, bad = solutions_check(args.root, rows, idle)
-    qdocs = question_docs(files(args.root, "extract"))
+    extracts = files(args.root, "extract")
+    qdocs = question_docs(extracts)
+    homes = set_homes(extracts)
     keyed = {}
-    for _, sol in files(args.root, "solutions"):
+    for rel, sol in files(args.root, "solutions"):
         for _, _, m in sections(sol):
-            keyed.setdefault(m.group("doc"), []).append(locator(m))
+            if rel.rsplit("/", 1)[1] in homes.get(m.group("doc"), ()):
+                keyed.setdefault(m.group("doc"), []).append(locator(m))
     for doc, row in rows.items():
         if row["kind"] not in KINDS:
             print(f"{doc}: SCOPE NOT UNDERSTOOD: {row['scope']!r}; it starts with one of "
