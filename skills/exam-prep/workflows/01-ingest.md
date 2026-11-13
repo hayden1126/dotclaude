@@ -47,14 +47,22 @@ slide numbers next to PDF pages wherever the two differ (L04). Fill each row's N
 `<what it is>[; <remark>]`, what the source is in a few words ("Lecture 4: search") first, and its
 By, as the template's legend says: the page's source key shows both.
 
-Fill each row's Answers from intake's question 2 (`yes` for a file that holds answers). A
-separate answers file's Notes name the sets it answers, `solutions to <doc>` or a list
-(`solutions to HW1, HW2 and HW3`), each a doc id of this table. A file that answers itself (a
-past exam with its key) gets no such note: look at its rendered pages, then name its key pages in
-the remark, `key p.N`, `key pp. N-M` or a list (`key pp. 7-9, 11`), or `key inline` when each
-solution sits under its question on the same page ("Practice exam 1; key pp. 7-9"). Only the
-named key pages go to `_build/solutions/`; the cover, the rules and a formula sheet stay in the
-extract (`02-extract`), and `extract_check.py` fails the row without its key note.
+Fill each row's Answers from intake's question 2 (`yes` for a file that holds answers). Its
+Notes take one of these exact forms, each in its own `;`-separated clause, any other remark after
+a `;`:
+
+- `solutions to HW1, HW2 and HW3`, for a separate answers file: the sets it answers, each a doc
+  id of this table, joined by `,`, `&` or `and` (`official solutions to` is fine too);
+- for a file that answers itself (a past exam with its key), after looking at its rendered pages:
+  `key p.N`, or `key pp. 7-9, 11` (items N or N-M, joined by `,`, `&` or `and`), as in "Practice
+  exam 1; key pp. 7-9";
+- `key inline`, when each solution sits under its question on the same page;
+- `key sections`, for a source without pages, such as a Word exam: its blocks titled `Key`,
+  `Answers` or `Solutions` are the key.
+
+Only the named key pages or sections go to `_build/solutions/`; the cover, the rules and a formula
+sheet stay in the extract (`02-extract`). `extract_check.py` fails a self-answering row without
+its key note (`NO KEY NOTE`) and any other wording in such a clause (`UNREAD NOTE`).
 
 ## Step 4: Originals
 

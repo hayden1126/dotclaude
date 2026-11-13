@@ -142,13 +142,14 @@ evidence ids.
     written by the same extract agent as its extract, or for an answers file that solves several
     sets by that file's own agent (hard rule 6), one block per question part
     of a solved doc plus an answers doc's page blocks (`02-extract`, "The solutions file"). A
-    past exam with its key names its key pages in its MANIFEST row's Notes (`key pp. N-M`, or
-    `key inline`), which `01-ingest` writes after looking at the PDF: only those pages go to the
-    solutions file, and its cover, rules and formula sheet stay in the extract. A `solutions to`
-    note may list several doc ids. `extract_check.py` checks the pairing and fails a solution or
-    answers page left in an extract, a self-answering row with no key note and a note naming no
-    doc, warns on an `Answer:` line in a solved doc's extract, and `extract_check.py --parts`
-    feeds `05-verify`'s PARTS (FB-100). A part's solution is found by its block id in any
+    past exam with its key names its key pages in its MANIFEST row's Notes (`key pp. N-M`,
+    `key inline`, or `key sections` for a source without pages), which `01-ingest` writes after
+    looking at the source: only those pages or sections go to the solutions file, and its cover,
+    rules and formula sheet stay in the extract. A `solutions to` note may list several doc ids.
+    Each note is a `;`-separated clause in an exact form. `extract_check.py` checks the pairing
+    and fails a solution or answers page left in an extract, a self-answering row with no key
+    note, a note naming no doc and a note clause in any other wording (`UNREAD NOTE`), warns on
+    an `Answer:` line in a solved doc's extract, and `extract_check.py --parts` feeds `05-verify`'s PARTS (FB-100). A part's solution is found by its block id in any
     solutions file. A set's attempt is recorded in that set's own row only, `no, attempted
     YYYY-MM-DD` (no key of its own) or `yes, attempted YYYY-MM-DD` (a doc holding its own key);
     a separate answers file's row stays `yes`, since it may solve several sets, and the notes

@@ -129,9 +129,12 @@ that must not see answers read the extract, so it holds none.}}
 - {{SOLUTIONS: The answers pages of {{SOLDOC}} are {{KEY PAGES: for a separate answers file,
   every page of it; for a doc with its own key (a past exam), the key pages MANIFEST.md's key note
   names, given here as "pp. 7-9", or "none: each solution sits under its question on the same
-  page" for `key inline`}}. Every other page of {{SOLDOC}} (the cover, the rules, a formula
-  sheet, an appendix table) gets its block in the extract, as any page does: the agents that
-  must not see answers read those pages there.
+  page" for `key inline`, or for `key sections` (a source without pages, such as a Word exam)
+  "its key sections: each block whose locator names `Key`, `Answers` or `Solutions`, as in
+  `### [PE1 Key] ...`, goes to the solutions file; any other section (the instructions, a
+  formula sheet) stays in the extract"}}. Every other page or section of {{SOLDOC}} (the cover,
+  the rules, a formula sheet, an appendix table) gets its block in the extract, as any page
+  does: the agents that must not see answers read those pages there.
 - The extract holds no answer, and the check fails each one it finds there. Never write in it a
   `Solution [` or `**Solution:**` line, a line that cites an answers page (`Pages:` lines aside),
   or a block for an answers page. A line that states an answer (`Answer: ...`, `Final answer:

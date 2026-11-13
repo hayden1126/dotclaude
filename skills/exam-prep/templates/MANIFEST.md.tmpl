@@ -40,14 +40,20 @@ Topic cuts: {{none | one line each:}}
   alone. A remark on the row (why a range is cut, when a file arrives) follows a `;` and stays off
   the page, so what it is holds no `;` of its own.
 - **Answers:** `yes` marks a file that holds answers (official solutions, a past exam's key).
-  - A separate answers file names the sets it answers in Notes, `solutions to <doc>`, or a list,
-    `solutions to HW1, HW2 and HW3`. Each name is a doc id of this table: `extract_check.py`
-    fails any other (`NOTE NAMES NO DOC`).
-  - A row with no such note answers itself (a past exam with its key) and names its key pages in
-    Notes' remark: `key p.N`, `key pp. N-M` (a list too, `key pp. 7-9, 11`), or `key inline`
-    when each solution sits under its question on the same page, so no page is a key page
-    ("Practice exam 1; key pp. 7-9"). `01-ingest` writes it after looking at the PDF, and
-    `extract_check.py` fails such a row without it (`NO KEY NOTE`).
+  - Notes say which sets a row answers in these exact forms, each in its own `;`-separated
+    clause, any other remark after a `;` ("Practice exam 1; key pp. 7-9; scanned"):
+    - `solutions to HW1, HW2 and HW3`: a separate answers file names the sets it answers, joined
+      by `,`, `&` or `and` (`official solutions to HW1` is fine too). Each name is a doc id of
+      this table: `extract_check.py` fails any other (`NOTE NAMES NO DOC`).
+    - `key p.N`, or `key pp. 7-9, 11` (items N or N-M, joined by `,`, `&` or `and`): a row with
+      no `solutions to` note answers itself (a past exam with its key) and names its key pages.
+    - `key inline`: each solution sits under its question on the same page, so no page is a key
+      page.
+    - `key sections`: a source without pages, such as a Word exam: its blocks titled `Key`,
+      `Answers` or `Solutions` are the key.
+  - `01-ingest` writes the key note after looking at the source, and `extract_check.py` fails a
+    self-answering row without one (`NO KEY NOTE`) and any other wording in such a clause
+    (`UNREAD NOTE`).
   - Only an in-scope row (`in` or `concepts only`) answers anything. Its answers are extracted into
     `_build/solutions/` (every page of a separate answers file; a past exam's named key pages, and
     each part's solution under its part), never into an extract. A past exam's other pages (the

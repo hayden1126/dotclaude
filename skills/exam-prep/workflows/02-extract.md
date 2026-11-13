@@ -68,10 +68,12 @@ The solved docs come from MANIFEST's in-scope rows (Scope `in` or `concepts only
 HW3` names three, each a MANIFEST doc id), and one with no note solves itself (a past exam with
 its key), so a separate answers file needs the note. A `reserved`, `pending` or `out` answers
 file solves nothing. A past exam with its key names its key pages in its Notes (`01-ingest`,
-step 3): `key p.N`, `key pp. N-M` or a list (`key pp. 7-9, 11`), or `key inline` when each
-solution sits under its question on the same page, so no page is a key page. The brief's `{{KEY
-PAGES}}` slot gives the agent those pages, copied from the note, or `none` for `key inline`.
-Only the named key pages go to the solutions file; every other page of that doc (the cover, the
+step 3): `key p.N`, `key pp. N-M` or a list (`key pp. 7-9, 11`), `key inline` when each
+solution sits under its question on the same page, so no page is a key page, or `key sections`
+for a source without pages (a Word exam), whose blocks titled `Key`, `Answers` or `Solutions` are
+the key. The brief's `{{KEY PAGES}}` slot gives the agent those pages, copied from the note,
+`none` for `key inline`, or the key sections for `key sections`. Only the named key pages or
+sections go to the solutions file; every other page of that doc (the cover, the
 rules, a formula sheet, an appendix table) keeps its block in the extract, so the answer-blind
 agents (the mock writer cloning a question's setup, the gap scan) still read it. A part's
 solution goes under its part's block in the solutions file wherever it sits, on a key page or
@@ -144,6 +146,9 @@ STATUS).
      to the solutions file.
    - `<doc>: NOTE NAMES NO DOC: ...`: a `solutions to` note names an id that is no MANIFEST doc
      id. Fix the note or the id.
+   - `<doc>: UNREAD NOTE: "<clause>" in Notes isn't a form extract_check reads: write "solutions to HW1, HW2 and HW3", "key pp. 7-9, 11", "key inline" or "key sections", and put any other remark after a ";"`:
+     a Notes clause holding a `solutions to` or key note in any other wording (`01-ingest`, step
+     3, gives the forms). Rewrite the clause in one of them.
 
    It warns on a solutions block for a stem (each of its parts still needs its own block), on a
    loose `Solution:` line outside a fence in a solved doc's extract block, and on an `Answer:`,
