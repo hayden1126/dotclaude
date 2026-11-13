@@ -489,10 +489,11 @@ class Questions(unittest.TestCase):
                            capture_output=True, text=True, timeout=60)
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
 
-    def test_every_closing_line_qonly_reads_is_a_note(self):
-        # NOTE_LINE's Coverage form was narrower than qonly.COVERAGE (a range capped at 80
-        # characters with no `;`, no nested parentheses, a case-sensitive "image only"), so a
-        # closing line qonly.py accepts was read as question text: a false hit.
+    def test_every_closing_line_extract_check_reads_is_a_note(self):
+        # NOTE_LINE's Coverage form was narrower than the checker's closing form (a range capped
+        # at 80 characters with no `;`, no nested parentheses, a case-sensitive "image only"), so
+        # a closing line the checker accepts was read as question text: a false hit. The closing
+        # form is extract_check.COVERAGE (qonly.py's before it went).
         notes = self.write("q-closing.md", "### [HW9 Q4] Routes\n- Pages: [HW9 p.2]\n"
                            "Coverage: HW9 pp.1-4; 4 blocks; 1 image only (p.2: a map (the legend) "
                            "of every route); 0 flagged unreadable.\n")
@@ -505,7 +506,7 @@ class Questions(unittest.TestCase):
         # The two patterns agree, line by line.
         import importlib.util
         mods = {}
-        for name in ("mock_leak", "qonly"):
+        for name in ("mock_leak", "extract_check"):
             spec = importlib.util.spec_from_file_location(name, os.path.join(SCRIPTS, f"{name}.py"))
             mods[name] = importlib.util.module_from_spec(spec)
             spec.loader.exec_module(mods[name])
@@ -521,7 +522,7 @@ class Questions(unittest.TestCase):
                      "Coverage: 3/4 = 75%", "Coverage: every courier plans a round"):
             with self.subTest(line):
                 self.assertEqual(bool(mods["mock_leak"].NOTE_LINE.fullmatch(line)),
-                                 bool(mods["qonly"].COVERAGE.match(line)), line)
+                                 bool(mods["extract_check"].COVERAGE.match(line)), line)
 
     def test_bad_usage(self):
         page = self.write("sec8.md", "Nothing here.\n")

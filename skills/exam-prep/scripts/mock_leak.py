@@ -367,7 +367,7 @@ SENTENCE_END = re.compile(r"[.!?](?=\s)|\n[ \t]*\n|\n(?=[ \t]*#)|\x1e")
 # bare: `Pages:` with nothing after it but cites (CITE has blanked most already) and separators;
 # a `**Shape:**` or `**Conventions:**` note; the closing `Coverage: <range>; N blocks; K image only
 # (...); U flagged unreadable.` (or an older `0 UNREADABLE.` / `UNREADABLE: none.` tail), read as
-# qonly.py's COVERAGE reads it (mirrored here, blanks only within the line, so this file needs
+# extract_check.py's COVERAGE reads it (mirrored here, blanks only within the line, so this file needs
 # nothing beside it): any case, any range, the flagged count's detail after it. Any other line
 # starting `Pages:` or `Coverage:` is read, so question text can't hide after one.
 NOTE_LINE = re.compile(
