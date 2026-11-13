@@ -356,9 +356,11 @@ keeps it in STATUS. Any student's links on the
    untaken, `python3 -I <skill>/scripts/mock_leak.py practice/videos.html <keys>` prints LEAK OK,
    `<keys>` the untaken mocks' keys (in the build, `practice/*-key.md`; W32).
 7. **Publish** `practice/videos.html` with the Artifact tool, private, and check its sharing
-   setting (W34, FB-118), as `06-site` step 6 says, a republish to the same URL included. Put a
-   `Watch list: <URL>` line in STATUS (a version after it at each republish, as "Changing the
-   notes or a sheet" item 5 says), and commit `practice/videos.json`, `practice/videos.html`,
+   setting (W34, FB-118), as `06-site` step 6 says. While STATUS has a `Watch list: <URL>` line,
+   the page is this exam's, and a rebuild republishes to that same URL; with none (the first run,
+   or a run after `11-next-exam` step 5 moved the finished exam's URL to `Earlier exams:`), it is a
+   new artifact. Put a `Watch list: <URL>` line in STATUS (a version after it at each republish,
+   as "Changing the notes or a sheet" item 5 says), and commit `practice/videos.json`, `practice/videos.html`,
    `_build/WATCH.md` and `_build/watch/`, never `_build/videos/`.
 
 ## Step 8: The cram night

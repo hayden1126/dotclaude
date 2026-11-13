@@ -172,7 +172,12 @@ In this order, each item logged as it lands:
    `practice/<old-slug>/`: every `practice/mock-*.md` (the keys and `mock-values-key.md` among
    them), `practice/cram-order.md`, `_build/verify/mock_key.py`, `_build/mock-plan.md` and each
    `_build/mock-<slug>.html`; and into `cheatsheet/<old-slug>/`: every file of its sheets (`.html`,
-   `.pdf`, `.tex`, `.layout.json`) and `_build/sheet-outline.md`. The Review view's tags were the
+   `.pdf`, `.tex`, `.layout.json`) and `_build/sheet-outline.md`. A watch list, when one was built,
+   goes too: `practice/videos.json` and `practice/videos.html` into `practice/<old-slug>/`, and
+   `_build/watch/` whole into `practice/<old-slug>/watch/` (it is tracked, and its topics, picks and
+   merge log were the finished exam's), so a new run starts from an empty `_build/watch/`. Delete
+   `_build/videos/` (`rm -rf`: gitignored, W35, so the tag can't keep it, and a new run's judge
+   must never read the finished exam's fetched files). The Review view's tags were the
    finished exam's: take each `.rv` marker out of `notes/` and each class `rv` out of
    `_build/frag/`, the blocks kept (`07-cheatsheet` tags this exam's afresh, and `assemble.py`
    refuses a tag while PLAN.md's line says `none`). Move STATUS's attempt, miss and
@@ -217,9 +222,10 @@ In this order, each item logged as it lands:
 3. **Reset STATUS.** Take out every line about the finished exam's build, mocks, sheets and cram
    night: `Stage 08 built`, `Reopened build:`, `Tutor:`, `Polish:`, `Source added:`, `Skip asked:`,
    the final-sheet items, a mock sheet logged as changed or to print again, each `Key checked:`
-   and `Reference changed:` line and the key rechecks' part ids (item 1 moved the attempts). An `Unverified:` line stays: its material is still unchecked
+   and `Reference changed:` line, the `Watch list:` line and the key rechecks' part ids (item 1
+   moved the attempts). An `Unverified:` line stays: its material is still unchecked
    ("A source added unverified"). Keep the notes page's URL line (same URL from here on), and add
-   the finished exam's sheet and mock page URLs to the `Earlier exams:` line (start it
+   the finished exam's sheet, mock page and watch list URLs to the `Earlier exams:` line (start it
    when there is none), as `<old exam>: <name> <URL>, ... (tag exam/<old-slug>)`. Set the
    next-step line to `11 step 6, launch the build for <exam> (_build/logs/reopen-<old-slug>.md)`.
 4. **The approval line, last**, as `00-intake` step 7 item 3 says. Commit, staging the archive's
