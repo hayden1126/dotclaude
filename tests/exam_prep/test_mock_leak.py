@@ -740,6 +740,28 @@ class HubQuestions(unittest.TestCase):
         self.write("MANIFEST.md", HUB_HEAD + rows.format("no, attempted 2026-11-01"))
         self.assertEqual(self.hub(page_text=page)[:2], (0, "QUESTIONS OK: no unattempted set\n"))
 
+    def test_an_unverified_row_with_an_unread_key_is_a_set(self):
+        # r20-1 #2, the review's repro: PE5's Key `pages 2` is no Key form, so it was no set, and
+        # notes quoting it passed with "no unattempted set". It is a set now (fail closed).
+        rows = "| PE5 | `sources/pe5.pdf` | 2 | in | {} | pages 2 | yes | exam |\n"
+        self.write("MANIFEST.md", HUB_HEAD + rows.format("yes"))
+        self.write("STATUS.md", "Unverified: PE5, S9, 2026-11-12\n")
+        page = f"# Rounds\n\nRecall that {KEY_TEXT}.\n"
+        rc, out, err = self.hub(page_text=page)
+        self.assertEqual((rc, out), (2, ""), err)
+        self.assertEqual(err, "mock_leak: no file holds PE5, an unattempted set (its Key cell "
+                              "\"pages 2\" isn't read, so it counts as one): no extract holds a "
+                              "block of it; fix its Key cell and extract it, then rerun\n")
+        # Extracted as pages alone (no `Q` block), its extract is read: the copy fails.
+        ext = self.write("_build/extract/pe5.md", f"### [PE5 p.2] Key\n\"{KEY_TEXT}\"\n")
+        rc, out, err = self.hub(page_text=page)
+        self.assertEqual((rc, err), (1, ""), out)
+        self.assertIn(f"words in a row match {ext}:2", out)
+        # Its twin: attempted, nothing is read.
+        self.write("MANIFEST.md", HUB_HEAD + rows.format("yes, attempted 2026-11-01"))
+        rc, out, err = self.hub(page_text=page)
+        self.assertEqual((rc, out, err), (0, "QUESTIONS OK: no unattempted set\n", ""))
+
     def test_an_extract_that_isnt_utf8_is_bad_usage(self):
         # r19-1 #4: the reason names the file, not the codec's byte offset.
         self.write("MANIFEST.md", HUB_HEAD + "| HW1 | `sources/hw1.pdf` | 1 | in | no | | yes | |\n")

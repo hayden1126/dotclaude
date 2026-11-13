@@ -109,13 +109,15 @@ stem of one is a block of that row, as in an extract. It fails, naming the file 
   SOLUTION IN AN EXTRACT and an answers cite as CITES AN ANSWERS PAGE, and in a file holding a
   solved doc's block they warn as that block's lines do (below); in either directory, an open
   `UNREADABLE:` flag fails and an illegible value is listed, by file and line.
-- in MANIFEST, for an in-scope row the `Unverified:` skip (below) doesn't cover: the Key checks
-  above; NO KEY, an Answers `yes` row with an empty Key cell (or no Key column); ANSWERS WITH NO
-  PAIRING, a doc with its own key and no question block in any extract; KEY NAMES A SET NOT IN
-  SCOPE, a `for` key naming a set whose Scope is `pending`, `reserved` or `out` (an answers row
-  that is itself not in scope solves nothing and isn't checked): its fix is `drop it from the Key
-  cell and cut its pages from <doc>'s Scope, or give <doc> the same Scope`, or only `give <doc>
-  the same Scope` when the Key names that set alone (dropping it would leave the Key empty).
+- in MANIFEST, for every in-scope row, one an `Unverified:` line skips (below) too: the Key
+  checks above that read the Key cell alone (all but KEY SECTION NOT FOUND); NO KEY, an Answers
+  `yes` row with an empty Key cell (or no Key column); KEY NAMES A SET NOT IN SCOPE, a `for` key
+  naming a set whose Scope is `pending`, `reserved` or `out` (an answers row that is itself not
+  in scope solves nothing and isn't checked): its fix is `drop it from the Key cell and cut its
+  pages from <doc>'s Scope, or give <doc> the same Scope`, or only `give <doc> the same Scope`
+  when the Key names that set alone (dropping it would leave the Key empty). For an in-scope row
+  the `Unverified:` skip doesn't cover, the two that need its blocks too: KEY SECTION NOT FOUND,
+  and ANSWERS WITH NO PAIRING, a doc with its own key and no question block in any extract.
 It warns, by file and line, outside a code fence in a solved doc's extract block (or before the
 first block of a file holding one), for a person to read: on a loose `Solution:` line (a `####
 Solution` heading, `Solutions:`), and on an answer line, one starting (after list or quote marks)
@@ -126,10 +128,12 @@ own, or no part of it has a question block.
 
 A doc that STATUS.md names on a line starting `Unverified: <doc>,` (material added at the
 student's request without an extract, FB-013) is reported as unverified while the files count
-no block for it (its own headers, or a page-less cite of it as an answers file): it doesn't fail,
-gets no Key check and solves nothing (no doc needs solutions blocks for it), yet its pages and
-blocks are still answers (a cite of one in an extract fails CITES AN ANSWERS PAGE); once they
-count one, its row is checked like any other. A STATUS.md it can't read exempts nothing.
+no block for it (its own headers, or a page-less cite of it as an answers file): it fails only on
+its Key cell's own checks (UNREAD KEY, NO KEY and the others that read MANIFEST.md alone, above),
+gets none that need its blocks and solves nothing (no doc needs solutions blocks for it), yet its
+pages and blocks are still answers (a cite of one in an extract fails CITES AN ANSWERS PAGE);
+once they count one, its row is checked like any other. A STATUS.md it can't read exempts
+nothing.
 
 It prints one line per doc: what is in scope, what has a block, `(image only` entries, and
 `UNREADABLE:` flags in either directory (the brief's closing `Coverage:` line, closing(), doesn't
@@ -150,9 +154,10 @@ a wrong root never reads as 0 parts.
 `--leak-files` prints the files the questions check (mock_leak.py --hub, which calls
 leak_files()) reads, one line each, `questions <path>` or `allow <path>`, the path relative to
 the root, sorted by path, each once. The unattempted sets are the in-scope question sets (named
-by an in-scope answers row's `for` key, holding their own key, or with a question block in an
-extract) whose own Answers cell lacks the attempt mark; an `Unverified:` line exempts none. A
-known limit: a question set is found by its `Q` blocks, which the Extract brief requires, so an
+by an in-scope answers row's `for` key, holding their own key, an Answers `yes` row whose Key
+cell is empty or unread, since what it solves is unknown (fail closed), or with a question block
+in an extract) whose own Answers cell lacks the attempt mark; an `Unverified:` line exempts none.
+A known limit: a question set is found by its `Q` blocks, which the Extract brief requires, so an
 unsolved question doc extracted only as page blocks (no `Q` block, Answers `no`) is no set, and
 its extract is `allow`.
 `questions`: every extract holding any block of an unattempted set, every existing home
@@ -1062,11 +1067,13 @@ def solutions_check(root, rows, idle=frozenset()):
     return out, bad
 
 
-def key_check(doc, row, rows, qdocs, keyed, homes):
+def key_check(doc, row, rows, qdocs, keyed, homes, form_only=False):
     """The failures of an in-scope row's Key cell (read_key()). `qdocs` is question_docs(),
     `homes` set_homes(), and `keyed` {doc: the locators of its blocks in any of its home solutions
     files}: a key section is found there only, by its name or a block of it (key_section(),
-    `Marking scheme Q1`, a deck's `#/5/0` under `#/5`)."""
+    `Marking scheme Q1`, a deck's `#/5/0` under `#/5`). `form_only` leaves out the two checks
+    that need the doc's blocks (KEY SECTION NOT FOUND, ANSWERS WITH NO PAIRING), for a row an
+    `Unverified:` line skips: every other failure reads MANIFEST.md alone."""
     key = row["key"]
     form = key["form"]
     if not row["answers"]:
@@ -1103,46 +1110,58 @@ def key_check(doc, row, rows, qdocs, keyed, homes):
     if form == "sections":
         if paged:
             out.append(f"{doc}: SECTIONS KEY ON A PAGED DOC: use \"pp. N-M\" or \"inline\"")
-        else:
+        elif not form_only:
             where = "files" if len(homes.get(doc, ())) > 1 else "file"
             out += [f"{doc}: KEY SECTION NOT FOUND: no block [{doc} {written}] in its home "
                     f"solutions {where}"
                     for _, written in sorted(key["names"].items())
                     if not any(key_section(loc, {norm(written): written})
                                for loc in keyed.get(doc, ()))]
-    if doc not in qdocs:
+    if doc not in qdocs and not form_only:
         out.append(f"{doc}: ANSWERS WITH NO PAIRING: a doc with its own key (its Key cell) with no "
                    "question block in any extract; its question parts need blocks in an extract, "
                    "or its Key cell names the sets it solves (\"for HW1, HW2\")")
     return out
 
 
+def blind_key(row):
+    """Whether a row answers (Answers `yes`) with a Key cell that is empty or unread, so what it
+    solves is unknown."""
+    return bool(row["answers"]) and row["key"]["form"] in (None, "unread")
+
+
 def unattempted(rows, extracts):
     """The question sets the student hasn't attempted, sorted: each in-scope doc that an in-scope
-    answers row's `for` key names, that holds its own key, or that has a question block in an
-    extract, whose own Answers cell lacks the attempt mark (ATTEMPTED). An `Unverified:` line
-    exempts none (fail closed). Known limit: an unsolved doc with no `Q` block (only page blocks,
-    against the Extract brief) is no set."""
+    answers row's `for` key names, that holds its own key, that answers with a Key cell that is
+    empty or unread (blind_key(): what it solves is unknown, so it counts as a set, fail closed),
+    or that has a question block in an extract, whose own Answers cell lacks the attempt mark
+    (ATTEMPTED). An `Unverified:` line exempts none (fail closed). Known limit: an unsolved doc
+    with no `Q` block (only page blocks, against the Extract brief) is no set."""
     inscope = {doc for doc, row in rows.items() if row["kind"] in ("in", "concepts")}
     sets = question_docs(extracts) & inscope
     for doc in inscope:
         row = rows[doc]
         if key_of(row) == "for":
             sets |= row["key"]["docs"] & inscope
-        elif own_key(row):
+        elif own_key(row) or blind_key(row):
             sets.add(doc)
     return sorted(doc for doc in sets if not rows[doc]["attempted"])
 
 
-def unread(doc, solves=()):
+def unread(doc, row, solves=()):
     """Why the questions check can't read a doc leak_files() must read that nothing extracted
     holds: an unattempted set (`solves` empty) with no block in any extract, or an answers file
     solving the unattempted sets in `solves` with no block or cite in a solutions file it lists.
     Rendered text is never read in its place: the extracts and solutions files are the only
-    source."""
+    source. A set that counts as one by its empty or unread Key cell (blind_key()) says so."""
     if solves:
         return (f"no file holds {doc}, the answers to an unattempted set ({', '.join(solves)}): "
                 "no solutions file holds a block of it; extract it, then rerun")
+    if blind_key(row):
+        why = (f"its Key cell \"{row['key']['cell']}\" isn't read" if row["key"]["form"]
+               else "its Key cell is empty")
+        return (f"no file holds {doc}, an unattempted set ({why}, so it counts as one): no "
+                "extract holds a block of it; fix its Key cell and extract it, then rerun")
     return (f"no file holds {doc}, an unattempted set: no extract holds a block of it; extract "
             "it, then rerun")
 
@@ -1189,7 +1208,7 @@ def leak_files(root, rows=None):
     questions = {p for p in questions if os.path.isfile(os.path.join(root, p))}
     cited = {c.group("doc") for rel, lines in files(root, "solutions") if rel in questions
              for line in lines for c in CITE.finditer(line)}
-    missing = [unread(doc, solving.get(doc, ())) for doc in sorted(set(sets) | set(solving))
+    missing = [unread(doc, rows[doc], solving.get(doc, ())) for doc in sorted(set(sets) | set(solving))
                if doc not in (homes if doc in sets else cited)]
     allow = {rel for rel, _ in extracts} - questions
     listed = [("questions", p) for p in questions] + [("allow", p) for p in allow]
@@ -1260,8 +1279,9 @@ def main(argv=None):
     skip = unverified(args.root)
     idle = {doc for doc, row in rows.items() if doc in skip and row["kind"] in ("in", "concepts")
             and not (found.get(doc) or empty)["blocks"]}
-    # A row an `Unverified:` line skips solves nothing and gets no Key check; every other check
-    # reads it as written, so its pages are still answers pages.
+    # A row an `Unverified:` line skips solves nothing and gets only the Key checks that read
+    # MANIFEST.md alone; every other check reads it as written, so its pages are still answers
+    # pages.
     lines, bad = solutions_check(args.root, rows, idle)
     extracts = files(args.root, "extract")
     qdocs = question_docs(extracts)
@@ -1280,6 +1300,9 @@ def main(argv=None):
         if row["kind"] not in ("in", "concepts"):
             continue
         if doc in idle:
+            for line in key_check(doc, row, rows, qdocs, keyed, homes, form_only=True):
+                print(line)
+                bad = True
             print(f"{doc}: unverified, added without an extract (STATUS `Unverified:` line, "
                   "FB-013): not checked until it has a block")
             continue

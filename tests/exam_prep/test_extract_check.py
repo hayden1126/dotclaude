@@ -79,7 +79,9 @@ file, with no traceback.
 Review round 20 (Hayden, 2026-11-13): the thin guess was wrong both ways, so an extract is
 required: rendered text and a deck's source are never listed, an unattempted set with no block in
 any extract and an answers file solving one with no block or cite in a listed solutions file exit
-2, whatever rendered text they have."""
+2, whatever rendered text they have. A row an `Unverified:` line skips still gets the Key checks
+that read MANIFEST.md alone (UNREAD KEY, NO KEY and the rest), and an Answers `yes` row whose Key
+cell is empty or unread is an unattempted set for `--leak-files` (r20-1 #2)."""
 import contextlib
 import importlib.util
 import io
@@ -1332,17 +1334,34 @@ class SolutionsFiles(unittest.TestCase):
         code, out = self.check()
         self.assertEqual(code, 0, out)
 
-    def test_an_unverified_answers_row_skips_its_key_checks_and_solves_nothing(self):
+    def test_an_unverified_answers_rows_key_cell_is_read_and_it_solves_nothing(self):
         # Review round 12: the note checks ran before the `Unverified:` skip, so a row added at
-        # the student's request without an extract failed on its note.
+        # the student's request without an extract failed on its note. Review round 20 (r20-1
+        # #2): the skip left out the Key cell's own checks too, so a Key no reader understands
+        # (`pages 2`) passed, and the leak list, which counts a set by its Key, missed the doc.
+        # The Key cell's checks read MANIFEST.md alone, so they run on an unverified row; the
+        # checks that need its blocks (ANSWERS WITH NO PAIRING, KEY SECTION NOT FOUND) wait.
         self.write("STATUS.md", "# STATUS\n\n- Unverified: PE2, s9, 2026-11-12\n")
         row = "| PE2 | `sources/pe2.pdf` | 2 | in | yes | {} | no | |\n"
-        for key in ("", "for HW1/HW2", "for HW9", "sections: Key"):
+        for key, failure in (("", "PE2: NO KEY"), ("for HW1/HW2", "PE2: UNREAD KEY"),
+                             ("pages 2", "PE2: UNREAD KEY: \"pages 2\" isn't a Key form"),
+                             ("for HW9", "PE2: KEY NAMES NO DOC: \"HW9\""),
+                             ("for PE2", "PE2: KEY NAMES ITS OWN DOC"),
+                             ("sections: Key", "PE2: SECTIONS KEY ON A PAGED DOC")):
+            with self.subTest(key):
+                self.write("MANIFEST.md", SOL_MANIFEST + row.format(key))
+                code, out = self.check()
+                self.assertEqual(code, 1, out)
+                self.assertIn(failure, out)
+                self.assertIn("PE2: unverified, added without an extract", out)
+        # Its twin: a Key in a form it reads passes, with no check that needs a block.
+        for key in ("pp. 2", "inline", "for HW1"):
             with self.subTest(key):
                 self.write("MANIFEST.md", SOL_MANIFEST + row.format(key))
                 code, out = self.check()
                 self.assertEqual(code, 0, out)
                 self.assertIn("PE2: unverified, added without an extract", out)
+                self.assertNotIn("ANSWERS WITH NO PAIRING", out)
         # Review round 13 (r13-1 #8): it solves nothing either. HW2, which only PE2 would solve,
         # needs no solutions block while PE2 is skipped...
         hw2 = "| HW2 | `sources/hw2.pdf` | 1 | in | no | | yes | |\n"
@@ -2329,6 +2348,33 @@ class LeakFiles(unittest.TestCase):
         self.manifest(hw1="no, attempted 2026-11-01",
                       extra=hw4.replace("| in | no |", "| in | no, attempted 2026-11-02 |"))
         self.assertEqual(self.leak(), (0, ""))
+
+    def test_an_answers_row_whose_key_isnt_read_is_a_set(self):
+        # r20-1 #2: an Answers yes row whose Key no reader understands was no set (a set is
+        # found by its Key or a `Q` block), so an unverified one with no extract was left out
+        # and the hub passed with no unattempted set. It is a set now (fail closed).
+        pe5 = "| PE5 | `sources/pe5.pdf` | 2 | in | {} | {} | yes | exam |\n"
+        self.write("STATUS.md", "Unverified: PE5, S9, 2026-11-12\n")
+        for key, why in (("pages 2", "its Key cell \"pages 2\" isn't read"),
+                         ("", "its Key cell is empty")):
+            with self.subTest(key):
+                self.manifest(hw1="no, attempted 2026-11-01", extra=pe5.format("yes", key))
+                self.assertEqual(self.leak_err(), (2, "", f"extract_check: no file holds PE5, an "
+                                                          f"unattempted set ({why}, so it counts "
+                                                          "as one): no extract holds a block of "
+                                                          "it; fix its Key cell and extract it, "
+                                                          "then rerun\n"))
+        # An extract of its pages alone (no `Q` block) is a questions file.
+        self.write("_build/extract/pe5.md", "### [PE5 p.1] Exam\n\"Trace a search from s.\"\n")
+        self.assertEqual(self.leak(), (0, "allow _build/extract/d1.md\n"
+                                          "allow _build/extract/hw1.md\n"
+                                          "questions _build/extract/pe5.md\n"))
+        # Its twins: attempted, it is no unattempted set; and Answers no makes no set of it.
+        for answers in ("yes, attempted 2026-11-01", "no"):
+            with self.subTest(answers):
+                self.manifest(hw1="no, attempted 2026-11-01",
+                              extra=pe5.format(answers, "pages 2"))
+                self.assertEqual(self.leak(), (0, ""))
 
     def test_an_extract_that_isnt_utf8_exits_2_with_no_traceback(self):
         # r19-1 #4: round 18 moved leak_files() out of the try, so a non-UTF-8 extract printed a
