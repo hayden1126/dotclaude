@@ -25,7 +25,8 @@
 - `Answers: yes` files in `MANIFEST.md`, and the official solutions extracted from them into
   `_build/solutions/`, never reach a mock writer or another agent that must not see answers (those
   read `_build/extract/`, which holds none), and nothing published quotes them before the student
-  has attempted that set (its own `MANIFEST.md` row says `attempted`).
+  has attempted that set (its own `MANIFEST.md` row says `attempted`) and, when its answers file
+  solves several sets, every set that file solves.
 - Practice keys (`practice/*-key.md`, `mock-values-key.md` among them) and the script that computes
   the mocks', `_build/verify/mock_key.py`, are quarantined: the student attempts first, no page
   build or agent reads them (but the key recheck writer that `08-practice` step 8.1's key gate

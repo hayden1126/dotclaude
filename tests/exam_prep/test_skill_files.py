@@ -252,6 +252,25 @@ class KeySectionRule(unittest.TestCase):
                 self.assertIn("after any spaces", before, (rel, before))
 
 
+class QuotingRule(unittest.TestCase):
+    """A set's official solution is quoted only once that set is attempted and, when its answers
+    file solves several sets, once every set that file solves is attempted. 04-write, STYLE S7
+    and 05-verify say so; the hub's CLAUDE.md said only "that set" until round 16."""
+
+    SITES = {"templates/hub-CLAUDE.md.tmpl": "when its answers file solves several sets, every set "
+                                             "that file solves",
+             "templates/STYLE.md": "when its answers file solves several sets, once every set "
+                                   "that file solves is attempted",
+             "workflows/04-write.md": "when its answers file solves several sets, once every set "
+                                      "that file solves is attempted"}
+
+    def test_each_site_gives_the_multi_set_condition(self):
+        for rel, phrase in self.SITES.items():
+            with open(os.path.join(SKILL, rel), encoding="utf-8") as f:
+                flat = " ".join(f.read().split())
+            self.assertIn(phrase, flat, rel)
+
+
 class Privacy(unittest.TestCase):
     def test_no_denylisted_string(self):
         if not os.path.exists(DENYLIST):
