@@ -28,7 +28,7 @@ naming the id that replaces it, if one does.
 |---|---|---|---|
 | FB-001 | After the plan is approved, run unattended. Log judgment calls in the hub's STATUS instead of asking. | SKILL | B1.C1, B4.C5, H1.C4 |
 | FB-002 | Make every stage resumable: check what is already on disk and start at the first unfinished stage. All state lives in files. | SKILL | B1.C2, H1.C8 |
-| FB-003 | Load the delegation skill before the first spawn. Parallel within a wave, one output file per agent, unnamed spawns, merges single-threaded. | SKILL | B1.C3, B4 (hard rules), A2.G1 |
+| FB-003 | Load the delegation skill before the first spawn. Parallel within a wave, no file written by two agents, unnamed spawns, merges single-threaded. | SKILL | B1.C3, B4 (hard rules), A2.G1 |
 | FB-004 | Record a ship-priority order at intake (notes site, then cheat sheet, then mock) and cut from the bottom when time runs short. | w00 | B1.C4, B4.C5 |
 | FB-005 | End each work block with the handoff skill and a local commit. Never push. Course material stays untracked; the hub's progress files are tracked. | SKILL | A1.C11, A2.C7, B1.C6, B2.C7, B3.C36, A4.C8 |
 | FB-006 | Persist every build source into the hub. The session scratchpad does not survive a clear. | SKILL | A1.C11, A4.C2 |
