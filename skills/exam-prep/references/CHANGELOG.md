@@ -103,7 +103,8 @@ evidence ids.
 
 - **Files:** `SKILL.md`, `references/CHANGELOG.md`, `references/backlog.md`,
   `references/feedback-log.md`, `references/lessons.md`, `templates/CHASSIS.md`,
-  `templates/CONVERT.md`, `templates/PLAN.md.tmpl`, `templates/STYLE.md`,
+  `templates/CONVERT.md`, `templates/MANIFEST.md.tmpl`, `templates/PLAN.md.tmpl`,
+  `templates/STYLE.md`,
   `templates/agent-briefs.md`, `templates/backbone.md.tmpl`, `templates/cram-order.md.tmpl`,
   `templates/hub-CLAUDE.md.tmpl`, `templates/mock-page.html`, `templates/notes-chassis.html`,
   `workflows/00-intake.md`, `workflows/02-extract.md`, `workflows/03-backbone.md`,
