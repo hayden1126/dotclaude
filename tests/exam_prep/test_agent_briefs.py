@@ -1,14 +1,20 @@
 """skills/exam-prep/templates/agent-briefs.md: the briefs of agents that must not see answers.
 
 Hard rule 4 and FB-191 keep the answers of a set the student hasn't attempted out of what they
-read. Official solutions live only in `_build/solutions/`, which the extract agent writes beside
-each extract (FB-056). Pinned: the Extract brief names that file; each answer-blind brief that
-reads course sources (the sheet gap scan, the mock writer, the audit variant behind the
-Must-know, sheet and cram audits) reads the extracts and names `_build/solutions/` only as
-something it never opens, keeping it out of its scope and its searches; the briefs that need a
-set's conventions (the writer, the section reviewer) read the solutions files; the two cold
-briefs open nothing under `_build/` at all. Every brief keeps the standing blocks' shape: a
-fenced text block under its heading."""
+read. Official solutions live only in `_build/solutions/`, one file per set,
+`_build/solutions/<name>.md` beside the set's extract `_build/extract/<name>.md`, which the
+set's extract agent writes, or, for an answers file that solves several sets, that file's own
+agent, which writes each set's file plus one for its own pages (FB-056, hard rule 6: no file is
+written by two agents). Pinned: the Extract brief names the solutions file, and its paragraph on
+the answers-file agent gives that layout; each answer-blind brief that reads course sources (the
+sheet gap scan, the mock writer, the audit variant behind the Must-know, sheet and cram audits)
+reads the extracts and names `_build/solutions/` only as something it never opens, keeping it
+out of its scope and its searches; no answer-blind brief reads a solutions file; the briefs that
+need a set's conventions (the writer, the section reviewer) read the solutions files; the two
+cold briefs open nothing under `_build/` at all. Every brief keeps the standing blocks' shape: a
+fenced text block under its heading. The backbone template and 03-backbone give the same
+no-value forms for a solutions-file correction and an erratum, since answer-blind agents read
+the backbone."""
 import os
 import re
 import unittest
@@ -20,6 +26,11 @@ BRIEFS = os.path.join(REPO, "skills", "exam-prep", "templates", "agent-briefs.md
 READERS = ("## Sheet gap scan (stage 07)", "## Mock writer (stage 08)", "**Audit variant**")
 # Answer-blind briefs that read the notes alone.
 COLD = ("## Cold read (stage 05)", "## Cold solver (stage 08, from 05-verify \"The mock\")")
+# Every answer-blind brief: the source readers, the cold briefs and the converter, whose figure
+# data comes from the notes alone.
+ANSWER_BLIND = READERS + COLD + ("## Convert (stage 06)",)
+BACKBONE = os.path.join(REPO, "skills", "exam-prep", "templates", "backbone.md.tmpl")
+STAGE03 = os.path.join(REPO, "skills", "exam-prep", "workflows", "03-backbone.md")
 
 
 def sections():
@@ -78,6 +89,38 @@ class AnswerBlindBriefs(unittest.TestCase):
         scope = self.briefs["## Mock writer (stage 08)"].split("- Out of scope:", 1)[1]
         self.assertIn("those extracts ({{ROOT}}/_build/solutions/", " ".join(scope.split()))
 
+    def test_no_answer_blind_brief_reads_the_solutions_files(self):
+        """In every answer-blind brief, `_build/solutions/` appears only in its Out of scope
+        bullet or in a bullet saying the agent never opens it: no Read first, Sources or In scope
+        line hands it a solutions file."""
+        for name in ANSWER_BLIND:
+            self.assertIn(name, self.briefs)
+            for b in re.split(r"\n(?=- )", self.briefs[name]):
+                if "_build/solutions/" not in b:
+                    continue
+                flat = " ".join(b.split())
+                self.assertTrue(b.startswith("- Out of scope:") or "never open" in flat, (name, b))
+                self.assertNotRegex(flat, r"(Read first|In scope|Sources):[^.]*_build/solutions/",
+                                    name)
+
+    def test_the_answers_file_agent_writes_one_solutions_file_per_set(self):
+        """The paragraph before the Extract brief: a multi-set answers file's agent uses the sets'
+        part ids, writes one solutions file per set beside its extract plus one for its own
+        pages, each with its own Sources and Coverage lines and a header naming one doc, and
+        each set's own agent writes only its extract."""
+        text = self.briefs["## Extract (stage 02)"]
+        para = text.split("```text", 1)[0].split("An answers file that solves several", 1)[1]
+        para = " ".join(para.split())
+        for phrase in ("`for HW1, HW2 and HW3`", "`### [<set> <part>]`",
+                       "one solutions file per set",
+                       "{{ROOT}}/_build/solutions/<name>.md under that set's extract `<name>`",
+                       "{{ROOT}}/_build/solutions/<answers file name>.md",
+                       "a header never names several docs", "`Sources:` line",
+                       "closing `Coverage:` line", "writes only its extract",
+                       "no file is written by two agents"):
+            self.assertIn(phrase, para)
+        self.assertNotIn("solutions to", para)
+
     def test_the_extract_brief_writes_the_solutions_file(self):
         text = self.briefs["## Extract (stage 02)"]
         self.assertIn("{{ROOT}}/_build/solutions/{{OUT}}", text)
@@ -99,6 +142,34 @@ class AnswerBlindBriefs(unittest.TestCase):
         for name, text in self.briefs.items():
             if name.startswith("## ") and "(stage" in name:
                 self.assertIn("```text\n# Brief:", text, name)
+
+
+class BackboneCorrections(unittest.TestCase):
+    """Mock writers and the sheets' gap scan read the backbone, so a solutions-file correction
+    and an erratum name their doc, page and part only, never a value; the corrected value sits in
+    the part's solutions block. The template and 03-backbone give the same example forms."""
+
+    CORRECTION = "`HW1S p.2, Q2a: corrected in the solutions file (re-read at 300 dpi)`"
+    ERRATUM = ("`Erratum: HW1S, HW1 Q2a: the official answer is wrong; the corrected value is on "
+               "the part's Erratum line in its solutions file`")
+
+    def test_the_template_and_the_stage_agree(self):
+        for path in (BACKBONE, STAGE03):
+            with open(path, encoding="utf-8") as f:
+                flat = " ".join(f.read().split())
+            self.assertIn(self.CORRECTION, flat, path)
+            self.assertIn(self.ERRATUM, flat, path)
+            self.assertIn("never a value", flat, path)
+
+    def test_the_template_erratum_slot_carries_no_value(self):
+        with open(BACKBONE, encoding="utf-8") as f:
+            text = f.read()
+        slot = " ".join(text.split("{{ERRATUM:", 1)[1].split("}}", 1)[0].split())
+        self.assertIn("by its doc and part only, never a value", slot)
+        self.assertIn(self.ERRATUM, slot)
+        # Its example holds no value: no "=", no "reads", no number but the ids' own.
+        example = slot.split("as in", 1)[1].replace("HW1S", "").replace("HW1 Q2a", "")
+        self.assertNotRegex(example, r"=|\breads\b|\d")
 
 
 WATCH = os.path.join(REPO, "skills", "exam-prep", "templates", "WATCH.md")
