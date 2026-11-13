@@ -33,7 +33,8 @@ no block for it (its own headers, or a page-less cite of it as an answers file),
 once they count one, its row is checked like any other. A STATUS.md it can't read exempts nothing.
 
 It prints one line per doc: what is in scope, what has a block, `(image only` entries, and
-`UNREADABLE:` flags (the brief's closing `Coverage:` line doesn't count). Exit 1 on a page or
+`UNREADABLE:` flags (the brief's closing `Coverage:` line, qonly.closing(), doesn't count; a
+block's own line starting `Coverage:` does). Exit 1 on a page or
 slide with no block, an in-scope page not rendered, a doc with no blocks, an open `UNREADABLE:`
 flag, a Scope it can't read, any block for a `reserved` doc (FB-023) or for a `pending` one (its
 file has arrived: give it a real Scope); 0 otherwise. Blocks for a doc id MANIFEST lacks, or for
@@ -46,12 +47,14 @@ the file and line, on an extract that holds answers with no copy; on a copy whos
 names another SHA-256 than the extract's (stale: the extract changed after qonly.py ran); on a
 line in a copy that is one qonly.py takes out of the extract (an answer); and on any other
 difference (edited by hand). A copy with no extract holding answers is read as an extract
-would be and fails on anything qonly.py would take out. It also fails on an extract's code fence that never closes before the next block header, the `Coverage:`
-line or the end of the file. Fences are qonly.fences()'s, read as CommonMark reads them (a line
+would be and fails on anything qonly.py would take out. It also fails on an extract's code fence
+that never closes before the next block header, the `Coverage:` line or the end of the file. Fences are qonly.fences()'s, read as CommonMark reads them (a line
 with an info string or 4+ spaces of indent closes nothing), so this check and qonly.py pair them
-the same way: a closed fence hides a loose solution comment from qonly.py, never the bracketed
-`Solution [<doc> <loc>]` marker; an open one hides nothing, but it is a broken extract all the
-same.
+the same way: a closed fence hides a loose solution marker (a `# solution` comment, a `####
+Solution` heading) from qonly.py, never the bracketed `Solution [<doc> <loc>]` or the bold
+`**Solution:**` marker; an open one hides nothing, but it is a broken extract all the same. A
+loose marker a closed fence hides is a warning naming its file and line (qonly.loose_in_fences()):
+the solution's start in a starter fence whose closer was forgotten reads the same as a comment.
 A copy whose extract is gone or holds no answer now is a warning. Stdlib only, plus
 reveal_slice.py and qonly.py from this directory."""
 import argparse
@@ -141,9 +144,18 @@ def span(m):
     return range(lo, max(lo, int(m.group("end") or lo)) + 1)
 
 
+def load_qonly():
+    here = os.path.dirname(os.path.abspath(__file__))
+    spec = importlib.util.spec_from_file_location("qonly", os.path.join(here, "qonly.py"))
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 def blocks(root, rows):
     """{doc: {"pages", "frags", "blocks", "questions", "image_only", "unreadable"}}."""
     out = {}
+    closing = load_qonly().closing
 
     def entry(doc):
         return out.setdefault(doc, {"pages": set(), "frags": set(), "blocks": 0, "questions": 0,
@@ -161,35 +173,37 @@ def blocks(root, rows):
             continue
         current, own, question = None, None, False
         with open(os.path.join(d, name), encoding="utf-8") as f:
-            for line in f:
-                m = HEADER.match(line)
-                if m:
-                    own = m.group("doc")
-                    current = entry(own)
-                    current["blocks"] += 1
-                    if m.group("q"):
-                        current["questions"] += 1
-                    elif m.group("frag"):
-                        current["frags"].add(m.group("frag"))
-                    elif m.group("page"):
-                        current["pages"].update(span(m))
-                    question = bool(m.group("q"))
+            lines = f.readlines()
+        ends = closing(lines)
+        for i, line in enumerate(lines):
+            m = HEADER.match(line)
+            if m:
+                own = m.group("doc")
+                current = entry(own)
+                current["blocks"] += 1
+                if m.group("q"):
+                    current["questions"] += 1
+                elif m.group("frag"):
+                    current["frags"].add(m.group("frag"))
+                elif m.group("page"):
+                    current["pages"].update(span(m))
+                question = bool(m.group("q"))
+                continue
+            if current is None or i in ends:
+                continue
+            current["image_only"] += bool(IMAGE_ONLY.search(line))
+            current["unreadable"] += len(UNREADABLE.findall(line))
+            if not question:
+                continue
+            for c in CITE.finditer(line):
+                cited = c.group("doc")
+                if not answers(cited, own):
                     continue
-                if current is None or line.startswith("Coverage:"):
-                    continue
-                current["image_only"] += bool(IMAGE_ONLY.search(line))
-                current["unreadable"] += len(UNREADABLE.findall(line))
-                if not question:
-                    continue
-                for c in CITE.finditer(line):
-                    cited = c.group("doc")
-                    if not answers(cited, own):
-                        continue
-                    p = CITE_PAGES.fullmatch(c.group("loc").strip())
-                    if p:
-                        entry(cited)["pages"].update(span(p))
-                    elif cited != own:
-                        entry(cited)["blocks"] += 1  # an answers file without pages
+                p = CITE_PAGES.fullmatch(c.group("loc").strip())
+                if p:
+                    entry(cited)["pages"].update(span(p))
+                elif cited != own:
+                    entry(cited)["blocks"] += 1  # an answers file without pages
     return out
 
 
@@ -331,10 +345,7 @@ def check(root, doc, row, b):
 
 def qonly_check(root, rows):
     """(lines, failed) for the question-only copies against the extracts."""
-    here = os.path.dirname(os.path.abspath(__file__))
-    spec = importlib.util.spec_from_file_location("qonly", os.path.join(here, "qonly.py"))
-    qonly = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(qonly)
+    qonly = load_qonly()
     out, bad, due = [], False, {}
     for name in qonly.extracts(root):
         src = os.path.join(root, "_build", "extract", name)
@@ -345,6 +356,11 @@ def qonly_check(root, rows):
                        "closes before the next block or the end of the file; close it with the "
                        "same mark (as many backticks or tildes) and rerun qonly.py")
             bad = True
+        for i in qonly.loose_in_fences(text, rows):
+            out.append(f"warning: _build/extract/{name}:{i + 1}: a loose solution marker inside a "
+                       "code fence, left in as code; if it starts a solution (a starter fence "
+                       "whose closer was forgotten), close the fence above it or write it "
+                       "`Solution [<doc> <loc>]:` and rerun qonly.py")
         needed, body = qonly.due(text, rows)
         if needed:
             due[name] = (qonly.first_line(name, src) + qonly.TAIL + body,

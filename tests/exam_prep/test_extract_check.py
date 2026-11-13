@@ -261,6 +261,16 @@ class ExtractCheck(unittest.TestCase):
         self.assertIn("D1: 7 pages in scope, 7 rendered, 7 with a block, 0 image only, "
                       "0 UNREADABLE", out)
 
+    def test_a_block_line_starting_coverage_still_counts_its_flag(self):
+        # Every line starting `Coverage:` was skipped, so a block's own `Coverage: UNREADABLE:
+        # ...` line hid an open flag. Only the closing line (qonly.closing()) is skipped.
+        self.extract("D3.md", FULL["D3.md"] + "Coverage: UNREADABLE: the percentage in the last row\n"
+                     + "Coverage: D3 pp.2-4; 2 blocks; 0 image only; 1 flagged unreadable.\n")
+        code, out = self.run_check()
+        self.assertEqual(code, 1, out)
+        self.assertIn("D3: 3 pages in scope, 3 rendered, 3 with a block, 0 image only, "
+                      "1 UNREADABLE", out)
+
     def test_an_arrived_pending_file_must_get_a_scope(self):
         self.extract("D10.md", "### [D10 p.1] arrived\n")
         code, out = self.run_check()

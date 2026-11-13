@@ -12,18 +12,24 @@ What counts as an answer, by the extract format (02-extract, "Solutions in an ex
 - a solution: its marker line, `Solution [<doc> <locator>]: ...` (also `**Solution:**`, a
   `#### Solution` heading, either with a list or quote mark before it), through the end of its
   block: the next `### [<doc> <locator>]` header, the closing `Coverage:` line, or the end of the
-  file. The closing line is the brief's `Coverage: <range>; N blocks; ...` with nothing but blank
-  lines after it up to the next header or the end of the file (closing()): a solution's own
-  `Coverage: 3/4 = 75%` line, or one of the closing form with more text after it, is part of the
-  block and goes with the cut. A closed fence's lines don't end it. Fences are read as CommonMark
-  reads them (fences()).
+  file. The closing line is the brief's whole `Coverage: <range>; N blocks; K image only (...); U
+  flagged unreadable.` (or an older extract's `0 UNREADABLE.` / `UNREADABLE: none.` tail) with
+  nothing but blank lines after it up to the next header or the end of the file (closing()): a
+  solution's own `Coverage: 3/4 = 75%` or `Coverage: 4/5 statements; 3 blocks; 2 of 3 branches`
+  line, or one of the closing form with more text after it, is part of the block and goes with
+  the cut. A closed fence's lines don't end it. Fences are read as CommonMark reads them
+  (fences()).
   The bracketed marker, `Solution [<doc> <locator>]` then a colon or the line's end, cuts
   wherever it sits, in a fence or not: starter code never writes it (`solution[i + 1] = x` isn't
-  one). A cut that starts inside a closed fence keeps the fence's closing line, so the copy's
-  fences pair as the extract's do. A looser marker (`**Solution:**`, a `# solution` comment) inside
-  a closed fence is code and cuts nothing, unless a fence anywhere in the file is still open at
-  the next header, the `Coverage:` line or the end of the file: then the pairing can't be
-  trusted, no fence exempts anything, and extract_check.py fails the extract. Nor does a closed
+  one). So does the bold marker (`**Solution:**`, `**Solution**`, `**Official solution:**`), which
+  is Markdown and never a code comment: a starter fence whose closer was forgotten, closed by the
+  solution's own bare fence line, used to hide it. A cut that starts inside a closed fence keeps
+  the fence's closing line, so the copy's fences pair as the extract's do. A looser marker (a
+  `#### Solution` heading, a `# solution` comment, `Solution:`) inside a closed fence is code and
+  cuts nothing (extract_check.py warns, naming its line: loose_in_fences()), unless a fence
+  anywhere in the file is still open at the next header, the `Coverage:` line or the end of the
+  file: then the pairing can't be trusted, no fence exempts anything, and extract_check.py fails
+  the extract. Nor does a closed
   fence holding a line that could open a fence (```` ```python ```` inside it, say) exempt
   anything inside it: that is nested markdown or a forgotten closer, where a solution's own
   ```` ```python ```` line reads as content and its bare closing line closes the starter code's
@@ -55,6 +61,10 @@ SOLUTION = re.compile(r"^[-*>#\s]*(?:\*\*)?(?:official\s+)?solutions?\b(?:\*\*)?
 CITED = r"\[[A-Za-z0-9_.-]+\s+[^\]\s][^\]]*\]"
 BRACKETED = re.compile(r"^[-*>#\s]*(?:\*\*)?(?:official\s+)?solutions?(?:\*\*)?\s*"
                        + CITED + r"(?:\s*" + CITED + r")*(?:\*\*)?\s*(?::|$)", re.I)
+# The bold marker: `**Solution:**`, `**Solution**` or `**Official solution**:`, with a list, quote
+# or heading mark before it. Markdown, never code, so it cuts even inside a fence; the closing `**`
+# keeps a Python `**solution` (dict unpacking) from reading as one.
+BOLD = re.compile(r"^[-*>#\s]*\*\*(?:official\s+)?solutions?\s*:?\s*\*\*", re.I)
 BLOCK = re.compile(r"^###\s+\[(?P<doc>[A-Za-z0-9_.-]+)\s+(?P<loc>[^\]]+)\]")
 QUESTION = re.compile(r"Q[\w.]+(?: stem)?")
 PAGE_LOC = re.compile(r"p\.(\d+)(?:-(\d+))?")
@@ -65,9 +75,12 @@ CITE = re.compile(r"\[(?P<doc>[A-Za-z0-9_.-]+)\s+pp?\.\s*(?P<page>\d+)(?:\s*-\s*
 # opener's character at least as long, then nothing but blanks. Anything else is fence content.
 OPENER = re.compile(r"^ {0,3}(?P<mark>`{3,}(?=[^`]*$)|~{3,})")
 CLOSER = re.compile(r"^ {0,3}(?P<mark>`{3,}|~{3,})[ \t]*$")
-# The extract brief's closing line: `Coverage: <range>; N blocks; K image only (...); U flagged
-# unreadable.` A bare `Coverage:` start is a solution's or a tool's line as often as not.
-COVERAGE = re.compile(r"^Coverage:\s.*;\s*\d+\s+blocks?\s*;")
+# The extract brief's closing line, whole: `Coverage: <range>; N blocks; K image only (...); U
+# flagged unreadable.` Older extracts end it `0 UNREADABLE.` or, with `1 (image only: p.1)`,
+# `UNREADABLE: none.`. A `Coverage:` start, even with `; N blocks;` after it, is a solution's or a
+# tool's line as often as not.
+COVERAGE = re.compile(r"^Coverage:\s.*;\s*\d+\s+blocks?\s*;\s*\d+\s*\(?image\s+only\b.*;\s*"
+                      r"(?:\d+\s+(?:flagged\s+)?unreadable|unreadable:\s*none)\.?\s*$", re.I)
 FIRST = "Question-only copy of _build/extract/{name} (sha256 {digest})"
 FIRST_LINE = re.compile(r"^Question-only copy of _build/extract/(?P<name>\S+) "
                         r"\(sha256 (?P<digest>[0-9a-f]{64})\)")
@@ -150,9 +163,10 @@ def fenced(lines):
 
 
 def marker(line, code, i):
-    """Whether lines[i] is a solution marker: the bracketed form anywhere, a looser one only
-    outside a fence."""
-    return bool(BRACKETED.match(line) or (i not in code and SOLUTION.match(line)))
+    """Whether lines[i] is a solution marker: the bracketed or bold form anywhere, a looser one
+    only outside a fence."""
+    return bool(BRACKETED.match(line) or BOLD.match(line)
+                or (i not in code and SOLUTION.match(line)))
 
 
 def segments(lines, code=None):
@@ -239,6 +253,16 @@ def cuts(text, rows):
         if cut is not None:
             drop(cut, end, f"the solution in [{doc} {loc}]")
     return lines, keep, runs, answers_doc
+
+
+def loose_in_fences(text, rows):
+    """The indices of the lines that read as a loose solution marker (SOLUTION, not the bracketed
+    or bold form) inside a closed code fence and that the copy keeps, or the extract keeps when no
+    copy is due: exempt as code, so extract_check.py warns about each for a person to look at."""
+    lines, keep, _, _ = cuts(text, rows)
+    code = fenced(lines)
+    return [i for i in sorted(code) if keep[i] and SOLUTION.match(lines[i])
+            and not BRACKETED.match(lines[i]) and not BOLD.match(lines[i])]
 
 
 def strip(text, rows):
