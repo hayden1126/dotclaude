@@ -29,9 +29,10 @@ The box and figure passes bring a hub built before S34 or the widened S11 up to 
 hub's old sections among them (`11-next-exam` otherwise leaves those as written). Two build
 warnings name them (FB-015): a cram order with no S33 depth label on any row (`cram_check.py` and
 `assemble.py` warn `PRE_S33`) gets its labels in a box pass, and a backbone section marked
-`Diagram-taught: pre-S11` (a reopened hub's older sections, which `11-next-exam` marks), or a
-backbone with no `Diagram-taught` line at all (`coverage_check.py` warns on either), gets `yes`
-or `no` in a figure pass, which replaces the `pre-S11`.
+`Diagram-taught: pre-S11` (a reopened hub's older sections, which `11-next-exam` marks, or the
+sections an earlier figure pass didn't cover, which step 5 marks), or a backbone with no
+`Diagram-taught` line at all (`coverage_check.py` warns on either), gets `yes` or `no` in a
+figure pass, which replaces the `pre-S11`.
 
 A direct instruction that names its edit, what and where ("add the cost caveat to §4.6 and where
 §3 first gives the cost"), is an approved list of one, the pass `edit`: skip steps 3 and 4, but
@@ -177,7 +178,12 @@ step 1 says.
   candidate kept or cut with its reason; each section marked `Diagram-taught: yes` or `no` (in
   place of any `pre-S11`); and
   the kept rows not yet drawn as the proposed shortlist, each with its kind (static, step-through,
-  slide image). A figure the section already has counts toward its floor.
+  slide image). A figure the section already has counts toward its floor. While STATUS has a
+  `Figure shortlist:` line, or when the student asks to cut, the scan also lists the kept rows
+  already drawn in the named sections (from `_build/logs/figures.md`, or with no line from the
+  backbone's shortlist), so the student can cut a figure the build drew (`03-backbone` step 5.4).
+  A `Diagram-taught: yes` section keeps at least one figure: a cut that would leave it none is
+  listed with that note, and applies only with an add this pass makes to the same section.
 
 ## Step 4: Report
 
@@ -194,9 +200,13 @@ step 1 says.
    recommendation (a rank, numbers, or for numbering a scope) and the question: which items to
    apply. While a mock is untaken, the log's leak check passes first. Then show the report in the
    message itself (hard rule 11). A figure pass's report is the proposed shortlist with its cut
-   rows, one line each: the student sees it before any figure is built (FB-062), as `03-backbone`
-   step 5.4 says for a figure pass; STATUS's `Figure shortlist:` line (it keeps one) comes out
-   once this pass is approved.
+   rows, and any drawn rows step 3 lists for cutting, one line each: the student sees it before
+   any figure is built (FB-062), as `03-backbone` step 5.4 says for a figure pass. Once the pass
+   is approved, the student has reviewed the covered sections' logged rows, so the log records
+   two changes for step 5.6 (outside the pass's paths, so a stop before that commit leaves the
+   rows still waiting): `_build/logs/figures.md` rewritten without the rows of the sections this
+   pass covered, and STATUS's `Figure shortlist:` line (it keeps one) replaced by the recount of
+   the rows left, or taken out when none is left.
 4. The student answers with a rank, numbers, "your recommendation" or a scope; text they add to an
    item is shown again before it goes in (while a mock is untaken, from the log once it passes).
    Log the answer and commit.
@@ -207,19 +217,25 @@ step 1 says.
 text is the notes' own, so it is written the way the build writes it. Item 2's baseline comes
 first, as for any pass. For a figure pass the main session then adds to the backbone the Mechanism
 sweep table, each covered section's `Diagram-taught` line (`yes` or `no`, in place of any
-`pre-S11`) and the approved shortlist rows (after which `coverage_check.py` exits 0 with no
-warning for the sections this pass covered), and crops each approved slide image into
+`pre-S11`), `- Diagram-taught: pre-S11` on every section the pass didn't cover that has no line
+(`03-backbone` step 5.2: once one section carries a line, a section with none fails
+`coverage_check.py`, and FB-015's warning form never blocks a rebuild), and the approved
+shortlist rows; for each approved cut of a drawn figure it takes out its shortlist row and its
+entry on the section's Figures line together (`03-backbone` step 5.3) and marks its sweep row cut
+with the student's reason. After that `coverage_check.py` exits 0, its only figure warnings the
+`pre-S11` sections this pass didn't cover. It crops each approved slide image into
 `_build/img/` (`04-write` step 4.5, its `.gitignore` line added first when the hub lacks it). Then one writer per section file, spawned at once from the
 "Write" brief's "Polish variant", each changing only its own file: a box pass adds the
 approved boxes (S34) and missing Depth lines and changes nothing else; a figure pass adds the
-approved FIG markers, a diagram-taught section's first figure right after its first box, and trims
-prose that only re-describes a new figure (S11). While a mock is untaken, each brief carries this
+approved FIG markers, a diagram-taught section's first figure right after its first box, trims
+prose that only re-describes a new figure (S11), and takes out the FIG marker of each approved cut,
+rewording any text that points at that figure. While a mock is untaken, each brief carries this
 pass's fence (step 1) as its reading limits. The main session checks that `git diff` names only
 those files and only those changes, and runs one fresh section reviewer per changed file from the
 "Review" brief (`05-verify`'s), settling its findings as `05-verify` does. Then each changed
 section's fragment takes the change in `CONVERT.md`'s forms (its boxes, its new figures drawn as
-`06-site` draws them), and a box pass labels the cram order's rows from the new Depth lines. Items
-4 to 6 run as for any pass.
+`06-site` draws them, a cut figure's drawing taken out), and a box pass labels the cram order's
+rows from the new Depth lines. Items 4 to 6 run as for any pass.
 
 1. Apply the approved items and nothing else (FB-170). An item the student adds is applied and
    logged with the others. A scope list starts with its MANIFEST.md change (after item 2's

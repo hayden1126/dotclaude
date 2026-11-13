@@ -126,7 +126,8 @@ evidence ids.
   - FB-015: a check new to the skill passes an existing hub's form with a warning naming the pass
     that upgrades it: a cram order with no depth labels, a backbone with no `Diagram-taught`
     lines, or a backbone section marked `Diagram-taught: pre-S11` (a reopened hub's older
-    sections, which `11-next-exam` marks and `10-polish`'s figure pass sets) builds with a WARN
+    sections, which `11-next-exam` marks, or those a partial `10-polish` figure pass leaves, which
+    it marks; a covering figure pass sets `yes` or `no`) builds with a WARN
     (I3.C8, I3.G8, J1.G5, I1 (section 2)).
   - FB-123: citation codes now match their MANIFEST.md row in any case, silently, the source key
     keeping the row's spelling (I3.C8).
@@ -186,7 +187,8 @@ evidence ids.
     compressed" (I1.C10, I3.C3, J1.C4, I2.C13, I2.C14, I2.C15, I1.C24).
   - FB-062, FB-115 and FB-125: STYLE S11 widened to diagram first, `03-backbone` step 5's sweep
     and `Diagram-taught` lines (its shortlist logged in STATUS as one `Figure shortlist:` line,
-    and the whole of it in `_build/logs/figures.md`, while the build's or `11-next-exam`'s source
+    and the rows of the sections each run swept in `_build/logs/figures.md`, the rows still
+    waiting kept, while the build's or `11-next-exam`'s source
     path's `Build running` line stands, and shown to the student when run alone or in a
     `10-polish` figure pass, offered at `08-practice` step 8's opening or, after `Stage 08 built`, at
     the source path's step 5 report), intake's and
@@ -195,8 +197,9 @@ evidence ids.
     under hard rule 5, FB-011, the line added to an older hub's `.gitignore` before the first crop
     at `04-write` step 4.5, a file already tracked under a line `11-next-exam` step 5.2 adds taken
     out of the index, and a stopped source's crops deleted with its renders), `10-polish`'s
-    figure pass, and CHASSIS C5, a linked figure pinned in a panel (F.O, J1.C12, I1.C19, I1.C21,
-    I1.C22, I3.C5, F1.C4).
+    figure pass (which can cut a figure the build drew, and takes the rows it settles out of the
+    log and the STATUS line's count), and CHASSIS C5, a linked figure pinned in a panel (F.O,
+    J1.C12, I1.C19, I1.C21, I1.C22, I3.C5, F1.C4).
   - FB-061: `coverage_check.py` reads a dotted sub-part (J1.G4).
   - L22: intake records the Playwright path on the hub CLAUDE.md's Tools line (I1.G3, I2.G12,
     I3.G3).
