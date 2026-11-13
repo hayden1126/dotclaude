@@ -332,13 +332,17 @@ keeps it in STATUS. Any student's links on the
       same brief, part `judge`, ranks from those files into its own
       `_build/watch/rank-<topic>.json`; a fetch it asks for again goes back through item 2.
    Each gap a ranker flags (W13) gets a search in the next wave, with the brief's GAPS slot, then
-   its fetch and judge; a gap that wave leaves empty becomes a notes row (W24).
+   its fetch and judge; that wave writes `_build/watch/cand-<topic>-gaps.json` and
+   `rank-<topic>-gaps.json`, beside the first wave's files and never over them. A gap that wave
+   leaves empty becomes a notes row (W24).
 3. **Merge**, in the main session, single-threaded: build `practice/videos.json` from the
-   fragments, each idea's picks as ranked, with the fragment-only fields (`covers`, `rejected`,
+   fragments, both of a topic's ranking files when a gap wave ran (`rank-<topic>.json` and
+   `rank-<topic>-gaps.json`), each idea's picks as ranked, with the fragment-only fields (`covers`, `rejected`,
    `gaps`) left out (W19). Then the overlap audit across topics (W14 to W18) and the order check
    (W20 to W23), each fold and cut logged in `_build/watch/merge-log.md`.
 4. **The cut-loss reviewers**, after any cut or condensation (W29): one fresh "Watch list cut-loss
-   reviewer" per topic that lost a candidate. Check each `+ also` item it proposes against the
+   reviewer" per topic that lost a candidate, reading each of the topic's ranking files (its GAP
+   WAVE slot). Check each `+ also` item it proposes against the
    notes, then put it in that row's `also`.
 5. **The annotators**: one "Watch list annotator" per topic, each writing its own
    `_build/watch/annot-<topic>.json`: the topic's intro, and each row's thread, differs and tested

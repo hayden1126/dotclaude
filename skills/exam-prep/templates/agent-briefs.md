@@ -491,7 +491,9 @@ delegated agent can't run `yt-dlp`, a Python program (L07), or reach a host the 
 list (L02), so the main session fetches. Part 1, **Search**, writes the candidates; then the main
 session fetches each one's captions, chapters and storyboard frames; part 2, **Judge**, ranks from
 those files, by the same agent resumed (SendMessage to its id) or a fresh one from this brief with
-`{{PART}}` set to `judge` (`search` for part 1). A later wave fills the GAPS slot for the gaps the first one flagged.
+`{{PART}}` set to `judge` (`search` for part 1). A later wave fills the GAPS slot for the gaps the first one flagged,
+which also names its files `cand-<topic>-gaps.json` and `rank-<topic>-gaps.json`, so they never
+overwrite the first wave's candidates and picks.
 
 ```text
 # Brief: rank explainer videos for the {{EXAM}} watch list, topic {{TOPIC}} (§{{N}}), {{PART}} part{{GAPS: , gap search}}
@@ -512,9 +514,9 @@ session merges every topic's file into the page.
   rest folded or rejected (W14 to W17), or a `none` with why no video is good; every candidate in
   the search file is in a pick or in `rejected`, judged from its fetched files (a candidate the
   fetch log marks unfetched is rejected as `not fetched`, never judged from its title).
-- Artifact path: search part, {{ROOT}}/_build/watch/cand-{{TOPIC}}.json; judge part,
-  {{ROOT}}/_build/watch/rank-{{TOPIC}}.json. Write each as you go, idea by idea, so a crash loses
-  nothing.
+- Artifact path: search part, {{ROOT}}/_build/watch/cand-{{TOPIC}}{{GAPS: -gaps}}.json; judge
+  part, {{ROOT}}/_build/watch/rank-{{TOPIC}}{{GAPS: -gaps}}.json. Write each as you go, idea by
+  idea, so a crash loses nothing.
 - Report: end your reply with the JSON block (status, summary, artifacts, blocked_actions). The
   summary lists each idea with its candidate count (search) or its pick or "none" (judge), and
   each gap.
@@ -531,7 +533,7 @@ session merges every topic's file into the page.
   candidate, each with the searches already tried: {{GAP IDS}}. | drop this line}}
 - {{YOURS: The student's own links, ranked on the same rules and kept as kind `yours` (W12):
   {{URLS}}. | drop this line}}
-- Judge part: read your search file, {{ROOT}}/_build/watch/cand-{{TOPIC}}.json, and judge each
+- Judge part: read your search file, {{ROOT}}/_build/watch/cand-{{TOPIC}}{{GAPS: -gaps}}.json, and judge each
   candidate from its transcript (auto-captions), its chapters and its storyboard frames, which the main session fetched into {{ROOT}}/_build/videos/{{TOPIC}}/, named
   by video id, and from {{ROOT}}/_build/watch/fetch-log.md for what it couldn't fetch; never from
   a title or a description alone. Judge a full lecture by its chapters and keep a segment of it
@@ -572,7 +574,8 @@ Judge part, UTF-8 JSON, one object:
 
 Role: `reviewer`: it reads and reports; the main session checks each item against the notes and
 puts it in its row's `also`. One fresh reviewer per topic that lost a candidate to a cut or a fold
-(`08-practice`, "Watch list", step 4), after the merge and the overlap audit.
+(`08-practice`, "Watch list", step 4), after the merge and the overlap audit. Fill the GAP WAVE
+slot when a gap wave ranked the topic (a `rank-<topic>-gaps.json` exists); otherwise drop it.
 
 ```text
 # Brief: find what the cuts lost in topic {{TOPIC}} (§{{N}}) of the {{EXAM}} watch list
@@ -584,8 +587,8 @@ the notes teach, so a lost exam point comes back as a "+ also" line under a kept
 the main session checks and applies.
 
 ## End state
-- Done means: for each candidate the topic lost (its ranker's `rejected`, and the cuts and folds
-  the merge log names for this topic), each point it covers that no kept row of the topic
+- Done means: for each candidate the topic lost (its rankers' `rejected` in each ranking file below,
+  and the cuts and folds the merge log names for this topic), each point it covers that no kept row of the topic
   teaches, judged lost or not. For each lost point the notes test (a How it's tested line, a
   Must-know item): the row it goes under (idea and pick), the item's text (at most 25 words), the
   video and time it comes from, and the notes line that makes it an exam point (W29).
@@ -595,7 +598,9 @@ the main session checks and applies.
 ## Scope
 - Work in: {{ROOT}}, read only.
 - Read first: {{ROOT}}/_build/WATCH.md (you apply W16, W18, W19 and W29).
-- Read: {{ROOT}}/_build/watch/rank-{{TOPIC}}.json (`rejected`, and each pick's `covers`),
+- Read: {{ROOT}}/_build/watch/rank-{{TOPIC}}.json{{GAP WAVE: and, since a gap wave ranked this
+  topic too, {{ROOT}}/_build/watch/rank-{{TOPIC}}-gaps.json}} (`rejected`, and each pick's
+  `covers`),
   {{ROOT}}/_build/watch/merge-log.md (this topic's cuts and folds), the topic `{{TOPIC}}` in
   {{ROOT}}/practice/videos.json (open that file by its exact path, nothing else under
   {{ROOT}}/practice/), the notes {{ROOT}}/notes/{{FILES}}, and to check a `covers` line, the
