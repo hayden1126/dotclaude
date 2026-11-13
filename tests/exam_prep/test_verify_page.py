@@ -418,9 +418,17 @@ class BrowserCatchesTest(unittest.TestCase):
         # The page's own rule broken one way at a time: the check reads CHASSIS.md's rule itself.
         keep_p = self.edit("if(tag==='h2') return;", "if(tag==='h2'||tag==='p') return;")
         self.fails("rvshowp", "the Review view shows p", page=keep_p)
-        hide_rv = self.edit("if(k.classList.contains('rv')){ if(h3) h3.classList.remove('rvhide'); return; }", "")
+        # The rv and concise boxes share one branch: drop either test and that box is hidden.
+        # Without rv, 1.2's h3 (rv blocks only) hides too; 1.1's stays for its concise box.
+        shown = "if(k.classList.contains('rv')||k.classList.contains('concise')){"
+        hide_rv = self.edit(shown, "if(k.classList.contains('concise')){")
         out = self.fails("rvhide", "the Review view hides div.callout.warn.rv", page=hide_rv)
-        self.assertIn("the Review view hides h3#sec-1-sums", out)
+        self.assertIn("the Review view hides details#ex-1-range", out)
+        self.assertIn("the Review view hides h3#sec-1-rules", out)
+        self.assertNotIn("hides div.concise", out)
+        hide_concise = self.edit(shown, "if(k.classList.contains('rv')){")
+        out = self.fails("rvconcise", "the Review view hides div.concise", page=hide_concise)
+        self.assertNotIn("hides div.callout.warn.rv", out)
         no_must = self.edit("if(must&&(tag==='ul'||tag==='ol')){ must=false; return; }", "")
         self.fails("rvmust", "the Review view hides ul", page=no_must)
 
