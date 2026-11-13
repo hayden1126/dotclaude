@@ -961,11 +961,11 @@ def solutions_check(root, rows, idle=frozenset()):
     return out, bad
 
 
-def key_check(doc, row, rows, qdocs, keyed):
-    """The failures of an in-scope row's Key cell (read_key()). `qdocs` is question_docs(), and
-    `keyed` {doc: the locators of its blocks in its home solutions files (set_homes())}: a key
-    section is found there only, by its name or a block of it (key_section(), `Marking scheme Q1`,
-    a deck's `#/5/0` under `#/5`)."""
+def key_check(doc, row, rows, qdocs, keyed, homes):
+    """The failures of an in-scope row's Key cell (read_key()). `qdocs` is question_docs(),
+    `homes` set_homes(), and `keyed` {doc: the locators of its blocks in any of its home solutions
+    files}: a key section is found there only, by its name or a block of it (key_section(),
+    `Marking scheme Q1`, a deck's `#/5/0` under `#/5`)."""
     key = row["key"]
     form = key["form"]
     if not row["answers"]:
@@ -994,8 +994,9 @@ def key_check(doc, row, rows, qdocs, keyed):
         if paged:
             out.append(f"{doc}: SECTIONS KEY ON A PAGED DOC: use \"pp. N-M\" or \"inline\"")
         else:
-            out += [f"{doc}: KEY SECTION NOT FOUND: no block [{doc} {written}] in "
-                    "_build/solutions/"
+            where = "files" if len(homes.get(doc, ())) > 1 else "file"
+            out += [f"{doc}: KEY SECTION NOT FOUND: no block [{doc} {written}] in its home "
+                    f"solutions {where}"
                     for _, written in sorted(key["names"].items())
                     if not any(key_section(loc, {norm(written): written})
                                for loc in keyed.get(doc, ()))]
@@ -1067,7 +1068,7 @@ def main(argv=None):
             print(f"{doc}: unverified, added without an extract (STATUS `Unverified:` line, "
                   "FB-013): not checked until it has a block")
             continue
-        for line in key_check(doc, row, rows, qdocs, keyed):
+        for line in key_check(doc, row, rows, qdocs, keyed, homes):
             print(line)
             bad = True
         b = found.get(doc) or empty

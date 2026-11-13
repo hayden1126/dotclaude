@@ -1255,8 +1255,8 @@ class SolutionsFiles(unittest.TestCase):
         self.assertIn("_build/extract/pe3.md:8: AN ANSWERS PAGE IN AN EXTRACT: [PE3 Marking "
                       "scheme] is a key section of PE3, as its MANIFEST.md Key cell names it; "
                       "move it to _build/solutions/pe3.md", out)
-        self.assertIn("PE3: KEY SECTION NOT FOUND: no block [PE3 Marking scheme] in "
-                      "_build/solutions/", out)
+        self.assertIn("PE3: KEY SECTION NOT FOUND: no block [PE3 Marking scheme] in its home "
+                      "solutions file\n", out)
         # A named section with no block anywhere fails too; its twin with the block passes.
         self.write("_build/extract/pe3.md", rules)
         code, out = self.check()
@@ -1845,7 +1845,8 @@ class SolutionsFiles(unittest.TestCase):
         self.assertEqual(code, 1, out)
         self.assertIn("_build/solutions/keys.md:1: WRONG SOLUTIONS FILE: [R3 #/5] belongs in "
                       "_build/solutions/r3.md, beside its own extract", out)
-        self.assertIn("R3: KEY SECTION NOT FOUND: no block [R3 #/5]", out)
+        self.assertIn("R3: KEY SECTION NOT FOUND: no block [R3 #/5] in its home solutions "
+                      "files\n", out)
 
 
     def test_a_key_section_with_a_page_reference_is_still_key_material(self):
