@@ -192,6 +192,13 @@ evidence ids.
     unattempted, and every other extract is allowed. `extract_check.py --leak-files` prints that
     list, and with no unattempted set the check prints `QUESTIONS OK: no unattempted set` (round
     17 review).
+  - FB-191 and FB-056: the questions check reads the sheets too: `mock_leak.py --hub .` takes no
+    page and reads every page under `notes/` and `cheatsheet/`, so `07-cheatsheet` runs it
+    before a sheet is published or printed and a change to a sheet reruns it; an unattempted set
+    with no extract (a source added unverified) is checked against its rendered text, and one
+    with neither extract nor rendered text exits 2, as does a missing or unreadable MANIFEST.md;
+    `09-tutor` checks a held passage alone (`--pages _build/held-check.md`) before offering it
+    back (round 18 review).
   - FB-056: an answers file solves only in-scope sets: a Key cell `for ...` naming a `pending`,
     `reserved` or `out` set fails `KEY NAMES A SET NOT IN SCOPE`, fixed by dropping the set from
     the cell and cutting its pages from the answers file's Scope, or by giving the answers file
