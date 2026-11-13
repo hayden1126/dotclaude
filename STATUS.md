@@ -240,8 +240,18 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
       Also confirmed (that lane's corrected path): a browser user agent got a sign-in redirect
       or an empty JavaScript shell from some vendor docs, and a refetch without it got the
       text. So the bar includes trying a plain fetch before calling a page unreachable.
-    Where it lands is Hayden's call; the lead's pick is lane practices' next PR (it owns
-    `practices_check.py`), after Nov 16.
+    Lands in lane practices' next PR (Hayden, 2026-11-13: "practices lane"), after Nov 16;
+    tell the lane when it unparks.
+  - **A reusable product-research library** (Hayden, 2026-11-13: a capella lane's research for
+    its app plan "could be helpful for developing new apps/websites/company products"). That
+    lane holds about 30 topic files (legal: privacy and age, payments, hosting and transfers;
+    platform; backend cost; fonts licensing; security practices; analytics; retention) and a
+    source log of 852 entries from 388 sources, each with a quote and a read date. Lead's
+    shape: a private library outside dotclaude (it is a client's work), indexed by topic, each
+    claim keeping its source id, read date and checked or reported status, plus a pointer skill
+    telling a new-product session to read it first and re-verify anything that decides
+    something (prices, laws and limits go stale). Open, Hayden's: whether that lane's research
+    is his to reuse outside that client's product, and where the library lives. Not picked yet.
   - **The 5-hour usage limit may be gone for Hayden's account** (2026-11-12, unsettled): claude.ai
     Settings > Usage no longer lists it, but Claude Code's `/usage` still shows a session limit
     (Hayden), and 2.1.323's changelog announces no change. Settle it first: if the status line's
