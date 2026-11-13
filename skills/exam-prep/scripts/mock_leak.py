@@ -61,10 +61,21 @@ question file's line with its part label (the nearest heading's `[HW3 Q2c]` brac
 label), never the matched text: the main session reads it there, and a log must not spoil the
 set. The last line is QUESTIONS OK or QUESTIONS: N found. Exit 0 clean, 1 on a hit, 2 on bad
 usage (a missing file, no question file or page, a file that isn't UTF-8).
-Stdlib only."""
+
+  mock_leak.py --hub <root> --pages <page>...
+
+The same check on the files the hub's own homes give (extract_check.py's leak_files(), the list
+`extract_check.py --leak-files` prints): its `questions` files as --questions, its `allow` files
+as --allow, so the list never drifts from the homes the extract check computes (a deck's second
+part, a stray block's solutions file). With no unattempted set it prints `QUESTIONS OK: no
+unattempted set` and exits 0. Output and exit codes otherwise as --questions; bad usage too is a
+hub with no MANIFEST.md or one it can't read, --hub with --questions or --allow, or unattempted
+sets no file holds a block of. It can't be combined with the other forms.
+Stdlib only, plus extract_check.py from this directory (loaded by its path) for --hub."""
 import bisect
 import html
 import html.parser
+import importlib.util
 import os
 import re
 import sys
@@ -488,8 +499,22 @@ def runs(marks):
     return out
 
 
+QUESTIONS_USAGE = ("usage: mock_leak.py --questions <file or dir>... [--allow <file or dir>...] --pages <page>...\n"
+                   "       mock_leak.py --hub <root> --pages <page>...")
+
+
+def extract_check():
+    """extract_check.py from this script's own directory, loaded by its path: under `python3 -I`
+    that directory isn't on sys.path."""
+    here = os.path.dirname(os.path.abspath(__file__))
+    spec = importlib.util.spec_from_file_location("extract_check", os.path.join(here, "extract_check.py"))
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 def questions_main(argv):
-    lists, flag = {"--questions": [], "--allow": [], "--pages": []}, None
+    lists, flag = {"--questions": [], "--allow": [], "--pages": [], "--hub": []}, None
     for a in argv:
         if a in lists:
             flag = a
@@ -497,11 +522,42 @@ def questions_main(argv):
             raise Usage(f"unexpected argument {a}")
         else:
             lists[flag].append(a)
+    if "--hub" in argv:
+        if len(lists["--hub"]) != 1 or lists["--questions"] or lists["--allow"] or not lists["--pages"]:
+            raise Usage(QUESTIONS_USAGE)
+        return hub_main(lists["--hub"][0], lists["--pages"])
     if not lists["--questions"] or not lists["--pages"]:
-        raise Usage("usage: mock_leak.py --questions <file or dir>... [--allow <file or dir>...] --pages <page>...")
+        raise Usage(QUESTIONS_USAGE)
     questions, allowed, pages = (load(lists["--questions"], True), load(lists["--allow"]), load(lists["--pages"]))
     if not questions or not pages:
         raise Usage("no question file or no page found")
+    return compare(questions, allowed, pages)
+
+
+def hub_main(root, page_paths):
+    """The questions check on the files extract_check.leak_files() lists for the hub at root."""
+    pages = load(page_paths)
+    if not pages:
+        raise Usage("no page found")
+    if not os.path.isfile(os.path.join(root, "MANIFEST.md")):
+        raise Usage(f"no MANIFEST.md in {os.path.abspath(root)}")
+    try:
+        sets, listed = extract_check().leak_files(root)
+    except (OSError, ValueError) as e:
+        raise Usage(f"can't read the hub {os.path.abspath(root)}: {e}")
+    if not sets:
+        print("QUESTIONS OK: no unattempted set")
+        return 0
+    paths = {kind: [os.path.normpath(os.path.join(root, p)) for k, p in listed if k == kind]
+             for kind in ("questions", "allow")}
+    if not paths["questions"]:
+        raise Usage(f"no file holds a block of {', '.join(sets)}, the unattempted sets: run extract_check.py")
+    return compare(load(paths["questions"], True), load(paths["allow"]), pages)
+
+
+def compare(questions, allowed, pages):
+    """Each page against the question files, less what the allowed files share: the hits and
+    the QUESTIONS line on stdout, 1 on a hit, else 0."""
     allow_sh = {sh for t in allowed for sh, _, _ in t.shingles()}
     allow_tr = {tr for t in allowed for tr, _, _, _ in t.triples()}
     q_sh, q_tr = {}, {}
@@ -531,7 +587,7 @@ def questions_main(argv):
 
 def main(argv=None):
     argv = sys.argv[1:] if argv is None else argv
-    if "--questions" in argv:
+    if "--questions" in argv or "--hub" in argv:
         try:
             return questions_main(argv)
         except Usage as e:

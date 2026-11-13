@@ -539,5 +539,128 @@ class Questions(unittest.TestCase):
                 self.assertIn(message, r.stderr)
 
 
+HUB_HEAD = ("| Doc id | File | Pages | Scope | Answers | Key | Rendered | Notes |\n"
+            "|---|---|---|---|---|---|---|---|\n")
+KEY_TEXT = "the courier settles the depot first and then every customer by distance"
+VALUE_TEXT = "the round costs 17, then 29, and finally 41 units in total"
+
+
+class HubQuestions(unittest.TestCase):
+    """`--hub <root>` (r17, Hayden 2026-11-13): the questions check reads the file list
+    extract_check.py computes (leak_files()), so a home the workflow prose never named, a deck's
+    second part or a stray block's file, is read; an attempted set's files are not, and with no
+    unattempted set it passes at once. It runs under `python3 -I`, where the script's own
+    directory is not on sys.path."""
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.root = tmp.name
+
+    def write(self, rel, text):
+        path = os.path.join(self.root, rel)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(text)
+        return path
+
+    def run_hub(self, *args, page_text=None):
+        page = self.write("notes/sec1.md", page_text or "Nothing from any set here.\n")
+        # The cwd is the hub, not the scripts directory: an import that leans on it fails here.
+        r = subprocess.run([sys.executable, "-I", os.path.join(SCRIPTS, "mock_leak.py"), *args,
+                            "--pages", page], capture_output=True, text=True, timeout=60,
+                           cwd=self.root)
+        return r.returncode, r.stdout, r.stderr
+
+    def hub(self, *args, page_text=None):
+        return self.run_hub("--hub", self.root, *args, page_text=page_text)
+
+    def test_a_decks_key_slide_in_its_second_part_is_read(self):
+        # The split deck: r3.md holds its questions, r3b.md its later slides, and the key slide
+        # sits in solutions/r3b.md, a file the prose list never named.
+        self.write("MANIFEST.md", HUB_HEAD + "| R3 | `sources/r3.html` | 6 | in | yes | "
+                                             "sections: #/5 | n/a | recitation |\n")
+        self.write("_build/extract/r3.md", "### [R3 #/0] S0\n### [R3 Q1] Trace\nPages: [R3 #/0]\n"
+                                           "\"Trace the round.\"\n")
+        self.write("_build/extract/r3b.md", "### [R3 #/3] S3\n### [R3 #/4] S4\n")
+        self.write("_build/solutions/r3.md", "### [R3 Q1] Trace\nSolution [R3 #/5]: see the key\n")
+        key = self.write("_build/solutions/r3b.md", f"### [R3 #/5] Solutions\n\"{KEY_TEXT}\"\n")
+        rc, out, err = self.hub(page_text=f"# Rounds\n\nRecall that {KEY_TEXT}.\n")
+        self.assertEqual((rc, err), (1, ""), out)
+        self.assertIn(f"words in a row match {key}:2", out)
+        self.assertNotIn("courier", out)
+        # The page without the copy passes.
+        rc, out, err = self.hub()
+        self.assertEqual((rc, err), (0, ""), out)
+        self.assertEqual(out, "QUESTIONS OK: 1 pages checked against 4 question files\n")
+
+    def test_a_stray_blocks_solutions_file_is_read(self):
+        # extract/l3.md holds a stray [HW1 p.1] block, so solutions/l3.md is a home of HW1, and
+        # an HW1S page there whose values a page copies fails.
+        self.write("MANIFEST.md", HUB_HEAD
+                   + "| HW1 | `sources/hw1.pdf` | 1 | in | no | | yes | |\n"
+                     "| HW1S | `sources/hw1s.pdf` | 1 | in | yes | for HW1 | yes | |\n"
+                     "| L3 | `sources/l3.pdf` | 2 | in | no | | yes | lecture |\n")
+        self.write("_build/extract/hw1.md", "### [HW1 Q1a] Round\nPages: [HW1 p.1]\n\"Plan it.\"\n")
+        self.write("_build/solutions/hw1.md", "### [HW1 Q1a] Round\nNo official solution.\n")
+        self.write("_build/extract/l3.md", "### [L3 p.1] Rounds\n### [HW1 p.1] Homework 1\n")
+        sol = self.write("_build/solutions/l3.md", f"### [HW1S p.1] Solutions\n\"{VALUE_TEXT}\"\n")
+        rc, out, err = self.hub(page_text="## Example\n\nA round of 17, 29 and 41 units.\n")
+        self.assertEqual((rc, err), (1, ""), out)
+        self.assertIn(f"3 numbers in the same order match {sol}:2", out)
+
+    def test_an_attempted_sets_files_are_not_read_and_none_unattempted_passes(self):
+        rows = ("| HW1 | `sources/hw1.pdf` | 1 | in | {} | | yes | |\n"
+                "| HW2 | `sources/hw2.pdf` | 1 | in | {} | | yes | |\n"
+                "| HW1S | `sources/hw1s.pdf` | 1 | in | yes | for HW1 | yes | |\n")
+        self.write("MANIFEST.md", HUB_HEAD + rows.format("no, attempted 2026-11-01", "no"))
+        self.write("_build/extract/hw1.md", "### [HW1 Q1a] Round\nPages: [HW1 p.1]\n")
+        self.write("_build/solutions/hw1.md", f"### [HW1 Q1a] Round\nSolution [HW1S p.1]: "
+                                              f"{KEY_TEXT}\n")
+        self.write("_build/extract/hw2.md", "### [HW2 Q1a] Flow\nPages: [HW2 p.1]\n")
+        page = f"Recall that {KEY_TEXT}.\n"
+        rc, out, err = self.hub(page_text=page)
+        self.assertEqual((rc, err), (0, ""), out)
+        self.assertEqual(out, "QUESTIONS OK: 1 pages checked against 1 question files\n")
+        # HW1 unattempted: the same page fails.
+        self.write("MANIFEST.md", HUB_HEAD + rows.format("no", "no"))
+        self.assertEqual(self.hub(page_text=page)[0], 1)
+        # Every set attempted: nothing to read.
+        self.write("MANIFEST.md", HUB_HEAD + rows.format("no, attempted 2026-11-01",
+                                                         "no, attempted 2026-11-02"))
+        rc, out, err = self.hub(page_text=page)
+        self.assertEqual((rc, out, err), (0, "QUESTIONS OK: no unattempted set\n", ""))
+
+    def test_a_multi_set_answers_file_is_read_while_any_set_it_solves_is_unattempted(self):
+        rows = ("| HW1 | `sources/hw1.pdf` | 1 | in | no, attempted 2026-11-01 | | yes | |\n"
+                "| HW2 | `sources/hw2.pdf` | 1 | in | {} | | yes | |\n"
+                "| HW1S | `sources/hw1s.pdf` | 1 | in | yes | for HW1 and HW2 | yes | |\n")
+        self.write("MANIFEST.md", HUB_HEAD + rows.format("no"))
+        self.write("_build/extract/hw1.md", "### [HW1 Q1a] Round\nPages: [HW1 p.1]\n")
+        self.write("_build/extract/hw2.md", "### [HW2 Q1a] Flow\nPages: [HW2 p.1]\n")
+        full = self.write("_build/solutions/hw1s.md", f"### [HW1S p.1] Solutions\n\"{KEY_TEXT}\"\n")
+        page = f"Recall that {KEY_TEXT}.\n"
+        rc, out, err = self.hub(page_text=page)
+        self.assertEqual((rc, err), (1, ""), out)
+        self.assertIn(f"match {full}:2", out)
+        self.write("MANIFEST.md", HUB_HEAD + rows.format("no, attempted 2026-11-02"))
+        self.assertEqual(self.hub(page_text=page)[:2], (0, "QUESTIONS OK: no unattempted set\n"))
+
+    def test_bad_usage(self):
+        self.write("_build/extract/hw1.md", "### [HW1 Q1a] Round\n")
+        for name, args, message in (
+                ("no MANIFEST.md", ["--hub", self.root], "no MANIFEST.md"),
+                ("a MANIFEST.md it can't read", ["--hub", self.root], "MANIFEST.md"),
+                ("with --questions", ["--hub", self.root, "--questions",
+                                      os.path.join(self.root, "_build", "extract")], "usage:"),
+                ("no root", ["--hub"], "usage:")):
+            with self.subTest(name):
+                if name == "a MANIFEST.md it can't read":
+                    self.write("MANIFEST.md", "| Doc id | Pages |\n|---|---|\n| HW1 | 1 |\n")
+                rc, out, err = self.run_hub(*args)
+                self.assertEqual((rc, out), (2, ""), err)
+                self.assertIn(message, err)
+
+
 if __name__ == "__main__":
     unittest.main()
