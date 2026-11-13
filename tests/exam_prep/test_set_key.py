@@ -159,27 +159,6 @@ class ShapeTest(unittest.TestCase):
                 self.assertFalse(settled(shape))
 
 
-class MarkerMirrorTest(unittest.TestCase):
-    def test_the_marker_mirror_matches_qonly(self):
-        # Round 8: FIELD knew only `Solution [`, so a qualified marker qonly.py cuts read as the
-        # Shape line's continuation. Its mirror of qonly.py's qualifier must stay in step.
-        spec = importlib.util.spec_from_file_location(
-            "qonly", os.path.join(REPO, "skills", "exam-prep", "scripts", "qonly.py"))
-        qonly = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(qonly)
-        mine = template()
-        # Round 9: the marker word list was inlined here and compared with nothing.
-        for name in ("LABEL", "LABELS", "PART_WORD", "QUAL", "PREFIX", "WORDS"):
-            self.assertEqual(getattr(mine, name), getattr(qonly, name), name)
-        for line in ("Solution to Q1a [HW1S p.1]: 42", "**Solution (Q1):** 42", "Answer: 42",
-                     "> **Official solutions, all parts:** 42", "Worked solution [HW2 p.1]: 7",
-                     "#### Solution", "Key [PE1 p.3]: 42"):
-            self.assertTrue(mine.FIELD.match(line), line)
-        for line in ("solutions are unique", "the answer is below", "Answer the following",
-                     "Solutions to recurrences are unique"):
-            self.assertFalse(mine.FIELD.match(line), line)
-
-
 class SetKeyTest(unittest.TestCase):
     def setUp(self):
         tmp = tempfile.TemporaryDirectory()
@@ -335,12 +314,7 @@ class SetKeyTest(unittest.TestCase):
                 self.fails("HW3 UNCHECKED Q3")
                 self.edit(wrapped, "**Shape:** prove\n**Shape:** compute\n")
         for after in ("**Conventions:** as the table of §2 says\n", "\nThe table above is traced.\n",
-                      "Solution [HW3S p.1]: the table\n", "- a traced table\n", "```\nx\n```\nthe traced table\n",
-                      # Round 8: every marker form qonly.py cuts ends the Shape line too.
-                      "Solution to Q3 [HW3S p.1]: the table\n", "Solution, part (a) [HW3S p.1]: the table\n",
-                      "Worked solution [HW3S p.1]: the table\n", "Answer [HW3S p.1]: the table\n",
-                      "Answer: the table\n", "Key: the table\n", "#### Solution\nthe table\n",
-                      "> Official solution: the table\n",
+                      "- a traced table\n", "```\nx\n```\nthe traced table\n", "Pages: [HW3 p.2]\n",
                       "### [HW3 Q8] x\ntraced table\n**Shape:** prove\n",
                       "#### [HW4 Q2] y\n**Shape:** compute\n"):
             with self.subTest(after=after):

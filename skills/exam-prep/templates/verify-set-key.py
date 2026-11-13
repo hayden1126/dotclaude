@@ -16,7 +16,9 @@ tutor can check partial work step by step (FB-162). Every part needs a value, or
 `reasoned("HW3", "Q2a", why)` when no arithmetic on its numbers gives the answer (a bound read off
 a rule, a choice the course leaves open): its why names the method and where the notes state it,
 never the answer, since the student sees the edit. The one exception is a part each of whose
-Shape lines (a wrapped one read whole) starts with a kind no arithmetic answers (prove, show that,
+Shape lines (a wrapped one read whole, up to a blank line, a heading or the next field: a bold
+one, a list item, a `Pages:` line; no solution sits there, since solutions live in
+_build/solutions/) starts with a kind no arithmetic answers (prove, show that,
 justify, formulate, explain, define, true or false, a proof, a justification, a definition), asks
 for nothing after it (no "and", "then" or ";") and names no trace, table, computation, run,
 output or given instance: it is graded against the notes. A part whose block has no Shape line
@@ -59,27 +61,10 @@ STEM = re.compile(r"^###\s+\[[A-Za-z0-9_.-]+\s+Q\d[\w.]* stem\]")
 QUESTION = re.compile(r"^#+\s*\[(?P<doc>[A-Za-z0-9_.-]+)\s+Q\d")
 HEADING = re.compile(r"^#{1,3}\s")
 FENCE = re.compile(r"^\s*(`{3,}|~{3,})(.*)$")
-# qonly.py's solution markers, every form it cuts (its SOLUTION, BRACKETED, BOLD and LOOSE), mirrored
-# here since a hub's copy of this file can't find the skill's scripts: keep the two in step (PREFIX,
-# WORDS and the qualifier are compared by the skill's test). The word (`Solution`, `Official` or
-# `Worked solution`, `Answer`, `Answer key`, `Key`), a qualifier that names a part (`(Q1)`, `to Q1a`,
-# `for part (a)`, `, all parts`), then a cite, a colon, bold's close or the line's end. Read without
-# MANIFEST or the block's other lines, so wider than qonly.py's: `Answer [<doc> <loc>]:` counts
-# whatever <doc> is, and a plain `Key:` or an answer blank (`Answer: ____`), which qonly.py leaves,
-# still ends a wrapped Shape line, as any line that starts a field does.
-LABEL = r"\(?(?:\d+(?:\.\d+)*[a-z]{0,2}(?:\([a-z0-9]{1,4}\))?|[ivx]{2,4}|[a-z])\)?"
-LABELS = LABEL + r"(?:(?:\s*(?:,|&|-|\u2013|\band\b|\bto\b)\s*|\s+)" + LABEL + r"){0,5}"
-PART_WORD = r"(?:part|problem|question|exercise)s?\b"
-QUAL = (r"(?:\s*\((?:(?:Q|" + PART_WORD + r")\s*)?" + LABELS + r"\)"
-        r"|\s+(?:to|for)\s+(?:all\s+parts|Q\s*" + LABELS + r"|" + PART_WORD + r"\s*" + LABELS
-        + r"|\(" + LABELS + r"\))"
-        r"|\s*,\s*(?:all\s+parts|Q\s*" + LABELS + r"|" + PART_WORD + r"\s*" + LABELS + r"))")
-PREFIX = r"(?:official|worked)"
-WORDS = r"solution|answer(?:\s+key)?|key"
-MARKER = (r"[-*>#\s]*(?:\*\*)?(?:" + PREFIX + r"\s+)?(?:" + WORDS + r")s?\b"
-          r"(?:" + QUAL + r"){0,3}(?:\*\*)?\s*(?:\[|:|\*\*|$)")
-# A line that starts the block's next field, or a solution marker, ends a wrapped Shape line.
-FIELD = re.compile(r"^(?:\*\*|[-*+]\s|Pages:|" + MARKER + r")", re.I)
+# A line that starts the block's next field (bold, as `**Conventions:**` is; a list item; a `Pages:`
+# line) ends a wrapped Shape line. The extracts hold no solution (they are in _build/solutions/,
+# which extract_check.py keeps apart), so no solution marker is looked for here.
+FIELD = re.compile(r"^(?:\*\*|[-*+]\s|Pages:)", re.I)
 DOC_ID = re.compile(r"[A-Za-z0-9_.-]+")
 PART_ID = re.compile(r"Q\d[\w.]*")
 SHAPE = re.compile(r"^(?:[-*+]\s+)?\*\*Shape(?::\*\*|\*\*:)(.*)$")

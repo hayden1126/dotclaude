@@ -11,12 +11,12 @@ imported below. Each `check` names the official answer part it reproduces, cited
 notes cite (`HW1 Q2c [HW1S p.3]`), so a FAIL points at the page to read. An official part the
 reference can't compute (a proof, an explanation) is a `skip` with its shape. An `example` checks
 a worked example the course itself shows (a slide, a reading): it isn't an official part, but it
-tests the reference before any solutions are out. PARTS is the number of official answer parts
-the extracts hold, as qonly.py counts them (each question part's first solution marker in any
-form it cuts, not only `Solution [<doc> <loc>]:`, and each `Solution [<doc> <loc>]` line of a key
-page; never a lecture's worked example), printed from the hub root by:
+tests the reference before any solutions are out. PARTS is the number of official answer parts:
+the question parts whose block in _build/solutions/ holds a `Solution [<doc> <loc>]` line (a part
+whose block says `No official solution.`, an answers file's page block and a lecture's worked
+example never count), printed from the hub root by:
 
-  python3 -I <skill>/scripts/qonly.py --parts
+  python3 -I <skill>/scripts/extract_check.py --parts
 
 It passes only when its checks and skips name exactly PARTS distinct parts, none twice: a
 self-test that checks three of forty answers proves little. With no check and no example it
@@ -27,7 +27,8 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))  # -I leaves the script dir out
 
-PARTS = None  # ---- Fill in: the official answer parts the extracts hold (qonly.py --parts).
+PARTS = None  # ---- Fill in: the question parts whose solutions block holds a `Solution [` line
+#                    (python3 -I <skill>/scripts/extract_check.py --parts prints it).
 FAILS = []
 RUN = []
 SKIPPED = []
