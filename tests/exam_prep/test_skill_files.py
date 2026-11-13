@@ -277,6 +277,28 @@ class QuestionsCheckFiles(unittest.TestCase):
                        "`QUESTIONS OK: no unattempted set`", "The main session runs it"):
             self.assertIn(phrase, flat)
 
+    def test_the_outline_is_checked_alone(self):
+        """07 step 2 item 5 checks the outline alone before a pick reaches a LaTeX sheet's
+        student: the outline isn't under `notes/` or directly in `cheatsheet/` (round 20)."""
+        flat = self.flat("07-cheatsheet.md")
+        step2 = flat.split("## Step 3", 1)[0]
+        outline = ("`python3 -I <skill>/scripts/mock_leak.py --hub . --pages "
+                   "_build/sheet-outline.md`")
+        self.assertEqual(flat.count(outline), 1)
+        m = step2.index(outline)
+        self.assertIn("questions check on the outline alone", step2[max(0, m - 300):m])
+        self.assertIn("until it prints QUESTIONS OK", step2[m:m + 300])
+
+    def test_the_hub_quarantines_the_held_check_file(self):
+        """The hub's CLAUDE.md quarantines `_build/held-check.md` like `_build/held.md`, and a
+        file left by a run cut short is deleted first (round 20)."""
+        with open(os.path.join(SKILL, "templates", "hub-CLAUDE.md.tmpl"), encoding="utf-8") as f:
+            flat = " ".join(f.read().split())
+        self.assertIn("`_build/held-check.md`, the one entry's text `09-tutor` writes for the "
+                      "questions check before offering it back, is quarantined the same way: no "
+                      "agent reads it, the check's run deletes it, and a session that finds one "
+                      "left behind (a run cut short) deletes it before anything else.", flat)
+
 
 class KeySectionRule(unittest.TestCase):
     """A `sections:` key's name followed by a space then a letter or digit (`Key formulas` under
