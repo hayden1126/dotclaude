@@ -258,6 +258,14 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     Fix to design: a scratch tree that isn't a worktree of the shared git dir (a `--shared` clone
     under `.lane-trial/`, say), or a narrow sandbox-off step for the add alone. Lanes skill and
     docs/lanes.md say how a lane asks for ready meanwhile.
+  - **Mocks skill upgrades** (2026-11-13, a lane in another repo, session 4b3a30d1, from Hayden's
+    asks on a type mock): a magnifier (1x/2x/3x, CSS `zoom`) in the render's corner, off by
+    default, named as a third home for a setting besides the top row and QUESTIONS; drag to pan
+    the zoomed render; screenshots in a mock go lossless (lossy WebP smeared small UI text);
+    an "in place" type comparison that ships rendered pictures, never font files; the test
+    harness anchors on `/* ==== MOCK CONFIG`, and layout_check's WARN names per-screen controls.
+    Detail and source paths: `~/scratch/mocks-upgrade/ideas-2026-11-13.md` (private). A lane
+    after Nov 16, no owner yet.
   - **The skill-copy check calls `~/.claude/skills` a copy of itself when the cwd is home**
     (reported 2026-11-13 by session f5c6b8c5, cwd `~`): at session start it says "This project
     has its own copy of the installed practices skill auth-secrets: ~/.claude/skills/auth-secrets,
