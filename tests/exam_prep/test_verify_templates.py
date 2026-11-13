@@ -7,7 +7,8 @@ answer; the tolerance compares floats; the self-test fails until its checks and 
 official part; the example generator replaces its output only on a run that succeeds and covers
 the backbone's worked examples exactly, so a failed run keeps the last good output; the
 sibling import works under -I; PARTS's documented command counts the solutions files' part
-blocks; and each `.py` template the CHANGELOG's newest round names carries that round's date."""
+blocks; and each `.py` template the CHANGELOG's newest round names carries that round's date,
+while a newest round with no Files item, or one naming no `.py` template, fails."""
 import os
 import re
 import subprocess
@@ -47,25 +48,66 @@ def newest_round(text):
     return head.group(2), set(re.findall(r"`templates/([^`/\s]+\.py)`", files.group(1)))
 
 
+def baseline_problems(text, templates):
+    """What is wrong with the `.py` templates' baseline dates against a CHANGELOG's text: each
+    template the newest round's Files list names must carry that round's date. A missing entry, a
+    missing Files item, or one naming no `templates/*.py` file is a problem too: the check would
+    otherwise pass on nothing."""
+    date, names = newest_round(text)
+    if not date:
+        return ["no `## Round <n> (<date>)` entry in the CHANGELOG"]
+    if names is None:
+        return [f"the Round entry of {date} has no `- **Files:**` item"]
+    if not names:
+        return [f"the Round entry of {date} names no `templates/*.py` file in its Files item"]
+    out = []
+    for name in sorted(names):
+        path = os.path.join(templates, name)
+        if not os.path.exists(path):
+            out.append(f"the CHANGELOG names templates/{name}, which doesn't exist")
+            continue
+        with open(path, encoding="utf-8") as f:
+            head = f.read(2000)
+        m = re.search(r"baseline as of (\d{4}-\d{2}-\d{2})", head)
+        if not m:
+            out.append(f"templates/{name} carries no `baseline as of <date>`")
+        elif m.group(1) != date:
+            out.append(f"templates/{name} carries {m.group(1)}, not the round's {date}")
+    return out
+
+
 class BaselineDate(unittest.TestCase):
     def test_a_template_the_newest_round_changed_carries_its_date(self):
         # Round 9: verify-selftest.py and verify-set-key.py changed in round 8 under a baseline
         # dated 2026-10-20. 12-retro step 3 dates each file a round changes with that round's
-        # date, and 11-next-exam step 2 logs a hub copy's date beside the skill's and reads the
-        # CHANGELOG entries since then, so a stale date hides the change from the reopen. Each
-        # `.py` template the newest round's Files list names carries that round's date.
+        # date, so a stale date hides the change from whoever compares a hub copy's date with the
+        # CHANGELOG. Each `.py` template the newest round's Files list names carries that round's
+        # date.
         with open(CHANGELOG, encoding="utf-8") as f:
-            date, names = newest_round(f.read())
-        self.assertTrue(date, "no `## Round <n> (<date>)` entry in the CHANGELOG")
-        self.assertIsNotNone(names, f"the Round entry of {date} has no `- **Files:**` item")
-        for name in sorted(names):
-            path = os.path.join(TEMPLATES, name)
-            self.assertTrue(os.path.exists(path), f"the CHANGELOG names templates/{name}")
-            with open(path, encoding="utf-8") as f:
-                head = f.read(2000)
-            m = re.search(r"baseline as of (\d{4}-\d{2}-\d{2})", head)
-            self.assertTrue(m, name)
-            self.assertEqual(m.group(1), date, name)
+            self.assertEqual(baseline_problems(f.read(), TEMPLATES), [])
+
+    def test_a_round_it_cant_read_fails_rather_than_passing_on_nothing(self):
+        # Review round 11: a Files list it couldn't find or parse left the name set empty, and
+        # the loop over it passed. Each of these must fail.
+        with tempfile.TemporaryDirectory() as tmp:
+            with open(os.path.join(tmp, "verify-a.py"), "w", encoding="utf-8") as f:
+                f.write("# baseline as of 2026-02-03\n")
+            good = "## Round 2 (2026-02-03)\n\n- **Files:** `templates/verify-a.py`.\n"
+            self.assertEqual(baseline_problems(good, tmp), [])
+            for text, needle in (
+                    ("# Changelog\n", "no `## Round"),
+                    ("## Round 2 (2026-02-03)\n\n- Files: `templates/verify-a.py`.\n",
+                     "has no `- **Files:**` item"),
+                    ("## Round 2 (2026-02-03)\n\n- **Files:** `SKILL.md`, `scripts/x.py`.\n",
+                     "names no `templates/*.py` file"),
+                    ("## Round 2 (2026-02-04)\n\n- **Files:** `templates/verify-a.py`.\n",
+                     "carries 2026-02-03, not the round's 2026-02-04"),
+                    ("## Round 2 (2026-02-03)\n\n- **Files:** `templates/verify-b.py`.\n",
+                     "which doesn't exist")):
+                with self.subTest(needle):
+                    problems = baseline_problems(text, tmp)
+                    self.assertEqual(len(problems), 1, problems)
+                    self.assertIn(needle, problems[0])
 
     def test_the_round_parser_reads_the_newest_entry(self):
         text = ("# Changelog\n\n- **Files:** `templates/x.py`, from the header's format.\n\n"
