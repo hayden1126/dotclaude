@@ -313,7 +313,12 @@ keeps it in STATUS. Any student's links on the
 
 1. **Set up.** When the hub lacks them, copy `<skill>/templates/WATCH.md` into `_build/WATCH.md`
    (`cat`, hard rule 12) and add the line `_build/videos/` to `.gitignore`, before any transcript
-   or frame lands (W35). Draft the topic list in `_build/watch/topics.md`: one topic per notes
+   or frame lands (W35). When `_build/watch/` already holds a run (a rerun in this exam), take that
+   run's files out before the first wave, or the merge and the cut-loss slot read a topic's old
+   gap-wave ranking or old cuts as this run's: `git rm -q --ignore-unmatch '_build/watch/cand-*'
+   '_build/watch/rank-*' '_build/watch/annot-*' _build/watch/merge-log.md`, then `rm -f` any of
+   them still there (a run cut short before its commit). Git keeps the committed ones in history.
+   `fetch-log.md` stays: item 2's first fetch starts it fresh. Draft the topic list in `_build/watch/topics.md`: one topic per notes
    section (its key, name, section label), its ideas in teaching order (W22), each with the notes
    ids it maps to (the backbone's id registry). Load the delegation skill before the first spawn.
 2. **The rankers**, in three parts, since a delegated agent can't run `yt-dlp`, a Python program

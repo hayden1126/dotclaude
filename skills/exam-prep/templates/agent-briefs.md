@@ -219,8 +219,9 @@ These are the Markdown forms the page's converter reads (06-site); use them exac
   never a step, a condition or the instance (S18). Define every symbol in the box itself, and put
   nothing in it that the text below doesn't teach.
 - Never write a skill rule id, such as (S12) or (FB-123), in the notes: the build refuses an FB
-  id, and a C id right after `CHASSIS` or `rule`, and only warns on a bare S, L or K id (a course
-  writes a state (S1) or a lecture (L3) the same way). The rules shape the text; the student
+  id in parentheses and a C id right after `CHASSIS`, and only warns on a bare S, L, K or C id,
+  `rule (C3)` among them (a course writes a state (S1), a lecture (L3) or the product rule (C3) the
+  same way, and a rebuild never fails on course text). The rules shape the text; the student
   never sees their names.
 - Names in a trace or a state (nodes, states, variables, table rows) go in backticks in worked
   examples: CONVERT.md keeps them as code, and the notes-to-checker comparison counts a name only

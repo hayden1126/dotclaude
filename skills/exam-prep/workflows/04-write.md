@@ -78,8 +78,10 @@ lines). What every writer is held to, beyond STYLE:
   of <code> <place>: <what the picture shows> -->` (such as `slide image of D5 p.23: ...`) for a
   slide-image figure, which `CONVERT.md` turns into an `img` with its citation in the caption.
 - **No rule ids** (S16, FB-095). The student's text never carries a skill rule id, such as (S12) or
-  (FB-123): the build refuses an FB id, and a C id right after `CHASSIS` or `rule`, and only warns
-  on a bare S, L or K id, since a course writes a state (S1) or a lecture (L3) the same way.
+  (FB-123): the build refuses an FB id in parentheses and a C id right after `CHASSIS`, and only
+  warns on a bare S, L, K or C id, `rule (C3)` among them, since a course writes a state (S1), a
+  lecture (L3) or the product rule (C3) the same way, and a rebuild never fails on course text
+  (FB-015).
 
 ## Step 4: Check what came back
 

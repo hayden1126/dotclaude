@@ -141,9 +141,11 @@ says: check each claim first, and fix every copy of a fact. Then step 4 again.
 - The prune list (FB-146), last: `_build/logs/sheet-prune.md`, one line per block, its name, side and
   column, and the question type it serves (trace, compute, justify, a true or false, as the How
   it's tested table names them), or `none found` when no question type uses it. The student cuts
-  the blocks they would not use: run alone with them present, ask now; in the build, which asks
-  nothing (hard rule 1), add `Sheet prune: waiting for the student (_build/logs/sheet-prune.md)` to
-  STATUS, and `08-practice` step 8's opening asks it. A cut is a change to a shipped sheet ("After
+  the blocks they would not use. In every run the stage itself asks nothing (hard rule 1: run
+  alone, it is a build stage with its own `Build running` line): it adds `Sheet prune: waiting for
+  the student (_build/logs/sheet-prune.md)` to STATUS. When it ran on request with the student
+  present, the session asks once the stage has ended and its `Build running` line is out; in the
+  build, `08-practice` step 8's opening asks it. A cut is a change to a shipped sheet ("After
   shipping"), the index corrected with it, and the room it frees goes first to the final sheet's
   items. Log the answer, the blocks cut or `none cut`, and take the STATUS line out.
 - Publish the mock sheet (or the only sheet) privately with the Artifact tool, as `06-site` step
@@ -216,7 +218,10 @@ or a source path while a mock is untaken, the student looks away, so the confirm
 the look-back` and asked there (as `10-polish` step 6 holds a question). In the build, the
 STATUS line reads `Review view: set to <N> minutes (measured), for the student to confirm`, and
 `08-practice` step 8's opening asks it, beside its other opening offers (the student is present at
-the cram night, and the minutes give away no answer). The student keeps the minutes or sets new
+the cram night, and the minutes give away no answer). Run alone, this stage is a build stage too,
+with its own `Build running` line, so it writes the same STATUS line and asks nothing; when it ran
+on request with the student present, the session asks once the stage has ended and its `Build
+running` line is out (as step 6's prune list). The student keeps the minutes or sets new
 ones (fewer than the measured count can't hold the view's untagged content, which they hear
 first); new ones go on PLAN.md's `Review view:` line and the view is rebuilt from item 2 here
 (more minutes tag more) through item 5. Either way, the STATUS line comes out once they answer. Otherwise (a pass once every mock is taken, a `09-tutor` patch's merge, `08-practice` step 8.4) the main session asks the student.
@@ -253,7 +258,7 @@ first); new ones go on PLAN.md's `Review view:` line and the view is rebuilt fro
 
 `check_pdf.py` passes on each sheet with every warning judged; the audit's findings are applied;
 the page images look right, every figure's axes labelled and each index line where its block
-printed; the prune list is written, its answer logged or its `Sheet prune:` line in STATUS; the
+printed; the prune list is written and its `Sheet prune:` line is in STATUS; the
 published sheet's URL is in STATUS (an HTML sheet); it is committed. Or, with no sheet allowed, the Review view when PLAN.md gives it minutes: tagged in the
 notes and the fragments, `fidelity.py`, `assemble.py` (within the minutes), `linkcheck.py --html`
 and `verify_page.mjs` passing, both views' screenshots seen, the notes page republished to its URL,

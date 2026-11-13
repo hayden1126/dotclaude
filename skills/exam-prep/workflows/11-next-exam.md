@@ -181,7 +181,7 @@ In this order, each item logged as it lands:
    finished exam's: take each `.rv` marker out of `notes/` and each class `rv` out of
    `_build/frag/`, the blocks kept (`07-cheatsheet` tags this exam's afresh, and `assemble.py`
    refuses a tag while PLAN.md's line says `none`). Move STATUS's attempt, miss and
-   final-sheet lines into `practice/<old-slug>/attempts.md`. Then the listing shows none of them at
+   final-sheet lines and its `Mocks declined:` line into `practice/<old-slug>/attempts.md`. Then the listing shows none of them at
    the top level (`practice/tutor/` and `_build/verify/set_key.py` stay: they are the course's
    homework). Why: every rule that finds the current exam's mocks, keys and sheets reads a top-level
    name (`practice/*-key.md`, `practice/mock-<slug>.md`, `cheatsheet/<exam-slug>-mock.pdf`), and
@@ -222,8 +222,12 @@ In this order, each item logged as it lands:
 3. **Reset STATUS.** Take out every line about the finished exam's build, mocks, sheets and cram
    night: `Stage 08 built`, `Reopened build:`, `Tutor:`, `Polish:`, `Source added:`, `Skip asked:`,
    the final-sheet items, a mock sheet logged as changed or to print again, each `Key checked:`
-   and `Reference changed:` line, the `Watch list:` line and the key rechecks' part ids (item 1
-   moved the attempts). An `Unverified:` line stays: its material is still unchecked
+   and `Reference changed:` line, the `Watch list:` line, the key rechecks' part ids, and any of
+   the build's judgment calls still waiting for the student: a `Sheet prune:` line (its sheet is
+   archived), a `Review view: set to` line (the minutes were the finished exam's; step 3's question 5
+   sets this exam's on PLAN.md's line) and a `Figure shortlist:` line (the backbone keeps the shortlist, and a
+   `10-polish` figure pass stays on offer). Item 1 moved the attempts and the `Mocks declined:`
+   line. An `Unverified:` line stays: its material is still unchecked
    ("A source added unverified"). Keep the notes page's URL line (same URL from here on), and add
    the finished exam's sheet, mock page and watch list URLs to the `Earlier exams:` line (start it
    when there is none), as `<old exam>: <name> <URL>, ... (tag exam/<old-slug>)`. Set the

@@ -120,7 +120,7 @@ naming the id that replaces it, if one does.
 | FB-092 | When the student reads in a plain-text tool, write for it: no LaTeX, pipe tables, cross-references as text. | S10, w04 | A4.C3, A1.G14 |
 | FB-093 | Ship one combined file next to the per-topic files when the student studies from one document. | w04 | A1.C9 |
 | FB-094 | Each subsection but the Must-know list opens with a concise box: a few labelled bullets (Rule, Why, Steps, Example, Trap, Answer form, only those that apply), every symbol defined in it, and the full explanation after it, which the box never replaces. The Review view shows every box. | S34, S18, C6, w04, w10, t:convert, t:briefs, verify_page.mjs | I1.C10, I3.C3, J1.C4, I2.C13, I2.C14, I2.C15, I1.C24 |
-| FB-095 | The student's text carries no writer leftovers: the build refuses tool-call markup, a feedback-log id in parentheses and a CHASSIS id right after `CHASSIS` or `rule`, and only warns on a bare STYLE, lesson or backlog id, since a course writes a state (S1) or a lecture (L3) the same way. | S16, w04, assemble.py | J1 (section 2) |
+| FB-095 | The student's text carries no writer leftovers: the build refuses tool-call markup, a feedback-log id in parentheses and a CHASSIS id right after `CHASSIS`, and only warns on a bare STYLE, lesson, backlog or CHASSIS id, `rule (C3)` among them, since a course writes a state (S1), a lecture (L3) or the product rule (C3) the same way, and a rebuild never fails on course text (FB-015). | S16, w04, assemble.py | J1 (section 2) |
 
 ## 05-verify
 

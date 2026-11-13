@@ -137,7 +137,9 @@ evidence ids.
     question 7), PLAN.md's line and three briefs; the rankers search and judge in two parts and
     the main session fetches between them (L07, L02), in a build with `allowed_domains` only,
     into a fetch log started fresh each run; a gap wave writes its own `-gaps` candidate and
-    ranking files, which the merge and the cut-loss reviewer read too; `11-next-exam` step 5
+    ranking files, which the merge and the cut-loss reviewer read too, and a rerun in the same
+    exam takes the last run's candidate, ranking and annotation files and merge log out first,
+    so neither reads them as its own; `11-next-exam` step 5
     archives it with the finished exam and lists its URL under `Earlier exams:`, so a new run
     publishes to a new URL; run alone it waits while a `Build running` line stands, a polish
     pass's included, never on a finished pass's `Polish:` line (hard rule 1); L72 to L75 are its tool lessons, which W36 to W39 cite
@@ -145,7 +147,8 @@ evidence ids.
     I1.C9, I1.C13, I1.C14, I1.C15, I1.C16, I1.C17, I1.C18, I1.C25, I1.C26, I3.C2, I3.C3, I1.G4,
     I1.G5, I1.G6, I1.G7, I3.G7).
   - FB-144, FB-145, FB-146: the sheet's index, its figure pass with every axis labelled, and its
-    prune list; FB-141 drops the cram order's map of the sheet, which the index replaces (I.O,
+    prune list, which the stage never asks in any run (hard rule 1): its STATUS line is asked
+    once a stage run alone has ended, or at `08-practice` step 8's opening; FB-141 drops the cram order's map of the sheet, which the index replaces (I.O,
     I1.C21, I1.C22, I1.C23, I3.C5).
   - FB-164, FB-192: tutor answers short by default in labelled bullets, symbols defined at first
     use, an overloaded letter named apart, no LaTeX delimiters or HTML tags in chat (J1.C4, I1.C10,
@@ -153,7 +156,10 @@ evidence ids.
   - FB-166, FB-160: a gap goes to the tutor log at once as a `proposed` line, offered with the
     others as one patch every five questions; a pointer names the page's section, never a file
     line (I1 (section 2)).
-  - FB-195: a declined mock, `08-practice` step 8 and `07-cheatsheet`'s final sheet (I1.C2, I3.C1).
+  - FB-195: a declined mock, `08-practice` step 8 and `07-cheatsheet`'s final sheet; at a reopen,
+    `11-next-exam` step 5 moves its STATUS line to the archive with the attempts and takes out
+    the round's other lines waiting for the student (the prune list's, the set minutes', the
+    figure shortlist's) (I1.C2, I3.C1).
   - FB-158: the cram night names the one sheet to print, and the cram order's Tonight section is
     the exam-morning card; intake question 4 asks the room and what is banned, and so does the
     reopen's (I1.C1, I1.C29, I3.C24).
@@ -165,13 +171,15 @@ evidence ids.
   - FB-118 and L30: STATUS records each artifact's owner and sharing state; a URL that can't be
     updated gets a new private artifact, and the old one is marked stale (I3.C6, I2.C29, I2.C32,
     I2.G1, I2.G2, I3.G5).
-  - FB-095: `assemble.py` refuses tool-call markup, a feedback-log id and a CHASSIS id right after
-    `CHASSIS` or `rule` in the notes, and only warns on a bare STYLE, lesson or backlog id, which a
-    course writes for its own things; STYLE S16 says so (J1 (section 2)).
+  - FB-095: `assemble.py` refuses only tool-call markup, a feedback-log id in parentheses and a
+    CHASSIS id right after `CHASSIS` in the notes, and only warns on a bare STYLE, lesson, backlog
+    or CHASSIS id, one after `rule` among them, which a course writes for its own things, so a
+    rebuild never fails on course text (FB-015); STYLE S16, `04-write` and the Write brief say so
+    (J1 (section 2)).
   - FB-094 and FB-075: STYLE S34, the concise box (CONVERT's box, CHASSIS C6, the Review view
     shows each box untagged and counts it toward its minutes, `07-cheatsheet` setting measured
     minutes when the boxes alone pass them, a build's set minutes asked at `08-practice` step 8's
-    opening, intake question 5 and FB-143 saying so, `10-polish`'s
+    opening, a stage run alone's once it has ended, intake question 5 and FB-143 saying so, `10-polish`'s
     box pass, the briefs), and S18 reworded "Concise, never
     compressed" (I1.C10, I3.C3, J1.C4, I2.C13, I2.C14, I2.C15, I1.C24).
   - FB-062, FB-115 and FB-125: STYLE S11 widened to diagram first, `03-backbone` step 5's sweep
@@ -189,6 +197,10 @@ evidence ids.
     I3.G3).
   - L76: on WSL a file opens for the student with `explorer.exe` and `wslpath -w`, sandbox off,
     its exit status 1 normal (I1.C3, I1.G12, I2.C21, I2.G6).
+  - K75: `12-retro` step 2 takes a parent folder's transcripts with their own window, filtered by
+    content (a shard kept only when it names the hub, each drop logged); step 3 gives a hub with
+    long records a records-only reader, spawned beside its shard readers, which then skip the
+    records (round 1 retro, I3).
   - The chassis: the column gets room at its foot so the last subsection reaches the spy line,
     and the closed drawer drops its shadow (part of K61).
   - SKILL.md: the watch list in the stage map, `_build/q-only/`, `_build/img/`, `_build/watch/`

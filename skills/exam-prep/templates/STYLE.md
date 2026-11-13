@@ -82,9 +82,10 @@ from later corrections. A retired rule is struck through and keeps its number. A
 - **S15. Define every symbol and acronym at its first use.** Gloss logic symbols and unusual
   notation in plain words where they appear.
 - **S16. No exam-writer jargon** in text the student reads. Never write a skill rule id, such as
-  (S12) or (FB-123), in the student's text: the build refuses an FB id, and a C id right after
-  `CHASSIS` or `rule`, and only warns on a bare S, L or K id, since a course writes a state (S1)
-  or a lecture (L3) the same way (FB-095).
+  (S12) or (FB-123), in the student's text: the build refuses an FB id in parentheses and a C id
+  right after `CHASSIS`, and only warns on a bare S, L, K or C id, `rule (C3)` among them, since a
+  course writes a state (S1), a lecture (L3) or the product rule (C3) the same way, and a rebuild
+  never fails on course text (FB-095, FB-015).
 - **S17. Never coin labels for examples** (T1, Tree A). Name an example by its source page or its
   shape ("the tree on D7 p.34", "the four-node graph"). A label the course's own sources use is
   the course's term (S25), not a coined one.
