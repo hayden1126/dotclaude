@@ -280,7 +280,8 @@ rows from the new Depth lines. Items 4 to 6 run as for any pass.
    sections' screenshots seen; its republish waits for step 7.1. A rebuild over the Review view's
    minutes with no `.rv` tag left gets new minutes as `07-cheatsheet`'s "Tag the review" opening
    says: asked, or while a mock is untaken set and logged `held for the look-back`.
-5. That section's item 4: the questions check when the pass changed the notes,
+5. That section's item 4: the questions check when the pass changed the notes, on the files it
+   names (each unattempted set's extract and own solutions file),
    and while a mock is untaken the leak compare with the pass's baseline file, never a new
    baseline (a `.tex` is read as its source). A questions hit is reworded with fresh numbers and
    setup (S7); a new hit on a number, order or table answer is a leak, reworded. Either reword is

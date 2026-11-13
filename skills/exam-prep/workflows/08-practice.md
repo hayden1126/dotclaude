@@ -650,8 +650,11 @@ The products, each one the hub has:
      lines fixed in `practice/videos.json`, then "Watch list" item 6 (`videos.py` exits 0, the
      page's checks, and its leak check while a mock is untaken).
 4. **The checks.** When the notes changed, `05-verify` step 5's questions check prints QUESTIONS
-   OK (FB-191): `mock_leak.py --questions` on the unattempted sets that step lists from
-   MANIFEST.md, skipped when there is none, its `--pages` the notes Markdown (`notes/*.md`). A hit is
+   OK (FB-191): `mock_leak.py --questions` on the files that step passes, each unattempted set's
+   extract and its own solutions file (`_build/extract/<name>.md` and `_build/solutions/<name>.md`,
+   never an attempted set's), the sets listed from MANIFEST.md, skipped when there is none, its
+   `--allow` the lecture extracts the notes cite and its `--pages` the notes Markdown
+   (`notes/*.md`). A hit is
    reworded with fresh numbers and setup (S7) and repeats from item 2. While a mock is untaken, also
    the leak compare: run item 1 again and compare the hit lines with the baseline's (count them,
    since every hit on the notes reads "(the page)" and a second copy of an answer adds one). A new

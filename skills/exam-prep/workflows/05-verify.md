@@ -31,8 +31,13 @@ derivations.
   every part covered once before anything uses the reference.
 - A FAIL means a convention the reference doesn't model yet or a misread extract: fix that. An
   expected value changes only when a 300 dpi re-read of its page shows the extract or solutions
-  file misread it (fix that file too), or when the official answer itself is wrong (an erratum, logged in
-  STATUS and in the backbone's Conventions block). Never change one to match the checker.
+  file misread it (fix that file too), or when the official answer itself is wrong (an erratum).
+  Never change one to match the checker. An erratum is logged in STATUS by doc, page and part
+  (`HW1S p.2, HW1 Q2a: erratum`), and the corrected value goes only in the part's block in its
+  set's solutions file, on an `Erratum: <the corrected value, and why>` line under the
+  `Solution [` line, the official line kept as it stands. The backbone's Conventions block names
+  the doc and part only, never a value (`03-backbone` step 4): mock writers and the sheets' gap
+  scan read the backbone, and STATUS too names no value.
 - Worked examples come from `<skill>/templates/verify-examples.py`, copied to
   `_build/verify/examples.py` (`03-backbone`, step 7). It writes `examples.out.md` and replaces
   it only when the run succeeds and covers every worked example the backbone lists.
@@ -75,8 +80,10 @@ Each brief names the sets the student hasn't attempted (each one whose own MANIF
 `{{SOLUTIONS FILES}}` slot names the solutions files that hold the
 blocks of the question parts and answers docs the section's extract blocks cite: for each part
 the coverage matrix maps into the section (`[HW1 Q2a]`) and each answers doc page its blocks cite
-(`[HW1S p.2]`), the file under `_build/solutions/` holding its `### [<id>]` block, found by block
-id (`grep -l -F '### [HW1 Q2a]' _build/solutions/*.md`), or `none`. Its `{{ANSWER FILES}}` slot
+(`[HW1S p.2]`), the file under `_build/solutions/` holding its `### [<id>]` block: for a part,
+its set's solutions file, `_build/solutions/<name>.md` under the set's extract name; for an
+answers page, the file found by block id (`grep -l -F '### [HW1S p.2]' _build/solutions/*.md`);
+or `none`. Its `{{ANSWER FILES}}` slot
 names each file MANIFEST.md marks `Answers: yes` that solves one of those parts: wording that
 tracks an official solution, its part's block in those solutions files, is a finding (FB-071),
 reworded from the slide or derived plainly in step 5. Findings come back ranked blocker, major,
@@ -130,29 +137,25 @@ order (`08-practice`) get the same audit when they exist.
 - Before anything is published, the questions check: check the notes against every set the
   student hasn't attempted (FB-191), since a worked example has rebuilt a practice question's
   setup, and a gloss has named a practice step. Those sets, all read from MANIFEST.md: each
-  question set (one a `solutions to` note names, a past exam holding its own key, or a set with no
-  answers anywhere) whose own row's Answers cell lacks `attempted`. A set records its attempt in
-  its own row only, as `no, attempted YYYY-MM-DD` (no key of its own) or `yes, attempted
+  question set (one an answers file's Key cell `for ...` names, a past exam holding its own
+  key, or a set with no answers anywhere) whose own row's Answers cell lacks `attempted`. A set
+  records its attempt in its own row only, as `no, attempted YYYY-MM-DD` (no key of its own) or `yes, attempted
   YYYY-MM-DD` (a doc holding its own key): `00-intake` and `11-next-exam` write it from the
   student's word, `09-tutor` Step 7 when its last part is done. A separate answers file's row
   stays `yes` and never records an attempt, since it may solve several sets.
-  With no such set, skip the run and log `no unattempted set` in STATUS. Otherwise give each set's
-  extract (`_build/extract/<name>.md`) and each solutions file that holds a block of its parts,
-  `### [<doc> <part>]` (find them by block id: `grep -l -F '### [<doc> ' _build/solutions/*.md`,
-  since an answers file that solves several sets has its own agent, which writes every one of
-  their blocks to `_build/solutions/<answers file name>.md`), as question files, and the lecture
-  extracts the notes cite as
-  allowed sources:
-  `python3 -I <skill>/scripts/mock_leak.py --questions <the sets' extracts and solutions files>
-  --allow <the lecture extracts> --pages notes/*.md`. The main session runs it, since reviewers
-  never open `practice/`.
+  With no such set, skip the run and log `no unattempted set` in STATUS. Otherwise give each
+  unattempted set's extract (`_build/extract/<name>.md`) and its own solutions file
+  (`_build/solutions/<name>.md`, the same `<name>`: one file per set, so it holds that set's part
+  blocks alone) as question files, and the lecture extracts the notes cite as allowed sources:
+  `python3 -I <skill>/scripts/mock_leak.py --questions <the unattempted sets' extracts and
+  solutions files> --allow <the lecture extracts> --pages notes/*.md`. An attempted set's
+  solutions file is never passed, nor is a multi-set answers file's own file (its page blocks hold
+  no part's solution). The main session runs it, since reviewers never open `practice/`.
   Each hit names a notes line and a set's part, never the text. The Review view (`07-cheatsheet`)
   only tags blocks of the notes, so this check covers it, and every later change runs it as
-  `08-practice`'s "Changing the notes or a sheet" item 4 says.
+  `08-practice`'s "Changing the notes or a sheet" item 4 says, with these same files.
   A hit is a blocker: rewrite the passage with fresh numbers and a fresh setup (S7), and rerun
-  until it prints QUESTIONS OK. One file may hold several sets' blocks, so a hit can come from an
-  attempted set's solutions block: that one is allowed, since the notes may quote an attempted
-  set's official solution, and is logged in STATUS by its notes line and part. A passage cut or held back instead, which the student may want
+  until it prints QUESTIONS OK. A passage cut or held back instead, which the student may want
   back once they attempt the set, goes to `_build/held.md`, one entry per passage: its section,
   the set it overlapped and the original text. It is quarantined (hub CLAUDE.md), and `09-tutor`
   offers it back once that set is attempted (its Step 7). A hub whose CLAUDE.md lacks the
@@ -165,11 +168,12 @@ order (`08-practice`) get the same audit when they exist.
 
 ## Official solutions that arrive late
 
-Extract them first, as `02-extract` step 1 says (hard rule 6): an answers file that solves one
-set shares that set's agent, which writes the pair again, its extract and
-`_build/solutions/<name>.md`; one that solves several sets gets its own agent, which writes
-`_build/solutions/<answers file name>.md`, and each set's own agent then writes its extract
-again. Add them to the self-test (and rerun
+Extract them first, as `02-extract` step 1 says (hard rule 6), after `01-ingest` step 3 writes
+the answers file's Key cell: an answers file that solves one set shares that set's agent, which
+writes the pair again, its extract and `_build/solutions/<name>.md`; one that solves several sets
+gets its own agent, which writes each set's `_build/solutions/<name>.md` and
+`_build/solutions/<answers file name>.md` for its own pages, and each set's own agent then writes
+its extract again. Add them to the self-test (and rerun
 `extract_check.py --parts` for `PARTS`), diff every answer against the notes and any solved key,
 and record the verdict in STATUS: what matched, what was wrong, what changed (FB-107). One that changes the reference or a convention reruns the examples as in step 5.
 
