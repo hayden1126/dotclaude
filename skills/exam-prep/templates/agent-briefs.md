@@ -143,7 +143,10 @@ that must not see answers read the extract, so it holds none.}}
   that locator, `### [PE3 Marking scheme] ...`, and goes to the solutions file, as does a block
   whose locator is one of those names followed, after any spaces, by a character that is no
   letter or digit (`### [PE3 Marking scheme (continued)]`, `[PE3 Marking scheme: Q2]`, `[PE3
-  #/5/0]`) or by `Q` and a digit (`### [PE3 Marking scheme Q2] ...`); every other section (the
+  #/5/0]`) or by `Q` and a digit (`### [PE3 Marking scheme Q2] ...`). The one exception: a
+  locator naming a key section is key material whatever page reference it carries (`### [PE3
+  Marking scheme p.2]` goes to the solutions file too), and a name given with a page reference
+  (`Answers p.4`) is the locator of its block, `### [PE3 Answers p.4]`. Every other section (the
   instructions, a formula sheet, `Key formulas` under a key section `Key`) stays in the
   extract"}}. Every other page or section of {{SOLDOC}} (the cover, the rules, a formula sheet,
   an appendix table) gets its block in the extract, as any page does: the agents that must not

@@ -113,7 +113,9 @@ character that is no letter or digit (`### [PE3 Marking scheme (continued)]`, `[
 scheme: Q2]`, `[PE3 #/5/0]` under `sections: #/5`) or by `Q` and a digit (`[PE3 Marking scheme
 Q2]`) is key material too, and goes to the solutions file; `Key formulas` under `sections: Key`
 is not, and stays in the extract. The rule has one exception: a locator naming a key section is
-key material whatever page reference it carries (`[PE3 Marking scheme p.2]` is key). A `reserved`,
+key material whatever page reference it carries (`[PE3 Marking scheme p.2]` is key). A name in
+the Key cell that carries a page reference itself (`sections: Answers p.4`) matches its block,
+`[PE3 Answers p.4]`. A `reserved`,
 `pending` or `out` answers file solves nothing, nor does a row on a STATUS `Unverified:` line
 until it is verified. An answers file solves only in-scope sets: a `for ...` cell naming a
 `pending`, `reserved` or `out` set fails `KEY NAMES A SET NOT IN SCOPE` (step 3), since that set

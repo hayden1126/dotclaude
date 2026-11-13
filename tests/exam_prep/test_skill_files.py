@@ -256,6 +256,24 @@ class KeySectionRule(unittest.TestCase):
                 self.assertIn("after any spaces", before, (rel, before))
 
 
+class KeySectionPageReference(unittest.TestCase):
+    """The key-section rule's one exception: a locator naming a key section is key material
+    whatever page reference it carries (`[PE3 Marking scheme p.2]`), and a Key name that carries
+    a page reference (`sections: Answers p.4`) matches its block. Round 17 found it in 02 alone,
+    so the Extract brief, the MANIFEST legend and the CHANGELOG say it too."""
+
+    SITES = ("templates/MANIFEST.md.tmpl", "references/CHANGELOG.md", "workflows/02-extract.md",
+             "templates/agent-briefs.md")
+
+    def test_each_site_gives_the_exception(self):
+        for rel in self.SITES:
+            with open(os.path.join(SKILL, rel), encoding="utf-8") as f:
+                flat = " ".join(f.read().split())
+            for phrase in ("whatever page reference it carries", "Marking scheme p.2]",
+                           "Answers p.4"):
+                self.assertIn(phrase, flat, (rel, phrase))
+
+
 class HomeRule(unittest.TestCase):
     """Round 16: a set's home solutions file is the one beside each extract holding any block of
     that set, a page, section or slide block included, so a deck split into parts keeps a key

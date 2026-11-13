@@ -163,7 +163,9 @@ evidence ids.
     `SECTIONS KEY ON A PAGED DOC`, `PAGES KEY ON AN UNPAGED DOC`, `KEY SECTION NOT FOUND`); a
     locator naming a key section followed, after any spaces, by nothing, a character that is no
     letter or digit, or `Q` and a digit is key material (`Key formulas` under `sections: Key` or
-    `Marking scheme 2` is not). It warns on an
+    `Marking scheme 2` is not), and so is one naming a key section whatever page reference it
+    carries (`[PE3 Marking scheme p.2]`); a Key name with a page reference (`sections: Answers
+    p.4`) matches its block. It warns on an
     `Answer:` line in a solved doc's extract, and `extract_check.py --parts` feeds `05-verify`'s
     PARTS (FB-100). A set's attempt is recorded in that set's own row only, `no, attempted
     YYYY-MM-DD` (no key of its own) or `yes, attempted YYYY-MM-DD` (a doc holding its own key);
