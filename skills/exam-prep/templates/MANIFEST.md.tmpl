@@ -10,16 +10,16 @@ Counts come from disk (`pdfinfo`, `ls`), never from memory.
 - Renders: `_build/pages/<doc>/p-NNN.png` and `_build/text/<doc>/p-NNN.txt` (gitignored).
 - Originals: {{kept at WHERE | deleted YYYY-MM-DD after a SHA-256 match; `sources/` is the only copy}}.
 
-| Doc id | File | By | Pages | Scope | Answers | Rendered | Notes |
-|---|---|---|---|---|---|---|---|
-| D1 | `sources/lectures/{{FILE}}.pdf` | staff | {{N}} | in | no | yes | {{WHAT IT IS: "Lecture 4: search"}} |
-| D2 | `sources/lectures/{{FILE}}.pdf` | staff | {{N}} | in, PDF pp.1-{{K}} (last in-scope slide: PDF p.{{K}} = printed {{M}}) | no | yes | {{WHAT IT IS}}; {{WHY THE CUT}} |
-| HW1 | `sources/homework/{{FILE}}.pdf` | staff | {{N}} | in | no | yes | {{WHAT IT IS: "Homework 1: search"}} |
-| HW1S | `sources/homework/{{FILE}}.pdf` | staff | {{N}} | in | yes | yes | official solutions to HW1 |
-| ED | `sources/ed/ed-digest.md` | staff | n/a | in | no | n/a | Ed posts; cursor in `sources/ed/cursor.json` |
-| D9 | `sources/lectures/{{FILE}}.pdf` | staff | {{N}} | reserved: {{LATER EXAM}} | no | no | {{WHAT IT IS}}; raw copy only, never opened |
-| D10 | {{EXPECTED FILE}} | staff | | pending: in, PDF pp.1-{{K}} (through {{LAST SLIDE}}) | {{yes or no}} | no | {{WHAT IT IS}}; {{WHEN IT ARRIVES}} |
-| X1 | `sources/{{FILE}}` | staff | {{N}} | out | no | no | {{WHAT IT IS}}; {{WHY}} |
+| Doc id | File | By | Pages | Scope | Answers | Key | Rendered | Notes |
+|---|---|---|---|---|---|---|---|---|
+| D1 | `sources/lectures/{{FILE}}.pdf` | staff | {{N}} | in | no | - | yes | {{WHAT IT IS: "Lecture 4: search"}} |
+| D2 | `sources/lectures/{{FILE}}.pdf` | staff | {{N}} | in, PDF pp.1-{{K}} (last in-scope slide: PDF p.{{K}} = printed {{M}}) | no | - | yes | {{WHAT IT IS}}; {{WHY THE CUT}} |
+| HW1 | `sources/homework/{{FILE}}.pdf` | staff | {{N}} | in | no | - | yes | {{WHAT IT IS: "Homework 1: search"}} |
+| HW1S | `sources/homework/{{FILE}}.pdf` | staff | {{N}} | in | yes | for HW1 | yes | {{WHAT IT IS: "Homework 1 solutions"}} |
+| ED | `sources/ed/ed-digest.md` | staff | n/a | in | no | - | n/a | Ed posts; cursor in `sources/ed/cursor.json` |
+| D9 | `sources/lectures/{{FILE}}.pdf` | staff | {{N}} | reserved: {{LATER EXAM}} | no | - | no | {{WHAT IT IS}}; raw copy only, never opened |
+| D10 | {{EXPECTED FILE}} | staff | | pending: in, PDF pp.1-{{K}} (through {{LAST SLIDE}}) | {{yes or no}} | - | no | {{WHAT IT IS}}; {{WHEN IT ARRIVES}} |
+| X1 | `sources/{{FILE}}` | staff | {{N}} | out | no | - | no | {{WHAT IT IS}}; {{WHY}} |
 
 Topic cuts: {{none | one line each:}}
 - {{TOPIC}}: not on {{EXAM}} ({{SOURCE: Ed #N, a staff post, date | the syllabus, its line}});
@@ -35,37 +35,39 @@ Topic cuts: {{none | one line each:}}
   slides, sets and posts), `classmate` (a shared study guide), `textbook`, `student` (the student's
   own notes), or a few words of free text. Optional: a table without the column still reads, and
   its key then has no Made by column.
-- **Notes:** `<what it is>[; <remark>]`. What the source is, in a few words ("Lecture 4: search"),
-  is what the source key shows, the file name under it; with it empty the key shows the file name
-  alone. A remark on the row (why a range is cut, when a file arrives) follows a `;` and stays off
-  the page, so what it is holds no `;` of its own.
+- **Notes:** `<what it is>[; <remark>]`, free text that no script parses for answers. What the
+  source is, in a few words ("Lecture 4: search"), is what the source key shows, the file name
+  under it; with it empty the key shows the file name alone. A remark on the row (why a range is
+  cut, when a file arrives) follows a `;` and stays off the page, so what it is holds no `;` of
+  its own.
 - **Answers:** `yes` marks a file that holds answers (official solutions, a past exam's key).
-  - Notes say which sets a row answers in these exact forms, each in its own `;`-separated
-    clause, any other remark after a `;` ("Practice exam 1; key pp. 7-9; scanned"):
-    - `solutions to HW1, HW2 and HW3`: a separate answers file names the sets it answers, joined
-      by `,`, `&` or `and` (`official solutions to HW1` is fine too). Each name is a doc id of
-      this table: `extract_check.py` fails any other (`NOTE NAMES NO DOC`).
-    - `key p.N`, or `key pp. 7-9, 11` (items N or N-M, joined by `,`, `&` or `and`): a row with
-      no `solutions to` note answers itself (a past exam with its key) and names its key pages.
-    - `key inline`: each solution sits under its question on the same page, so no page is a key
-      page.
-    - `key sections`: a source without pages, such as a Word exam: its blocks titled `Key`,
-      `Answers` or `Solutions` are the key.
-  - `01-ingest` writes the key note after looking at the source, and `extract_check.py` fails a
-    self-answering row without one (`NO KEY NOTE`) and any other wording in such a clause
-    (`UNREAD NOTE`).
   - Only an in-scope row (`in` or `concepts only`) answers anything. Its answers are extracted into
-    `_build/solutions/` (every page of a separate answers file; a past exam's named key pages, and
-    each part's solution under its part), never into an extract. A past exam's other pages (the
-    cover, the rules, a formula sheet) stay in its extract (`02-extract`). Mock writers never read
+    `_build/solutions/`, one file per set beside its extract (every page of a separate answers
+    file; a past exam's key pages or sections, and each part's solution under its part), never
+    into an extract. A past exam's other pages (the cover, the rules, a formula sheet) stay in its
+    extract (`02-extract`). Mock writers never read
     `_build/solutions/`.
   - Nothing published quotes a set's official solution until the student has attempted every part
     of that set, which the set's own row then records in its Answers cell: `no, attempted
     YYYY-MM-DD` for a set with no key of its own (`HW1` above), `yes, attempted YYYY-MM-DD` for a
-    doc holding its own key (a past exam). A separate answers file's row (one with a `solutions
-    to` note) stays `yes` and never records an attempt, since it may solve several sets. Until the
+    doc holding its own key (a past exam). A separate answers file's row (Key `for ...`) stays
+    `yes` and never records an attempt, since it may solve several sets. Until the
     set's own row says `attempted`, `05-verify` step 5's questions check treats it as
     unattempted.
+- **Key:** what an Answers `yes` row answers and where its answers sit. `01-ingest` writes it after
+  looking at the file, in exactly one of these forms, and `extract_check.py` reads the whole cell:
+  - empty or `-`: not an answers doc (and a `pending` row until its file arrives);
+  - `for HW1, HW2 and HW3`: a separate answers file, naming the sets it solves, each a doc id of
+    this table (`KEY NAMES NO DOC` otherwise);
+  - `pp. 7-9, 11` or `p.N`: a doc holding its own key (a past exam), on those pages;
+  - `inline`: a doc holding its own key, each solution under its question on the same page, so
+    no page is a key page;
+  - `sections: Marking scheme, Answers`: a source without pages (a Word exam) whose key is the
+    sections with exactly those locators (`### [PE3 Marking scheme] ...`); a paged doc fails it
+    (`SECTIONS KEY ON A PAGED DOC`).
+  - `extract_check.py` fails an in-scope Answers `yes` row with an empty Key cell (`NO KEY`),
+    any other wording (`UNREAD KEY`), and a filled Key cell on a row whose Answers isn't `yes`
+    (`KEY WITHOUT ANSWERS`). A row on a STATUS `Unverified:` line solves nothing until verified.
 - **Topic cuts** name what the exam leaves out inside an `in` range, which no page range can say
   ("negative weights are not on Exam 1", from a staff post). They are a list under the table, never
   a second table, and scope like the rows: `03-backbone` marks the subsections a cut reaches and

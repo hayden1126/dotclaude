@@ -34,13 +34,17 @@ skill's sources-to-file use): the extract, and for a doc with official solutions
 file beside it (hard rule 6). One per deck or deck part, or per homework with its solutions. Keep
 the bracketed slots that apply and delete the rest.
 
-An answers file that solves several sets (`solutions to HW1, HW2 and HW3`, `02-extract` step 1)
-gets an agent of its own, from this brief with every SOLUTIONS slot kept: {{DOC}} names those
-sets, whose question pages it reads only for their part ids; {{SOLDOC}} is the answers file
-and {{OUT}} its name. Its End state, Artifact path and Format drop every line about the extract:
-it writes only {{ROOT}}/_build/solutions/{{OUT}}, one block per question part of each set plus
-the answers file's page blocks. Each set's own agent gets this brief with no SOLUTIONS slot and writes only
-its extract.
+An answers file that solves several sets (its MANIFEST.md Key cell `for HW1, HW2 and HW3`,
+`02-extract` step 1) gets an agent of its own, from this brief with every SOLUTIONS slot kept:
+{{DOC}} names those sets, whose question pages it reads only for their part ids, and it uses
+those ids as the extracts do, `### [<set> <part>]`; {{SOLDOC}} is the answers file. Its End
+state, Artifact path and Format drop every line about the extract: it writes one solutions file
+per set, {{ROOT}}/_build/solutions/<name>.md under that set's extract `<name>`, holding that
+set's part blocks, plus {{ROOT}}/_build/solutions/<answers file name>.md holding the answers
+file's page blocks. Each of those files gets its own first lines, `# <its one doc> solutions
+(extract)` (a header never names several docs) and a `Sources:` line, and its own closing
+`Coverage:` line. Each set's own agent gets this brief with no SOLUTIONS slot and writes only its
+extract. An agent may write several files; no file is written by two agents.
 
 ```text
 # Brief: transcribe {{DOC}} {{RANGE}}{{SOLUTIONS: plus {{SOLDOC}} {{SOLRANGE}}}} into {{OUT}}
@@ -126,15 +130,16 @@ that must not see answers read the extract, so it holds none.}}
     check runs when, or how a board is numbered; or "none">`
 - Last line: `Coverage: {{RANGE}}; N blocks; K image only (<why, per page>); U flagged unreadable.`
   (a flag's detail may follow, in parentheses).
-- {{SOLUTIONS: The answers pages of {{SOLDOC}} are {{KEY PAGES: for a separate answers file,
-  every page of it; for a doc with its own key (a past exam), the key pages MANIFEST.md's key note
-  names, given here as "pp. 7-9", or "none: each solution sits under its question on the same
-  page" for `key inline`, or for `key sections` (a source without pages, such as a Word exam)
-  "its key sections: each block whose locator names `Key`, `Answers` or `Solutions`, as in
-  `### [PE1 Key] ...`, goes to the solutions file; any other section (the instructions, a
-  formula sheet) stays in the extract"}}. Every other page or section of {{SOLDOC}} (the cover,
-  the rules, a formula sheet, an appendix table) gets its block in the extract, as any page
-  does: the agents that must not see answers read those pages there.
+- {{SOLUTIONS: The answers pages of {{SOLDOC}} are {{KEY PAGES: from {{SOLDOC}}'s MANIFEST.md
+  Key cell, given here: for a separate answers file (`for ...`), every page of it; for a doc with
+  its own key (a past exam), the pages the cell names, as "pp. 7-9, 11", or "none: each solution
+  sits under its question on the same page" for `inline`, or for `sections: ...` (a source
+  without pages, such as a Word exam) "its key sections, by their exact locators: Marking scheme,
+  Answers. Each one's block takes that locator, `### [PE3 Marking scheme] ...`, and goes to the
+  solutions file; every other section (the instructions, a formula sheet) stays in the
+  extract"}}. Every other page or section of {{SOLDOC}} (the cover, the rules, a formula sheet,
+  an appendix table) gets its block in the extract, as any page does: the agents that must not
+  see answers read those pages there.
 - The extract holds no answer, and the check fails each one it finds there. Never write in it a
   `Solution [` or `**Solution:**` line, a line that cites an answers page (`Pages:` lines aside),
   or a block for an answers page. A line that states an answer (`Answer: ...`, `Final answer:

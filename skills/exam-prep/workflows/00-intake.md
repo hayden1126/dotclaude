@@ -122,8 +122,9 @@ the plan:
 
 - **`MANIFEST.md`** from `<skill>/templates/MANIFEST.md.tmpl`: one row per source file with its
   scope (`in`, a page range ending at the last in-scope slide, `reserved`, `out`, `pending`) and
-  whether it holds answers. These rows are the one statement of scope: CLAUDE.md and PLAN.md point
-  to them and never restate them (FB-024). `01-ingest` fills the page counts from disk. A staff
+  whether it holds answers (its Answers cell; its Key cell stays empty until `01-ingest` step 3
+  fills it after looking at the file). These rows are the one statement of scope: CLAUDE.md and
+  PLAN.md point to them and never restate them (FB-024). `01-ingest` fills the page counts from disk. A staff
   statement that cuts a topic inside an `in` range goes under its Topic cuts.
 - **`CLAUDE.md`** from `<skill>/templates/hub-CLAUDE.md.tmpl`: the exam facts, the instructor's
   exam-format statement quoted with its source (the only basis for any claim about what the exam

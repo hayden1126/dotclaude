@@ -47,22 +47,26 @@ slide numbers next to PDF pages wherever the two differ (L04). Fill each row's N
 `<what it is>[; <remark>]`, what the source is in a few words ("Lecture 4: search") first, and its
 By, as the template's legend says: the page's source key shows both.
 
-Fill each row's Answers from intake's question 2 (`yes` for a file that holds answers). Its
-Notes take one of these exact forms, each in its own `;`-separated clause, any other remark after
-a `;`:
+Fill each row's Answers from intake's question 2 (`yes` for a file that holds answers), then its
+Key cell, after looking at the file's rendered pages (or, for a source without pages, its
+sections), in exactly one of these forms (the template's legend gives them too):
 
-- `solutions to HW1, HW2 and HW3`, for a separate answers file: the sets it answers, each a doc
-  id of this table, joined by `,`, `&` or `and` (`official solutions to` is fine too);
-- for a file that answers itself (a past exam with its key), after looking at its rendered pages:
-  `key p.N`, or `key pp. 7-9, 11` (items N or N-M, joined by `,`, `&` or `and`), as in "Practice
-  exam 1; key pp. 7-9";
-- `key inline`, when each solution sits under its question on the same page;
-- `key sections`, for a source without pages, such as a Word exam: its blocks titled `Key`,
-  `Answers` or `Solutions` are the key.
+- empty or `-`, for a doc that isn't an answers doc;
+- `for HW1, HW2 and HW3`, for a separate answers file: the sets it solves, each a doc id of this
+  table;
+- `pp. 7-9, 11` or `p.N`, for a doc holding its own key (a past exam) on those pages;
+- `inline`, when each solution sits under its question on the same page, so no page is a key
+  page;
+- `sections: Marking scheme, Answers`, for a source without pages, such as a Word exam: its key
+  is the sections with exactly those locators, each extracted as a block of that name
+  (`### [PE3 Marking scheme] ...`).
 
-Only the named key pages or sections go to `_build/solutions/`; the cover, the rules and a formula
-sheet stay in the extract (`02-extract`). `extract_check.py` fails a self-answering row without
-its key note (`NO KEY NOTE`) and any other wording in such a clause (`UNREAD NOTE`).
+Notes stay free text: nothing reads them for answers, so a Key form written there does nothing.
+Only the key pages or sections the Key cell names go to `_build/solutions/`; the cover, the rules
+and a formula sheet stay in the extract (`02-extract`). `extract_check.py` fails an in-scope
+Answers `yes` row with no Key form (`NO KEY`), a cell in any other wording (`UNREAD KEY`), a set
+name that is no doc id (`KEY NAMES NO DOC`), a filled cell on a row whose Answers isn't `yes`
+(`KEY WITHOUT ANSWERS`) and `sections: ...` on a doc with pages (`SECTIONS KEY ON A PAGED DOC`).
 
 ## Step 4: Originals
 

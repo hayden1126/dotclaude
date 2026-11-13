@@ -130,9 +130,11 @@ Draft each of these in `<root>`, as `00-intake` step 4 does, before showing anyt
   renumbered or reused: citations use them); the finished exam's rows `in` when this exam covers
   them, else `out` with "on <old exam>" as Notes' remark; each carried row's Notes as
   `<what it is>[; <remark>]`, what it is filled where the old row lacks it, and its By; Answers
-  cells carried, each set the student has attempted since marked in its own row's cell, `yes,
-  attempted YYYY-MM-DD` (a past exam holding its own key) or `no, attempted YYYY-MM-DD`, an
-  answers file's row left `yes` (question 2); topic cuts for this exam only. A
+  and Key cells carried (a row from before the Key column gets its Key cell as `01-ingest` step 3
+  writes it, and Notes keep only what it is and a remark), each set the student has attempted
+  since marked in its own row's cell, `yes, attempted YYYY-MM-DD` (a past exam holding its own
+  key) or `no, attempted YYYY-MM-DD`, an answers file's row left `yes` (question 2); topic cuts
+  for this exam only. A
   cumulative exam needs no other scope word: its old rows are `in`.
 - **`CLAUDE.md`**: its Exam facts become this exam's, from
   `<skill>/templates/hub-CLAUDE.md.tmpl`, with a line `Earlier exams:` naming each earlier exam,
@@ -345,8 +347,9 @@ build is this build's end, not a stage's.
 4. **Build**, for that source only. While a mock is untaken, the student looks away from this window
    from here to step 5's look-back: tell them first to come back when a reply's only line asks for
    `/clear`, and to type it before reading anything above that line. The MANIFEST.md change first,
-   then `01-ingest` steps 1 to 3, `02-extract` (a new set with solutions gets its solutions file
-   there, from the agent that writes its extract), then `03-backbone`
+   then `01-ingest` steps 1 to 3, `02-extract` (a new set with solutions gets its own solutions
+   file, `_build/solutions/<name>.md` beside its extract, from the agent that writes its extract, or
+   from its answers file's own agent when that file solves several sets), then `03-backbone`
    and `04-write` placing and
    writing the new material as rows 03 and 04 of "The build on a reopened hub" do: new sections
    after the last, or a subsection before an old section's Must know, with their ids,
@@ -376,7 +379,8 @@ build is this build's end, not a stage's.
    its commit is made (`02 done`), each product's (`page done`, `sheets done`, `cram order done`),
    and `step 4 done` after the last. Before
    `step 4 done`, that section's item 4 questions check prints QUESTIONS OK on the notes as they
-   now stand (FB-191), so
+   now stand (FB-191), on the files it names (each unattempted set's extract and own solutions
+   file, a new set's included), so
    step 5's republish carries no hit. With no mock untaken, a sheet's change is shown to the
    student before it is made (FB-137). While one is, every change to the notes or a sheet runs
    `08-practice`'s "Changing the notes or a sheet" with the untaken mocks' keys, its item 4
@@ -511,9 +515,9 @@ fresh session answers from STATUS, then runs step 7.5.
    otherwise another tab wrote in between: take both lines out, commit, and stop, and the student
    asks again.
 2. **Ingest** the doc as `01-ingest` steps 1 to 3 do: copied in by name, rendered, and its
-   MANIFEST.md row, `in` with the doc id item 1 picked and its count from disk, its Answers cell as
-   the template's legend says, its Notes what the source is, then `;` and who put it in scope (a staff
-   post, or the student's word, quoted).
+   MANIFEST.md row, `in` with the doc id item 1 picked and its count from disk, its Answers and
+   Key cells as the template's legend says, its Notes what the source is, then `;` and who put it
+   in scope (a staff post, or the student's word, quoted).
 3. **Write**, the notes only, in the Write brief's Format: a new section after the last, or a
    short subsection just before an old section's Must know, placed and named as "The build on a
    reopened hub" row 03 says, any text naming the moved Must know by number updated. Each
@@ -540,7 +544,8 @@ fresh session answers from STATUS, then runs step 7.5.
    section says with the untaken mocks' keys: its baseline (item 1) before the first write, its
    values as item 3 here says, and its compare (item 4) passed before any commit, a hit on a quoted
    value reworded by leaving the value out, its citation kept. Then that section's questions check
-   prints QUESTIONS OK (FB-191), a hit reworded the same way, before item 5's commit and
+   prints QUESTIONS OK (FB-191) on the files it names (each unattempted set's extract and own
+   solutions file), a hit reworded the same way, before item 5's commit and
    republish.
 5. **Commit**, once: the material (its notes, fragment and page), its backbone headings, its
    MANIFEST.md row and, in STATUS, `Unverified: <doc>, <section ids>, <date>` in place of the `Skip

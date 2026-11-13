@@ -16,7 +16,7 @@ picks it up.
   `_build/logs/tutor.md` for where the last walk-through or quiz stopped (the log wins over a
   Tutor line it has moved past). When the student says where they are ("we finished Q1 and Q2,
   start with Q3a"), their word wins: log it.
-- PLAN.md's Checker line; MANIFEST.md's Answers column and its `solutions to <doc>` notes; hub
+- PLAN.md's Checker line; MANIFEST.md's Answers and Key columns; hub
   CLAUDE.md's exam-format statement and Logistics line.
 - The mocks. A mock is untaken while its file `practice/mock-<slug>.md` (not a `-key.md` file)
   exists and STATUS records no attempt of it (`08-practice` step 8.2 records each one, its misses
@@ -105,11 +105,11 @@ Settle it before the first part:
 
 - A taken mock: its key, `practice/mock-<slug>-key.md`. An untaken mock is never walked through:
   it is a timed rehearsal (`08-practice` step 8.1).
-- A set whose official solutions are extracted (MANIFEST.md marks their file `Answers: yes`, with
-  `solutions to <doc>` in its Notes, or the set's own row `Answers: yes` with no note, a past exam
-  with its key): the part's block, `### [<doc> <part>]`, in whichever file under
-  `_build/solutions/` holds it (find it by its block id, `grep -n -F '### [<doc> <part>]'
-  _build/solutions/*.md`: it need not share the set's extract name), its `Solution [` line and the
+- A set whose official solutions are extracted (MANIFEST.md marks their file `Answers: yes`, its
+  Key cell `for <doc>`, or the set's own row `Answers: yes` with a Key cell of its own pages,
+  `inline` or `sections: ...`, a past exam with its key): the part's block, `### [<doc> <part>]`,
+  in `_build/solutions/<name>.md`, `<name>` being the set's extract name (find the line with
+  `grep -n -F '### [<doc> <part>]' _build/solutions/<name>.md`), its `Solution [` line and the
   working under it. A block reading `No official solution.` sends the part to the next source.
 - Any other set, with a checker: its values from the reference, before the first part (hard rule 3),
   once `selftest.py` prints `ALL PASS` (`05-verify` step 1) and no build runs (Step 1). Copy
@@ -404,11 +404,12 @@ change itself waits for Step 5.5.7.
 ## Step 6: Official solutions that arrive
 
 During a build (Step 1) this waits for the build's end, as a line under the log's `##
-Waiting checks`. Run `01-ingest` for the file (its MANIFEST.md row `Answers: yes`, `solutions to
-<doc>` in Notes) and `02-extract` for the set again with its solutions, as its step 1 says: an
+Waiting checks`. Run `01-ingest` for the file (its MANIFEST.md row `Answers: yes`, its Key cell
+`for <doc>`) and `02-extract` for the set again with its solutions, as its step 1 says: an
 answers file that solves this set alone shares its agent, which writes the pair (the extract,
 and the solutions file with each solution under its part's block id); one that solves several
-sets gets its own agent, which writes only the answers file's solutions file.
+sets gets its own agent, which writes each set's solutions file and one for its own pages, while
+each set's own agent writes only its extract.
 Then `05-verify`, "Official solutions that arrive late", which adds them to the self-test and
 diffs every answer against the notes and any `practice/tutor/` values file. That
 check shows answers: the self-test's new lines show in the edit, a failing line prints both values,
@@ -442,7 +443,7 @@ answers file's row, which may solve several sets.
   together, that set's own MANIFEST.md row records it in its Answers cell, with today's date: a
   set with no key of its own (Answers `no`) becomes `no, attempted YYYY-MM-DD`, and a doc that
   holds its own key (Answers `yes`, a past exam) becomes `yes, attempted YYYY-MM-DD`. A separate
-  answers file's row (one with a `solutions to` note) stays `yes` and never records an attempt,
+  answers file's row (Key `for ...`) stays `yes` and never records an attempt,
   since it may solve several sets. The notes and sheets may quote the set's official solution from
   then on (`04-write`), and `05-verify` step 5's questions check reads these cells. A check
   waiting on the set (Step 6) runs then. During a build the cell waits under `## Waiting checks`
