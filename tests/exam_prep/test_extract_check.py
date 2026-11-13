@@ -54,7 +54,13 @@ question block), not only its question blocks, so a page-only set or a deck spli
 extracts has a home; a stem's, a single-set answers page's or a key block whose set has no block
 in any extract fails NO HOME FILE, and KEY SECTION NOT FOUND looks in every home. A key
 section's locator is key material whatever page reference it carries (`Marking scheme p.2`).
-AN ANSWERS PAGE IN AN EXTRACT names the block's home, not the extract's own solutions file."""
+AN ANSWERS PAGE IN AN EXTRACT names the block's home, not the extract's own solutions file.
+
+Review round 17: an in-scope answers file keyed for a pending, reserved or out set fails KEY NAMES
+A SET NOT IN SCOPE, so NO HOME FILE's "extract <SET> first" is said only of an in-scope set; a
+question block labelled with an answers file's id fails ANSWERS FILE ID ON A QUESTION wherever it
+sits; a `sections:` name's page reference is dropped as the locator's is; `--leak-files` prints
+the questions check's files from the computed homes (LeakFiles)."""
 import contextlib
 import importlib.util
 import io
