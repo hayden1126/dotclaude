@@ -278,7 +278,7 @@ Then:
    rebuild and checks, the republish to the same URL; a rebuild over the Review view's minutes is
    untagged as item 3 says, or with no `.rv` tag left, new minutes as `07-cheatsheet`'s "Tag the
    review" opening says: set and logged for the student to confirm in this build, which is
-   unattended, and asked after step 8.4, with the student present). Plain-text notes have no
+   unattended, and asked in step 8's opening, with the student present). Plain-text notes have no
    page: the cram order stays a file. This item runs on its own: after items 1 to 3 here, after step 8.4, and
    after items 1 and 2 for any other later change to the cram order's tiers, rows or skip list. A
    change to the cram order inside "Changing the notes or a sheet" (a row that quotes the changed
@@ -396,7 +396,9 @@ and offers the checks it held (`09-tutor` step 1's Patches and Waiting checks bu
   (`03-backbone` step 5.4): the log's path, and a `10-polish` figure pass offered for the
   student's adds and cuts, run when they choose; a no is logged and the line taken out. Without a
   sheet, a `Review view: set to` line (`07-cheatsheet`'s "Tag the review"): the minutes the build
-  set, and that the confirm comes after step 8.4.
+  set, asked now, since they give away no answer: kept, or new ones on PLAN.md's line and the
+  Review view rebuilt as that section's opening says; the line comes out of STATUS once the student
+  answers.
 - Ask what the student has already read, and start from there: a row or a tier they say is read is
   skipped tonight, not deleted. A subsection they name that no row reads goes on the cram order's
   `**Read already:**` line, and step 7 item 1 reruns; the map doesn't show that line, so it needs
@@ -544,7 +546,8 @@ merge, as that step says.
    the exam sheet, and the card's sheet item names it. The final-sheet items STATUS holds go on only
    once the student hears which untaken mocks' parts each would spoil (STATUS names each item's
    mock and part, never an answer) and says to add them: then step 8.3 builds the final sheet with
-   them, the card names it, and step 7's items 1 and 2 rerun.
+   them, the card names it, and step 7's items 1 and 2 rerun. The Review view's minutes wait on no
+   attempt: this step's opening asked them.
 2. Record the attempt in STATUS: the mock, then each miss (the part, and why it went wrong), or
    `no misses`, or `misses: from the walk-through` while `09-tutor` walks the student through it
    (its log's misses replace that before step 3). From here the mock counts as taken.

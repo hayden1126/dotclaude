@@ -165,7 +165,8 @@ evidence ids.
     course writes for its own things; STYLE S16 says so (J1 (section 2)).
   - FB-094 and FB-075: STYLE S34, the concise box (CONVERT's box, CHASSIS C6, the Review view
     shows each box untagged and counts it toward its minutes, `07-cheatsheet` setting measured
-    minutes when the boxes alone pass them, intake question 5 and FB-143 saying so, `10-polish`'s
+    minutes when the boxes alone pass them, a build's set minutes asked at `08-practice` step 8's
+    opening, intake question 5 and FB-143 saying so, `10-polish`'s
     box pass, the briefs), and S18 reworded "Concise, never
     compressed" (I1.C10, I3.C3, J1.C4, I2.C13, I2.C14, I2.C15, I1.C24).
   - FB-062, FB-115 and FB-125: STYLE S11 widened to diagram first, `03-backbone` step 5's sweep

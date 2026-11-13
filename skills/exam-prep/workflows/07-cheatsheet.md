@@ -214,9 +214,12 @@ The student can't be asked during an unattended build (hard rule 1: a build stag
 `11-next-exam` source path among them), nor in a `10-polish` pass while a mock is untaken. In a pass
 or a source path while a mock is untaken, the student looks away, so the confirm is logged `held for
 the look-back` and asked there (as `10-polish` step 6 holds a question). In the build, the
-STATUS line reads `Review view: set to <N> minutes (measured), for the student to confirm`;
-`08-practice` step 8's opening tells the student, and the confirm is asked after its step 8.4, as
-its step 7.4 says. Otherwise (a pass once every mock is taken, a `09-tutor` patch's merge, `08-practice` step 8.4) the main session asks the student.
+STATUS line reads `Review view: set to <N> minutes (measured), for the student to confirm`, and
+`08-practice` step 8's opening asks it, beside its other opening offers (the student is present at
+the cram night, and the minutes give away no answer). The student keeps the minutes or sets new
+ones (fewer than the measured count can't hold the view's untagged content, which they hear
+first); new ones go on PLAN.md's `Review view:` line and the view is rebuilt from item 2 here
+(more minutes tag more) through item 5. Either way, the STATUS line comes out once they answer. Otherwise (a pass once every mock is taken, a `09-tutor` patch's merge, `08-practice` step 8.4) the main session asks the student.
 
 1. **Rank the subsections.** Before the cram order exists, by the backbone's How it's tested
    weights; once it exists (`08-practice` step 7), in its rows' order. A subsection under a `Not on
