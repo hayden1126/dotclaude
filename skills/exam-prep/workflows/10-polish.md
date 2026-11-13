@@ -179,9 +179,14 @@ step 1 says.
   place of any `pre-S11`); and
   the kept rows not yet drawn as the proposed shortlist, each with its kind (static, step-through,
   slide image). A figure the section already has counts toward its floor. While STATUS has a
-  `Figure shortlist:` line, or when the student asks to cut, the scan also lists the kept rows
-  already drawn in the named sections (from `_build/logs/figures.md`, or with no line from the
-  backbone's shortlist), so the student can cut a figure the build drew (`03-backbone` step 5.4).
+  `Figure shortlist:` line, or when the student asks to cut, the scan also lists the figures
+  already drawn in the named sections, from the backbone's Figure shortlist (it holds every drawn
+  figure; `_build/logs/figures.md` holds only the sections a recent run swept), each marked
+  `waiting for review` when the log holds its row, so the student can cut a figure the build drew
+  (`03-backbone` step 5.4). For each drawn figure proposed for a cut, the scan greps the notes for
+  its id (`grep -n '<fig-id>' notes/*.md`) and lists every line outside the figure's own FIG
+  marker that refers to it, in any section's file: CHASSIS C5 lets any section link a figure, so
+  a cut leaves those links dangling and `linkcheck.py` fails until step 5 rewords them.
   A `Diagram-taught: yes` section keeps at least one figure: a cut that would leave it none is
   listed with that note, and applies only with an add this pass makes to the same section.
 
@@ -200,13 +205,14 @@ step 1 says.
    recommendation (a rank, numbers, or for numbering a scope) and the question: which items to
    apply. While a mock is untaken, the log's leak check passes first. Then show the report in the
    message itself (hard rule 11). A figure pass's report is the proposed shortlist with its cut
-   rows, and any drawn rows step 3 lists for cutting, one line each: the student sees it before
+   rows, and any drawn rows step 3 lists for cutting (a proposed cut with the lines step 3
+   found referring to it), one line each: the student sees it before
    any figure is built (FB-062), as `03-backbone` step 5.4 says for a figure pass. Once the pass
    is approved, the student has reviewed the covered sections' logged rows, so the log records
    two changes for step 5.6 (outside the pass's paths, so a stop before that commit leaves the
    rows still waiting): `_build/logs/figures.md` rewritten without the rows of the sections this
    pass covered, and STATUS's `Figure shortlist:` line (it keeps one) replaced by the recount of
-   the rows left, or taken out when none is left.
+   the rows left, or taken out when none is left (with no line, none is added).
 4. The student answers with a rank, numbers, "your recommendation" or a scope; text they add to an
    item is shown again before it goes in (while a mock is untaken, from the log once it passes).
    Log the answer and commit.
@@ -229,9 +235,13 @@ with the student's reason. After that `coverage_check.py` exits 0, its only figu
 approved boxes (S34) and missing Depth lines and changes nothing else; a figure pass adds the
 approved FIG markers, a diagram-taught section's first figure right after its first box, trims
 prose that only re-describes a new figure (S11), and takes out the FIG marker of each approved cut,
-rewording any text that points at that figure. While a mock is untaken, each brief carries this
-pass's fence (step 1) as its reading limits. The main session checks that `git diff` names only
-those files and only those changes, and runs one fresh section reviewer per changed file from the
+rewording any text that points at that figure. A line step 3 listed in another section's file as
+referring to a cut figure is reworded too: by that file's writer, its brief naming the line, when
+this pass spawns one for that file, else by the main session as item 1's forced change; either
+way that section's fragment takes the change, and step 7's report names each line. While a mock
+is untaken, each brief carries this pass's fence (step 1) as its reading limits. The main session
+checks that `git diff` names only those files and only those changes (these rewordings among
+them), and runs one fresh section reviewer per changed file from the
 "Review" brief (`05-verify`'s), settling its findings as `05-verify` does. Then each changed
 section's fragment takes the change in `CONVERT.md`'s forms (its boxes, its new figures drawn as
 `06-site` draws them, a cut figure's drawing taken out), and a box pass labels the cram order's
@@ -315,7 +325,8 @@ dropped. Log `look-back done` once every rejection is settled, before step 7's r
    line), each logged in STATUS until they say it is done.
 3. The log: each item applied, changed (how), dropped (why) or beyond the list, and the fidelity
    review's outcome, or that it didn't run.
-4. The report to the student: what was applied, anything beyond the list (FB-170), anything a stop
+4. The report to the student: what was applied, anything beyond the list (FB-170; each line
+   reworded in another section for a cut figure, step 5, among them), anything a stop
    put back, a fidelity review that didn't run, the version, and what to print, compile or paste
    again.
 5. Hand off and commit. In that same commit, the `Build running` line goes (hard rule 1) and

@@ -115,8 +115,8 @@ evidence ids.
   figure shots (`-fig-1-slide`, `-fig-2-triangle`) at each width;
   `scripts/qonly.py`, `scripts/videos.py` and `scripts/verify_videos.mjs`, new, and
   `scripts/assemble.py`, `scripts/coverage_check.py`, `scripts/cram_check.py`,
-  `scripts/extract_check.py`, `scripts/mockpage.py` and `scripts/verify_page.mjs`, which carry no
-  date.
+  `scripts/extract_check.py`, `scripts/mock_leak.py`, `scripts/mockpage.py` and
+  `scripts/verify_page.mjs`, which carry no date.
 - **Changes:**
   - FB-124 and L26: the theme chrome, CHASSIS C2 (themed scrollbars, an opaque page track), C3
     (a fixed theme icon with no words) and C4 (full screen where granted, the F and T keys), on
@@ -133,6 +133,9 @@ evidence ids.
     keeping the row's spelling (I3.C8).
   - FB-056: question-only copies of the extracts with solutions (`qonly.py`, `02-extract` step
     3.4, checked by `extract_check.py`), read by every answer-blind brief (I3.C18, I3.G9, I2.G10).
+  - FB-191: `mock_leak.py`'s questions mode drops only the extract brief's own note lines (a
+    `Pages:` line of cites alone, `**Shape:**`, `**Conventions:**` and the closing `Coverage:`
+    line), so question text on any other `Pages:` or `Coverage:` line is checked (round 6 review).
   - FB-193: each cram row names its needs, and the cram order gets a Read already line, which
     `cram_check.py` checks (J.O, I1.C15, I1.C18).
   - FB-194: the watch list: `templates/WATCH.md`'s rules W1 to W39, `videos.py`,

@@ -46,9 +46,10 @@ A question part's official solution is the last thing in its block: its marker l
 the same), then whatever the solution goes on with (a table, a fenced trace) up to the next `###
 [<doc> <locator>]` header or the closing `Coverage:` line. Nothing of the question follows a
 marker inside its block, since the question-only copy drops everything from the marker to the
-block's end. Inside a code fence only a marker's comment forms (a `# Solution` line, which the
-heading form also reads as) are code and cut nothing; the bold `**Solution:**` and bracketed
-`Solution [<doc> <loc>]:` markers cut wherever they sit, so question code never writes them. The
+block's end. Inside a code fence only the looser forms (a `# Solution` comment, which the heading
+form also reads as, or a bare `Solution:` or `Solution` line) are code and cut nothing; the bold
+`**Solution:**` and bracketed `Solution [<doc> <loc>]:` markers cut wherever they sit, so
+question code never writes them. The
 reverse holds too: a question that quotes a document in a nested fence (a four-backtick fence
 holding a three-backtick line and a `## Solution` heading) loses everything from that heading to
 the block's end in the question-only copy. That fails safe, so it stands, but quoted material
@@ -88,7 +89,13 @@ agent that wrote anywhere else broke its brief: undo that and say so in STATUS).
    such extract as having no copy, and after any later edit to one (a resolved flag, a re-read
    page) it fails the copy as stale until `qonly.py` runs again. It also fails, by file and line,
    a copy that still holds a solution, and one that differs from what `qonly.py` would write now
-   (a hand edit): run `qonly.py` again. Hard rule 4 and FB-191 keep the answers of a set the
+   (a hand edit): run `qonly.py` again. It fails, by file and line, an extract's code fence that
+   never closes before the next block header, the closing `Coverage:` line or the end of the file
+   (no fence exempts a marker then): close it with the same mark. It warns, by file and line, on
+   a looser marker left inside a fence, kept as code: the main session checks whether it starts
+   a solution (a starter fence whose closer was forgotten) and, if so, closes the fence above it
+   or rewrites the marker as `Solution [<doc> <loc>]:`. After either fix, run `qonly.py` and
+   `extract_check.py` again. Hard rule 4 and FB-191 keep the answers of a set the
    student hasn't attempted out of everything they read, so every agent that must not see
    answers reads the copy and never the extract for a source with solutions, whether or not the
    student has attempted it: the sheet gap scan, the audits (Must-know, cheat sheet, cram order),
@@ -106,7 +113,8 @@ audits the second group against their images (FB-052, FB-104).
 
 ## Done when
 
-`extract_check.py` exits 0 (it fails while any `UNREADABLE:` flag is open, or while a
-question-only copy is missing, stale, differs from `qonly.py`'s output or holds a solution), and STATUS has the coverage. It skips a doc on a STATUS `Unverified:` line (`11-next-exam`, "A source added
+`extract_check.py` exits 0 (it fails while any `UNREADABLE:` flag is open, while an extract's code
+fence never closes, or while a question-only copy is missing, stale, differs from `qonly.py`'s
+output or holds a solution), and STATUS has the coverage. It skips a doc on a STATUS `Unverified:` line (`11-next-exam`, "A source added
 unverified") until that doc has a block. Commit the extracts and their question-only copies:
 they are tracked in the hub, which stays local.
