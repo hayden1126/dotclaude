@@ -12,7 +12,8 @@ What counts as an answer, by the extract format (02-extract, "Solutions in an ex
 - a solution: its marker line, `Solution [<doc> <locator>]: ...` (also `**Solution:**`, a
   `#### Solution` heading, either with a list or quote mark before it), through the end of its
   block: the next `### [<doc> <locator>]` header, the closing `Coverage:` line, or the end of the
-  file. A fence's lines don't end it.
+  file. A closed fence's lines don't end it; a fence still open at the next header, the
+  `Coverage:` line or the end of the file hides nothing (extract_check.py fails it).
 - a whole block of an answers file (MANIFEST's Answers `yes`) whose `solutions to <doc>` note
   names other docs only: all of it answers.
 - a page or section block of any other Answers `yes` doc (a past exam with its key, say), unless a
@@ -55,26 +56,40 @@ def load(name):
     return module
 
 
-def fenced(lines):
-    """The indices of the lines in a code fence, its fence lines included."""
-    out, fence = set(), None
+def fences(lines):
+    """(the indices of the lines in a closed code fence, its fence lines included; the index of
+    each fence opener that never closes). A fence closes by a line of its own mark, at least as
+    long, before the next block header or `Coverage:` line: one still open there, or at the end
+    of the file (a forgotten closing fence, four backticks opened and three closed), exempts
+    nothing, so a solution marker after it still cuts (fail closed)."""
+    out, unclosed, start, mark = set(), [], None, None
     for i, line in enumerate(lines):
+        if start is not None and (BLOCK.match(line) or COVERAGE.match(line)):
+            unclosed.append(start)
+            start = None
         f = FENCE.match(line)
-        if f:
-            mark = f.group(1)
-            if fence is None:
-                fence = mark
-            elif mark[0] == fence[0] and len(mark) >= len(fence):
-                fence = None
-            out.add(i)
-        elif fence is not None:
-            out.add(i)
-    return out
+        if not f:
+            continue
+        m = f.group(1)
+        if start is None:
+            start, mark = i, m
+        elif m[0] == mark[0] and len(m) >= len(mark):
+            out.update(range(start, i + 1))
+            start = None
+    if start is not None:
+        unclosed.append(start)
+    return out, unclosed
+
+
+def fenced(lines):
+    """The indices of the lines in a closed code fence, its fence lines included."""
+    return fences(lines)[0]
 
 
 def segments(lines, code=None):
     """The file as [(kind, start, end, match)]: `pre` before the first header, `block` for each
-    header's block, `coverage` for a Coverage: line. A fence's lines start nothing."""
+    header's block, `coverage` for a Coverage: line. A header or Coverage: line ends an open
+    fence (fences())."""
     code = fenced(lines) if code is None else code
     out, start, match = [], 0, None
     for i, line in enumerate(lines):

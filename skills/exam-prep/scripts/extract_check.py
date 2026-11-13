@@ -42,7 +42,10 @@ an `out` row, are warnings.
 The question-only copies (qonly.py, hard rule 4, FB-056): it also fails, naming the file and line, on a
 `_build/q-only/` file that still holds a solution or an answers file's block (anything qonly.py
 would take out), and on an extract that holds answers with no copy, or with a copy whose first
-line names another SHA-256 than the extract's (stale: the extract changed after qonly.py ran).
+line names another SHA-256 than the extract's (stale: the extract changed after qonly.py ran),
+and on an extract's code fence that never closes before the next block header, the `Coverage:`
+line or the end of the file (a closed fence hides a solution comment from qonly.py; an open one
+hides nothing, but it is a broken extract all the same).
 A copy whose extract is gone or holds no answer now is a warning. Stdlib only, plus
 reveal_slice.py and qonly.py from this directory."""
 import argparse
@@ -329,8 +332,14 @@ def qonly_check(root, rows):
     for name in qonly.extracts(root):
         src = os.path.join(root, "_build", "extract", name)
         with open(src, encoding="utf-8") as f:
-            if qonly.due(f.read(), rows)[0]:
-                due[name] = qonly.first_line(name, src)
+            text = f.read()
+        for i in qonly.fences(text.splitlines(keepends=True))[1]:
+            out.append(f"_build/extract/{name}:{i + 1}: UNCLOSED FENCE: a code fence that never "
+                       "closes before the next block or the end of the file; close it with the "
+                       "same mark (as many backticks or tildes) and rerun qonly.py")
+            bad = True
+        if qonly.due(text, rows)[0]:
+            due[name] = qonly.first_line(name, src)
     for name in qonly.copies(root):
         rel = f"_build/q-only/{name}"
         with open(os.path.join(root, rel), encoding="utf-8") as f:

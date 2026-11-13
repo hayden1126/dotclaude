@@ -5,8 +5,9 @@ one solution running on past its marker line into a fenced block, and a page blo
 answers file. Pinned: the copy keeps both questions, their data and their fields verbatim and
 holds no solution line or answers-file block; a past exam with its key in the same file keeps
 its question pages and drops its key page; a rerun is a no-op and a copy whose extract no longer
-holds answers is removed; extract_check.py fails a copy with a solution line (naming file and
-line), a missing copy and a stale one, and passes the copy qonly.py wrote."""
+holds answers is removed; a code fence that never closes hides no solution marker after it;
+extract_check.py fails a copy with a solution line (naming file and line), a missing copy, a stale
+one and an extract's unclosed fence (naming file and line), and passes the copy qonly.py wrote."""
 import contextlib
 import importlib.util
 import io
@@ -184,6 +185,32 @@ class QOnly(unittest.TestCase):
         body, removed, _ = load("qonly").strip(text + "**Solution:** by exchange\n", {})
         self.assertEqual(body, text)
         self.assertEqual(len(removed), 1)
+
+    def test_a_fence_that_never_closes_hides_no_solution(self):
+        # A forgotten closing fence, or four backticks opened and three closed, used to hide every
+        # marker after it: no copy was due and the extract went to answer-blind agents whole.
+        qonly = load("qonly")
+        for opener, inner in (("```python\n", ""), ("````python\n", "```\n")):
+            text = ("### [HW1 Q1] Write f\nWrite f.\n" + opener + "def f(x):\n" + inner
+                    + "**Solution:** return 2*x\n")
+            due, body = qonly.due(text, {})
+            self.assertTrue(due, opener)
+            self.assertNotIn("2*x", body)
+        # Open at the next block's header: the fence ends there, and that block's marker still cuts.
+        text = ("### [HW1 Q1] Write f\n```\ndef f(x):\n### [HW1 Q2] Prove it\nProve it.\n"
+                "**Solution:** by induction\n")
+        due, body = qonly.due(text, {})
+        self.assertTrue(due)
+        self.assertNotIn("induction", body)
+        self.assertEqual(qonly.fences(text.splitlines(keepends=True)), (set(), [1]))
+
+    def test_extract_check_fails_an_extract_with_a_fence_that_never_closes(self):
+        self.write("_build/extract/d1.md", '### [HW1 p.2] a page\n"no answer here"\n````\ncode\n```\n')
+        self.qonly()
+        code, out = self.check()
+        self.assertEqual(code, 1, out)
+        self.assertIn("_build/extract/d1.md:3: UNCLOSED FENCE", out)
+        self.assertNotIn("hw1.md:", out)  # its fence closes
 
     def test_the_marker(self):
         solution = load("qonly").SOLUTION
