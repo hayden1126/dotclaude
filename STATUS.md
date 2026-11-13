@@ -250,6 +250,14 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
       text. So the bar includes trying a plain fetch before calling a page unreachable.
     Lands in lane practices' next PR (Hayden, 2026-11-13: "practices lane"), after Nov 16;
     tell the lane when it unparks.
+  - **`lane trial` can't run sandboxed any more** (lane exam-prep, 2026-11-13, session
+    f55ae58c): its scratch `git worktree add` fails with "could not create directory of
+    '.git/worktrees/tree12': Read-only file system". Claude Code's sandbox now write-allows only
+    the session's own entry under `.git/worktrees`, and the skill says a trial runs only
+    sandboxed, so no lane can run one. Last trial that worked: demo-av at fafbe34 (2026-11-10).
+    Fix to design: a scratch tree that isn't a worktree of the shared git dir (a `--shared` clone
+    under `.lane-trial/`, say), or a narrow sandbox-off step for the add alone. Lanes skill and
+    docs/lanes.md say how a lane asks for ready meanwhile.
   - **The skill-copy check calls `~/.claude/skills` a copy of itself when the cwd is home**
     (reported 2026-11-13 by session f5c6b8c5, cwd `~`): at session start it says "This project
     has its own copy of the installed practices skill auth-secrets: ~/.claude/skills/auth-secrets,
