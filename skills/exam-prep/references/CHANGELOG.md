@@ -138,25 +138,34 @@ evidence ids.
     (I3.C8, I3.G8, J1.G5, I1 (section 2)).
   - FB-123: citation codes now match their MANIFEST.md row in any case, silently, the source key
     keeping the row's spelling (I3.C8).
-  - FB-056: official solutions move out of the extracts into `_build/solutions/<name>.md`,
-    written by the same extract agent as its extract, or for an answers file that solves several
-    sets by that file's own agent (hard rule 6), one block per question part
-    of a solved doc plus an answers doc's page blocks (`02-extract`, "The solutions file"). A
-    past exam with its key names its key pages in its MANIFEST row's Notes (`key pp. N-M`,
-    `key inline`, or `key sections` for a source without pages), which `01-ingest` writes after
-    looking at the source: only those pages or sections go to the solutions file, and its cover,
-    rules and formula sheet stay in the extract. A `solutions to` note may list several doc ids.
-    Each note is a `;`-separated clause in an exact form. `extract_check.py` checks the pairing
-    and fails a solution or answers page left in an extract, a self-answering row with no key
-    note, a note naming no doc and a note clause in any other wording (`UNREAD NOTE`), warns on
-    an `Answer:` line in a solved doc's extract, and `extract_check.py --parts` feeds `05-verify`'s PARTS (FB-100). A part's solution is found by its block id in any
-    solutions file. A set's attempt is recorded in that set's own row only, `no, attempted
+  - FB-056: official solutions move out of the extracts into `_build/solutions/`, one file per
+    set, `_build/solutions/<name>.md` beside its extract `_build/extract/<name>.md`, holding one
+    block per question part of the set plus an answers doc's page blocks (`02-extract`, "The
+    solutions file"). The set's extract agent writes it, or, for an answers file that solves
+    several sets, that file's own agent writes each set's file plus
+    `_build/solutions/<answers file name>.md` for its own pages (hard rule 6: an agent may write
+    several files, and no file is written by two agents). MANIFEST.md gets a Key column, which
+    `01-ingest` writes after looking at the file and `extract_check.py` reads whole: `for HW1,
+    HW2` for a separate answers file, `pp. 7-9, 11` or `p.N`, `inline`, or `sections: Marking
+    scheme, Answers` for a source without pages, whose key sections are the blocks with exactly
+    those locators. Only those pages or sections go to the solutions file, and a past exam's
+    cover, rules and formula sheet stay in the extract. Notes are free text that nothing parses.
+    `extract_check.py` checks the pairing and fails a solution or answers page left in an
+    extract, a part block outside its set's solutions file (`WRONG SOLUTIONS FILE`), and a Key
+    cell that is missing, unread, names no doc, sits on a row without answers, names sections on
+    a paged doc or names a section with no block (`NO KEY`, `UNREAD KEY`, `KEY NAMES NO DOC`,
+    `KEY WITHOUT ANSWERS`, `SECTIONS KEY ON A PAGED DOC`, `KEY SECTION NOT FOUND`), warns on an
+    `Answer:` line in a solved doc's extract, and `extract_check.py --parts` feeds `05-verify`'s
+    PARTS (FB-100). A set's attempt is recorded in that set's own row only, `no, attempted
     YYYY-MM-DD` (no key of its own) or `yes, attempted YYYY-MM-DD` (a doc holding its own key);
     a separate answers file's row stays `yes`, since it may solve several sets, and the notes
-    quote a set's official solution only once its own row says `attempted`. Answer-blind
-    briefs read the extracts and never open `_build/solutions/`; the writers, section
-    reviewers, checker and tutor read both. An older hub's extracts with solutions inline aren't
-    supported (I3.C18, I3.G9, I2.G10).
+    quote a set's official solution only once its own row says `attempted`. `05-verify` step
+    5's questions check reads each unattempted set's extract and own solutions file, and every
+    hit is a blocker. An erratum's corrected value sits in its part's solutions block, and the
+    backbone names its doc and part only. Answer-blind briefs read the extracts and never open
+    `_build/solutions/`; the writers, section reviewers, checker and tutor read both. An older
+    hub's extracts with solutions inline, or its answers notes in Notes, aren't supported
+    (I3.C18, I3.G9, I2.G10).
   - FB-055: a value still illegible on a 300 dpi crop is written `(illegible at 300 dpi:
     <what>)` by the main session, which `extract_check.py` lists by file and line without
     failing, noted in STATUS and asked once no `Build running` line stands; the value the
