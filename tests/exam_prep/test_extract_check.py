@@ -47,7 +47,12 @@ Review round 15: every block in a solutions file has one home file (WRONG SOLUTI
 stem's beside its set's extract, a single-set answers file's page beside its set, a multi-set
 answers file's page, in full, in its own lower-case file, a self-keyed doc's key page or key
 section beside its own extract (KEY SECTION NOT FOUND looks there only). A key section's name
-then no letter or digit (`(continued)`, `: Q2`, a deck's `#/5/0`) is key material."""
+then no letter or digit (`(continued)`, `: Q2`, a deck's `#/5/0`) is key material.
+
+Review round 16: a doc's homes are the extracts holding any block of it (a page, section, slide or
+question block), not only its question blocks, so a page-only set or a deck split over two
+extracts has a home; a stem's, a single-set answers page's or a key block whose set has no block
+in any extract fails NO HOME FILE, and KEY SECTION NOT FOUND looks in every home."""
 import contextlib
 import importlib.util
 import io
@@ -1758,6 +1763,88 @@ class SolutionsFiles(unittest.TestCase):
         self.assertEqual(code, 1, out)
         self.assertIn("_build/solutions/other.md:3: WRONG SOLUTIONS FILE: [HW1 Q1a] belongs in "
                       "_build/solutions/hw1.md, beside its extract", out)
+
+    def test_a_sets_home_is_every_extract_holding_any_block_of_it(self):
+        # r16-1 #1: a set's home came only from extracts holding its question blocks, so an
+        # answers page for a set whose extract holds only page blocks passed in any file.
+        self.write("MANIFEST.md", SOL_MANIFEST.replace("| in | no | | yes |", "| in | no | - | yes |"))
+        self.write("_build/extract/hw1.md", "### [HW1 p.1] Homework 1\n\"Q1a. Find f.\"\n")
+        self.remove("_build/solutions/hw1.md")
+        page = "### [HW1S p.1] Solutions\n\"Q1a: f = 42\"\n"
+        self.write("_build/solutions/hw1s.md", page)
+        code, out = self.check()
+        self.assertEqual(code, 1, out)
+        self.assertIn("_build/solutions/hw1s.md:1: WRONG SOLUTIONS FILE: [HW1S p.1] belongs in "
+                      "_build/solutions/hw1.md, beside the one set it solves", out)
+        # Its twin, the page beside the set's page-only extract, passes.
+        self.remove("_build/solutions/hw1s.md")
+        self.write("_build/solutions/hw1.md", page)
+        code, out = self.check()
+        self.assertEqual(code, 0, out)
+
+    def test_a_solutions_block_with_no_home_fails(self):
+        # r16-1 #1: a block whose home can't be computed (its set has no block in any extract,
+        # a pending or out-of-scope set among them) passed in any file.
+        pending = SOL_MANIFEST.replace("| 1 | in | no | | yes | Homework 1 |",
+                                       "| 1 | pending: in | no | | no | Homework 1 |")
+        self.write("MANIFEST.md", pending)
+        self.remove("_build/extract/hw1.md")
+        self.remove("_build/solutions/hw1.md")
+        self.write("_build/solutions/hw1s.md", "### [HW1S p.1] Solutions\n\"Q1a: f = 42\"\n")
+        code, out = self.check()
+        self.assertEqual(code, 1, out)
+        self.assertIn("_build/solutions/hw1s.md:1: NO HOME FILE: [HW1S p.1] has no home: no "
+                      "extract holds a block of HW1; extract HW1 first", out)
+        # Its twin: HW1 in scope with a block in an extract, the page beside it.
+        self.write("MANIFEST.md", SOL_MANIFEST)
+        self.write("_build/extract/hw1.md", CLEAN)
+        self.write("_build/solutions/hw1.md", SOLVED + "### [HW1S p.1] Solutions\n\"Q1a: 42\"\n")
+        self.remove("_build/solutions/hw1s.md")
+        code, out = self.check()
+        self.assertEqual(code, 0, out)
+        # A stem of an out-of-scope set no extract holds.
+        self.write("MANIFEST.md", SOL_MANIFEST + "| HW2 | `sources/hw2.pdf` | 1 | out | no | | no | |\n")
+        self.write("_build/solutions/hw1.md", SOLVED + "### [HW2 Q1 stem] Setup\n"
+                   "Solution [HW1S p.1]: f = 42 throughout.\n")
+        code, out = self.check()
+        self.assertEqual(code, 1, out)
+        self.assertIn("_build/solutions/hw1.md:6: NO HOME FILE: [HW2 Q1 stem] has no home: no "
+                      "extract holds a block of HW2; extract HW2 first", out)
+        # A self-keyed doc's key section with no block of its doc in any extract.
+        self.write("MANIFEST.md", SOL_MANIFEST + "| PE3 | `sources/pe3.docx` | n/a | in | yes | "
+                                                 "sections: Marking scheme | n/a | |\n")
+        self.write("_build/solutions/hw1.md", SOLVED)
+        self.write("_build/solutions/pe3.md", "### [PE3 Marking scheme] Key\n\"Q1: s\"\n")
+        code, out = self.check()
+        self.assertEqual(code, 1, out)
+        self.assertIn("_build/solutions/pe3.md:1: NO HOME FILE: [PE3 Marking scheme] has no home: "
+                      "no extract holds a block of PE3; extract PE3 first", out)
+
+    def test_a_deck_split_over_two_extracts_keeps_its_key_beside_either(self):
+        # r16-1 #2: the key slides beside the extract holding the deck's later slides failed
+        # WRONG SOLUTIONS FILE and KEY SECTION NOT FOUND, since only r3.md holds a question block.
+        deck = ("<div class=\"reveal\"><div class=\"slides\">"
+                + "".join(f"<section>S{i}</section>" for i in range(6)) + "</div></div>")
+        self.write("sources/r3.html", deck)
+        self.write("MANIFEST.md", SOL_MANIFEST + "| R3 | `sources/r3.html` | 6 | in | yes | "
+                                                 "sections: #/5 | n/a | recitation |\n")
+        self.write("_build/extract/r3.md", "".join(f"### [R3 #/{i}] S{i}\n" for i in range(3))
+                   + "### [R3 Q1] Trace\nPages: [R3 #/1]\n\"Trace a BFS.\"\n")
+        self.write("_build/extract/r3b.md", "### [R3 #/3] S3\n### [R3 #/4] S4\n")
+        self.write("_build/solutions/r3.md", "### [R3 Q1] Trace\nSolution [R3 #/5]: s, a, b\n")
+        key = "### [R3 #/5] Solutions\n\"Q1: s, a, b\"\n"
+        self.write("_build/solutions/r3b.md", key)
+        code, out = self.check()
+        self.assertEqual(code, 0, out)
+        self.assertIn("R3: 6 slides in scope, 6 with a block", out)
+        # The must-fail: the key slide in a file beside no extract of R3.
+        self.remove("_build/solutions/r3b.md")
+        self.write("_build/solutions/keys.md", key)
+        code, out = self.check()
+        self.assertEqual(code, 1, out)
+        self.assertIn("_build/solutions/keys.md:1: WRONG SOLUTIONS FILE: [R3 #/5] belongs in "
+                      "_build/solutions/r3.md, beside its own extract", out)
+        self.assertIn("R3: KEY SECTION NOT FOUND: no block [R3 #/5]", out)
 
 
 if __name__ == "__main__":
