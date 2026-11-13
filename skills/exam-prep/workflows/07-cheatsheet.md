@@ -59,6 +59,15 @@ Review view instead ("Tag the review" below).
    each such block in the outline with the figure it gets, drawn from the notes' figures or the
    checker's output, never a new value of your own. When the figure says all its text said, the
    figure replaces the block and the text goes: the sheet never carries both.
+5. Who sees the picks before step 6's questions check. With an HTML sheet, no one: they stay in
+   `_build/sheet-outline.md` and the sheet, which reach the student only at step 6's publish or
+   print, after that check. With the student's own LaTeX, the picks go to them as suggestions for
+   the sheet they write, and the question-type scan drafts from the sets' extracts, so before
+   any pick reaches them (the outline, or a pick named in a report) the main session runs the
+   questions check on the outline alone, `python3 -I <skill>/scripts/mock_leak.py --hub . --pages
+   _build/sheet-outline.md` from `<root>`, until it prints QUESTIONS OK: a hit is reworded with
+   fresh numbers and a fresh setup (S7), and an exit 2 is fixed and rerun as step 6 says. Step
+   6's check still runs on the sheet they write.
 
 ## Step 3: Write it
 
@@ -148,7 +157,12 @@ says: check each claim first, and fix every copy of a fact. Then step 4 again.
   drafts a worked pattern per question type from the sets' extracts, and the final sheet's
   mock-derived lines (FB-133) come from the attempts, not from the notes. A hit is a
   blocker: reword the line with fresh numbers and a fresh setup (S7), then steps 4 and 5 for the
-  change, and rerun until it prints QUESTIONS OK. Log the result in STATUS.
+  change, and rerun until it prints QUESTIONS OK. A LaTeX sheet is reworded in its `.tex`, the
+  file the check reads, so its PDF still holds the hit: the student recompiles it (logged in
+  STATUS until they bring the PDF, as `08-practice`'s "Changing the notes or a sheet" items 3 and
+  5 say), the check reruns on the `.tex`, and the new PDF passes step 4 again (`check_pdf.py
+  --no-layout` and its page images). Until then the commit below takes the `.tex` alone, and the
+  sheet isn't printed. Log the result in STATUS.
 - The prune list (FB-146), last: `_build/logs/sheet-prune.md`, one line per block, its name, side and
   column, and the question type it serves (trace, compute, justify, a true or false, as the How
   it's tested table names them), or `none found` when no question type uses it. The student cuts
@@ -271,7 +285,8 @@ first); new ones go on PLAN.md's `Review view:` line and the view is rebuilt fro
 `check_pdf.py` passes on each sheet with every warning judged; the audit's findings are applied;
 the page images look right, every figure's axes labelled and each index line where its block
 printed; the questions check (step 6) prints QUESTIONS OK with the sheets in place, logged in
-STATUS; the prune list is written and its `Sheet prune:` line is in STATUS; the
+STATUS (with LaTeX, on the outline too before any pick reached the student, step 2's item 5, and
+after a hit the recompiled PDF checked again, or its recompile waiting in STATUS); the prune list is written and its `Sheet prune:` line is in STATUS; the
 published sheet's URL is in STATUS (an HTML sheet); it is committed. Or, with no sheet allowed, the Review view when PLAN.md gives it minutes: tagged in the
 notes and the fragments, `fidelity.py`, `assemble.py` (within the minutes), `linkcheck.py --html`
 and `verify_page.mjs` passing, both views' screenshots seen, the notes page republished to its URL,
