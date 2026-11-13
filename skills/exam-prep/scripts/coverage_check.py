@@ -26,10 +26,11 @@ other locator (`### [C1 main.py]`, or `Q3C`, which isn't a part) is mapped only 
 
 The figure floor (STYLE S11): each `## §N` section of the backbone carries a `- Diagram-taught:
 yes|no` line beside its `- Figures:` line, and a section marked `yes` (its slides teach it through
-diagrams) must name at least one `fig-` id on its Figures line. A hub reopened for the next exam
-extends its backbone, and its older sections, written before the rule, say `- Diagram-taught:
-pre-S11` (FB-015): each passes with a WARN line on stderr naming 10-polish's figure pass, which
-sets yes or no and adds the figures. A backbone with no such line anywhere predates the rule and
+diagrams) must name at least one `fig-` id on its Figures line. A section the floor doesn't hold
+yet says `- Diagram-taught: pre-S11` (FB-015): an older section of a hub reopened for the next
+exam (written before the rule), or a section a partial 10-polish figure pass didn't reach. Each
+passes with a WARN line on stderr naming 10-polish's figure pass, which sets yes or no and adds
+the figures. A backbone with no such line anywhere predates the rule and
 gets one WARN for the whole backbone. Once any section carries a line, a section with none fails:
 a fresh build that left it out looks the same as an old section, so the old ones are marked. A
 line that misspells the form (`- **Diagram-taught:** yes`, `* Diagram-taught: yes`, `- Diagram
@@ -241,12 +242,13 @@ def figure_floor(backbone):
         for line in malformed:
             bad.append(f"§{num}: MALFORMED Diagram-taught line `{line}`: write it "
                        "`- Diagram-taught: yes|no` (or `pre-S11` for a reopened hub's older "
-                       "section)")
+                       "section or one a partial figure pass didn't reach)")
         if malformed:
             continue
         if not taught:
             bad.append(f"§{num}: no `Diagram-taught: yes|no` line, though other sections carry "
-                       "one: a fresh section states it, and a reopened hub's older section says "
+                       "one: a fresh section states it, and a reopened hub's older section or one "
+                       "a partial 10-polish figure pass didn't reach says "
                        "`- Diagram-taught: pre-S11` (FB-015)")
             continue
         if len(taught) > 1:
@@ -254,8 +256,9 @@ def figure_floor(backbone):
             continue
         if re.match(r"pre-S11(?:\s|$|\()", taught[0]):
             warnings.append(f"§{num}: Diagram-taught: pre-S11, a section written before the "
-                            "figure floor (STYLE S11, FB-015), so it isn't held to it; a "
-                            "10-polish figure pass sets yes or no and adds the figure")
+                            "figure floor (STYLE S11, FB-015) or not yet reached by a figure "
+                            "pass, so it isn't held to it; a 10-polish figure pass sets yes or "
+                            "no and adds the figure")
             continue
         word = re.match(r"(yes|no)\b", taught[0])
         if not word:

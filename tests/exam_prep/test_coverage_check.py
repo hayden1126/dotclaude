@@ -7,8 +7,8 @@ a stray digit in a note maps nothing, a cell that doesn't parse fails, a target 
 `skip (why)` or a subsection the backbone defines, and no blocks at all fails.
 
 The figure floor (STYLE S11): a section marked `Diagram-taught: yes` names a figure on its Figures
-line; a reopened hub's older section marked `Diagram-taught: pre-S11` passes with a WARN naming
-10-polish's figure pass (FB-015); a section with no line fails once any section carries one, and a
+line; a section marked `Diagram-taught: pre-S11` (a reopened hub's older section, or one a partial
+figure pass didn't reach) passes with a WARN naming 10-polish's figure pass (FB-015); a section with no line fails once any section carries one, and a
 backbone with none gets one WARN in all; two lines, a value other than yes, no or pre-S11, a
 misspelled line (`- **Diagram-taught:** yes`, `- Diagram taught: yes`) and a duplicate `## §N`
 heading fail."""
@@ -307,6 +307,7 @@ class FigureFloor(unittest.TestCase):
         self.assertEqual(code, 1, out)
         self.assertIn("§2: no `Diagram-taught: yes|no` line", out)
         self.assertIn("pre-S11", out)
+        self.assertIn("a partial 10-polish figure pass didn't reach", out)
         self.assertNotIn("§1:", out)
 
     def test_a_near_miss_line_fails_as_malformed(self):
@@ -381,6 +382,21 @@ class FigureFloor(unittest.TestCase):
         code, out = self.run_check()
         self.assertEqual(code, 1, out)
         self.assertIn("§2: Diagram-taught: yes, but its Figures line names no `fig-` id", out)
+
+    def test_a_partial_figure_pass_leaves_pre_s11_sections_that_pass(self):
+        # A 10-polish figure pass that reached one section marks it yes or no and every section it
+        # didn't reach `pre-S11`: the check passes with one pre-S11 warning per such section.
+        self.backbone(FLOOR.replace("- Diagram-taught: yes (D1 pp.3-6 teach it through stage "
+                                    "diagrams)\n", "- Diagram-taught: pre-S11\n")
+                      .replace("- Diagram-taught: yes\n", "- Diagram-taught: pre-S11\n"))
+        code, out = self.run_check()
+        self.assertEqual(code, 0, out)
+        warns = self.err.getvalue().splitlines()
+        self.assertEqual(len(warns), 2, warns)
+        self.assertIn("WARN: §1: Diagram-taught: pre-S11", warns[0])
+        self.assertIn("WARN: §3: Diagram-taught: pre-S11", warns[1])
+        self.assertIn("or not yet reached by a figure pass", warns[1])
+        self.assertNotIn("§2", self.err.getvalue())
 
     def test_two_diagram_taught_lines_fail(self):
         self.backbone(FLOOR.replace("- Diagram-taught: no\n",
