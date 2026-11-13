@@ -345,11 +345,12 @@ main session checks each finding and applies the fixes.
 - Work in: {{ROOT}}, read only.
 - Review {{ROOT}}/notes/{{FILE}} against its extract blocks ({{EXTRACT BLOCKS}} in
   {{ROOT}}/_build/extract/) and the solutions files holding the blocks of the question parts and
-  answers docs those blocks cite ({{SOLUTIONS FILES}} in {{ROOT}}/_build/solutions/, or none:
-  each part's block in its set's file, `<name>.md` beside the set's extract, read with its stem
-  block `### [<doc> Q3 stem]` when there is one, and each answers page's block in its answers
-  file's home, the one set's file when that file solves one set, `<doc id in lower case>.md`
-  when it solves several, the file beside its own extract for a doc holding its own key),
+  answers docs those blocks cite ({{SOLUTIONS FILES}} in {{ROOT}}/_build/solutions/, each block
+  in its home file: each part's block in its set's file, `<name>.md` beside the set's extract,
+  read with its stem block `### [<doc> Q3 stem]` when there is one, and each answers page's
+  block in its answers file's home, the one set's file when that file solves one set, `<doc id
+  in lower case>.md` when it solves several, the file beside its own extract for a doc holding
+  its own key; or none),
   {{ROOT}}/_build/backbone.md (§{{N}} and the Conventions block) and
   {{ROOT}}/_build/STYLE.md. {{CHECKER: Every worked example's numbers come from
   {{ROOT}}/_build/verify/examples.out.md. | NO CHECKER: Nothing in this course is computable, so

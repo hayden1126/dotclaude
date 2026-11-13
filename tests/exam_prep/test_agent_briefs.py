@@ -154,6 +154,15 @@ class AnswerBlindBriefs(unittest.TestCase):
                 self.assertIn(phrase, flat, (name, phrase))
             self.assertNotIn("_build/solutions/*.md", flat, name)
 
+    def test_the_review_brief_gives_the_home_rule_before_none(self):
+        """Round 16: the Review brief put the home-file rule after "or none:", which read as the
+        fallback when no solutions file applies; the rule comes first and "or none" last."""
+        flat = " ".join(self.briefs["## Review (stage 05)"].split())
+        self.assertIn("({{SOLUTIONS FILES}} in {{ROOT}}/_build/solutions/, each block in its home "
+                      "file: each part's block", flat)
+        self.assertIn("for a doc holding its own key; or none)", flat)
+        self.assertNotIn("or none:", flat)
+
     def test_the_extract_brief_writes_the_solutions_file(self):
         text = self.briefs["## Extract (stage 02)"]
         self.assertIn("{{ROOT}}/_build/solutions/{{OUT}}", text)
