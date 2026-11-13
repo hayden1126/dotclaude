@@ -456,13 +456,17 @@ answers file's row, which may solve several sets.
 - Once a set is attempted (its own row's Answers cell reads `no, attempted YYYY-MM-DD` or `yes,
   attempted YYYY-MM-DD`), each `_build/held.md` entry that names
   it is offered back as a patch (FB-191): a passage `05-verify` step 5 cut or held back because it
-  overlapped that set. Show the student its section and its original text, and on their yes dispatch
-  it as Step 5 says. An entry held from a multi-set answers file's own file (a hit labelled with
+  overlapped that set. An entry held from a multi-set answers file's own file (a hit labelled with
   that file's block, `[HWS p.N]`) names every set that file solves, never the file itself, whose
-  row records no attempt: it is offered back once all of them are attempted. Remove the entry
-  once its patch merges or the student declines it. While
-  another set is unattempted, the passage runs `05-verify` step 5's questions check against that set
-  first, and a hit waits for that set too.
+  row records no attempt: it is offered back once all of them are attempted. Before it is
+  offered, the main session runs the questions check on the passage alone, since it is not under
+  `notes/` yet and may overlap a set the entry doesn't name: it writes the original text to
+  `_build/held-check.md` and runs `python3 -I <skill>/scripts/mock_leak.py --hub . --pages
+  _build/held-check.md` from `<root>`, then deletes that file (it holds held text). The passage
+  is offered only once this prints QUESTIONS OK, so every set it overlaps is attempted; a hit
+  names a set still unattempted, which the entry then names too and waits for. Then show the
+  student its section and its original text, and on their yes dispatch it as Step 5 says.
+  Remove the entry once its patch merges or the student declines it.
 - This bookkeeping (the log, STATUS, MANIFEST.md's Answers cell) and `_build/verify/` are the
   main session's. Every change to the notes' or a sheet's text is a writer's (hard rule 9);
   refitting a sheet after one (`07-cheatsheet` step 4's `--fs`, a block moved between sides) is a

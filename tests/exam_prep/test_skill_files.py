@@ -188,11 +188,14 @@ class QuestionsCheckFiles(unittest.TestCase):
     hand, a `_build/solutions/` path or a `--questions` or `--allow` argument. Round 18 found
     the sheets unchecked (`--pages notes/*.md`), so the command passes no page: it reads every
     page under `notes/` and `cheatsheet/`, and 08's table row and item 4 run it on a change to
-    a sheet too. 05-verify names `--leak-files` and the line printed with no unattempted set."""
+    a sheet too; 09-tutor checks a held passage alone (`--pages _build/held-check.md`). 05-verify
+    names `--leak-files` and the line printed with no unattempted set."""
 
     COMMAND = "`python3 -I <skill>/scripts/mock_leak.py --hub .`"
     SITES = {"05-verify.md": 1, "07-cheatsheet.md": 1, "08-practice.md": 1, "10-polish.md": 1,
              "11-next-exam.md": 2}
+    # 09-tutor's check of a held passage before it is offered back: the one page it reads.
+    HELD = "`python3 -I <skill>/scripts/mock_leak.py --hub . --pages _build/held-check.md`"
     # The round 14 to 16 wordings of the hand-written list, and round 17's notes-only pages.
     OLD = ("extract and own solutions file", "and its own solutions file",
            "each unattempted set's extract and its solutions file when it has one",
@@ -221,6 +224,20 @@ class QuestionsCheckFiles(unittest.TestCase):
                 around = flat[max(0, m.start() - 600):m.end() + 600]
                 for hand in self.HAND:
                     self.assertNotIn(hand, around, (name, hand))
+
+    def test_the_tutor_checks_a_held_passage_alone(self):
+        """09-tutor offers a held passage back only once the check on it alone passes: the
+        passage isn't under `notes/`, and the one command can't target a set (round 18)."""
+        flat = self.flat("09-tutor.md")
+        self.assertEqual(flat.count(self.HELD), 1)
+        m = flat.index(self.HELD)
+        self.assertIn("questions check", flat[max(0, m - 900):m + 900])
+        around = flat[max(0, m - 600):m + 600]
+        for hand in self.HAND:
+            self.assertNotIn(hand, around, hand)
+        self.assertIn("writes the original text to `_build/held-check.md`", flat)
+        self.assertIn("offered only once this prints QUESTIONS OK", flat)
+        self.assertNotIn("questions check against that set", flat)
 
     def test_no_workflow_passes_question_files(self):
         for name in sorted(os.listdir(os.path.join(SKILL, "workflows"))):
