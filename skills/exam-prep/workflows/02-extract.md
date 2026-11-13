@@ -57,8 +57,12 @@ either (hard rule 6). Both are tracked in the hub. The solutions file opens with
 
 `UNREADABLE:` flags and `(illegible at 300 dpi: ...)` work in it as in an extract.
 
-The solved docs come from MANIFEST: an Answers `yes` doc with a `solutions to <doc>` note solves
-the docs it names, and one with no note solves itself (a past exam with its key).
+The solved docs come from MANIFEST's in-scope rows (Scope `in` or `concepts only`): an Answers
+`yes` doc with a `solutions to <doc>` note solves the docs it names, and one with no note solves
+itself (a past exam with its key), so a separate answers file needs the note. A `reserved`,
+`pending` or `out` answers file solves nothing. A part's block counts as answered only with a
+`Solution [<doc> <loc>]` line, the cite followed by a colon or the line's end, or the exact line
+`No official solution.`
 `python3 -I <skill>/scripts/extract_check.py --parts` prints the number of question parts whose
 solutions block holds a `Solution [` line: `05-verify`'s PARTS, never a lecture's worked example.
 
@@ -85,27 +89,34 @@ STATUS).
    image-only and `UNREADABLE:` counts per document, then each open `UNREADABLE:` flag in either
    folder by file and line, with the re-read it needs (step 2). It fails while any such flag is
    open; each value marked `(illegible at 300 dpi: <what>)` (step 2) is listed by file and line,
-   and doesn't fail it. A missing
+   `<file>:<line>: (illegible at 300 dpi: ...), counted, not a failure`. A missing
    page goes back to its agent (SendMessage to its id), or the main session extracts it. Blocks
    for a `reserved` doc fail the check: delete them, and find which brief let the agent open it
    (FB-023). Blocks for a `pending` row fail too: its file has arrived, so give the row a real
    Scope (`01-ingest`, step 5). A Scope cell the check can't read fails rather than being
    guessed at. A warning about an unknown doc id is usually a typo in a header: fix the header.
 
-   It checks the pairing of the two folders ("The solutions file"), by file and line, and fails:
-   - a question part (`Q..`, not a stem) of a solved doc with a block in an extract and none in
-     any solutions file (`NO SOLUTION BLOCK: write its solution or "No official solution."`):
-     the agent that wrote the pair, or the main session, adds the part's block;
-   - a solutions block naming a part no extract has, a part with two solutions blocks, and a
-     part's block holding neither a `Solution [` line nor `No official solution.`;
-   - in an extract, a line citing an answers page (a `Pages:` line holding only cites, and the
-     closing `Coverage:` line, aside), a bracketed `Solution [<doc> <loc>]` or bold
-     `**Solution:**` line in a block of a solved doc, and a page block of an answers doc on no
-     question part's page
-     (`AN ANSWERS PAGE IN AN EXTRACT: move it to _build/solutions/<name>.md`): move the line or
-     block into its solutions file, a solution under the part it answers;
-   - an Answers `yes` doc with no question parts in any extract and no `solutions to` note: add
-     the note to its MANIFEST row.
+   It checks the pairing of the two folders ("The solutions file") and fails each of these,
+   printed `<file>:<line>: <TAG>`:
+   - `NO SOLUTION BLOCK`: a question part (`Q..`, not a stem) of a solved doc has a block in an
+     extract and none in any solutions file. The agent that wrote the pair, or the main session,
+     adds it, as the line says:
+     `NO SOLUTION BLOCK: write its solution or "No official solution." under ### [<doc> <part>] in _build/solutions/<name>.md`;
+   - `NO SUCH PART`: a solutions block names a part no extract has;
+   - `TWO SOLUTIONS BLOCKS`: a part has two blocks across the solutions files;
+   - `EMPTY SOLUTIONS BLOCK`: a part's block holds neither a `Solution [` line nor
+     `No official solution.`;
+   - `SOLUTION IN AN EXTRACT`: a bracketed `Solution [<doc> <loc>]` or bold `**Solution:**` line
+     in a block of a solved doc;
+   - `CITES AN ANSWERS PAGE`: an extract's line citing an answers page (a `Pages:` line holding
+     only cites, and the closing `Coverage:` line, aside);
+   - `AN ANSWERS PAGE IN AN EXTRACT: ... move it to _build/solutions/<name>.md`: a page block of
+     an answers doc on no question part's page.
+
+   Each of the last three moves into its solutions file, a solution under the part it answers.
+   It also fails, by doc and with no file or line, `<doc>: ANSWERS WITH NO PAIRING`: an in-scope
+   Answers `yes` doc with no question parts in any extract and no `solutions to` note. Add the
+   note to its MANIFEST row.
 
    It warns on a solutions block for a stem (each of its parts still needs its own block) and on
    a loose `Solution:` line outside a fence in a solved doc's extract block. The main session
@@ -141,8 +152,8 @@ audits the second group against their images (FB-052, FB-104).
 though not on a value marked `(illegible at 300 dpi: ...)`, while a question part of a solved doc
 has no solutions block or a part has two, while a solutions block names no extract's part or
 holds neither a `Solution [` line nor `No official solution.`, while an extract holds a solution
-line, a line citing an answers page or a page block of an answers doc, or while an Answers `yes`
-doc with no question parts lacks its `solutions to` note), and STATUS has the coverage and each
+line, a line citing an answers page or a page block of an answers doc, or while an in-scope
+Answers `yes` doc with no question parts lacks its `solutions to` note), and STATUS has the coverage and each
 value marked illegible as a judgment call. Its warnings (a solutions block for a stem, a loose
 `Solution:` line in a solved doc's extract) are each read and either fixed or noted in STATUS. It
 skips a doc on a STATUS `Unverified:` line (`11-next-exam`, "A source added unverified") until

@@ -130,8 +130,8 @@ that must not see answers read the extract, so it holds none.}}
     - the official solution on a line of its own, cited to its pages:
       `Solution [{{SOLDOC}} p.N]: ...`, or `Solution [{{SOLDOC}} <its section>]: ...` for a file
       without pages ({{SOLDOC}} is {{DOC}} when the solutions sit in the same file). It starts
-      exactly `Solution [`, with no words between `Solution` and the cite, and its working (a
-      table, a fenced trace) follows under it. The self-test counts each part whose block holds
+      exactly `Solution [`, with no words between `Solution` and the cite and a colon right
+      after the cite's `]`, and its working (a table, a fenced trace) follows under it. The self-test counts each part whose block holds
       a `Solution [` line as an official part;
     - the exact line `No official solution.` for a part the official solutions skip.
   - Every page or section of {{SOLDOC}} with no question part on it gets its own block here,

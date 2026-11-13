@@ -41,8 +41,9 @@ Topic cuts: {{none | one line each:}}
   the page, so what it is holds no `;` of its own.
 - **Answers:** `yes` marks a file that holds answers (official solutions, a past exam's key), with
   `solutions to <doc>` in Notes naming the set it answers; with no such note it answers itself (a
-  past exam with its key). Its answers are extracted into `_build/solutions/`, never into an
-  extract (`02-extract`). Mock writers never read it. Nothing
+  past exam with its key), so a separate answers file needs the note. Only an in-scope row (`in`
+  or `concepts only`) answers anything. Its answers are extracted into `_build/solutions/`, never
+  into an extract (`02-extract`). Mock writers never read it. Nothing
   published quotes it until the student has attempted that set, which the cell then records as
   `yes, attempted`. A question set that no row's `solutions to <doc>` names records the student's
   attempt in its own Answers cell, `no, attempted YYYY-MM-DD`: until then `05-verify` step 5's
