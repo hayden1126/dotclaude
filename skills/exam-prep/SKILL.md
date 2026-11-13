@@ -119,8 +119,9 @@ names (00 runs 01's Ed pull; 02 starts 05's checker).
    last stage removes it (`08-practice` step 7.5 puts `Stage 08 built` in its place); a build stage
    run alone on request (07, 08, `11`'s source additions) and a `10-polish` pass add and remove
    their own; `08-practice`'s watch list run alone changes no notes, sheet or mock, and adds none,
-   but waits while a `Build running` or `Polish:` line stands, since both commit STATUS and
-   `practice/`. Any end of a build removes it: a last stage that is skipped or cut short, a stop at a
+   but waits while a `Build running` line stands, since that run commits STATUS and `practice/`
+   too (a polish pass adds one while it runs; its `Polish:` line, which stays after the pass,
+   blocks nothing). Any end of a build removes it: a last stage that is skipped or cut short, a stop at a
    stage's step 1, a stage that stops to wait for a notes patch. While the line stands, a `09-tutor`
    tab runs within its Step 1's limits, and no session dispatches a notes patch: the build session
    never does, since it can't show the student a change or ask them.

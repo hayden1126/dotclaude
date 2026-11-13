@@ -135,7 +135,7 @@ evidence ids.
     `verify_videos.mjs`, `08-practice`'s "Watch list", intake question 6 (and the reopen's
     question 7), PLAN.md's line and three briefs; the rankers search and judge in two parts and
     the main session fetches between them (L07, L02); run alone it waits while a `Build running`
-    or `Polish:` line stands (hard rule 1); L72 to L75 are its tool lessons, which W36 to W39 cite
+    line stands, a polish pass's included, never on a finished pass's `Polish:` line (hard rule 1); L72 to L75 are its tool lessons, which W36 to W39 cite
     (I.O, I1.C5, I1.C6, I1.C7,
     I1.C9, I1.C13, I1.C14, I1.C15, I1.C16, I1.C17, I1.C18, I1.C25, I1.C26, I3.C2, I3.C3, I1.G4,
     I1.G5, I1.G6, I1.G7, I3.G7).

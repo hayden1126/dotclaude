@@ -305,8 +305,10 @@ It runs when PLAN.md's `Watch list:` line reads yes, after the mocks and the cra
 the cram night (step 7.5 sends it here); with `no`, or no such line, it is skipped. It also runs on
 the student's ask once the notes page is published (its rows link into it). Run alone,
 it changes no notes, sheet or mock, so it adds no `Build running` line; but it commits STATUS and
-`practice/`, so while a `Build running` or `Polish:` line stands, the ask waits for that run to end
-(say so, writing nothing: the student asks again once it has ended). Any student's links on the
+`practice/`, so while a `Build running` line stands (a build, a stage run alone, or a `10-polish`
+pass, which adds one while it runs), the ask waits for that run to end (say so, writing nothing:
+the student asks again once it has ended). A `Polish:` line alone blocks nothing: a finished pass
+keeps it in STATUS. Any student's links on the
 `Watch list:` line, or given with the ask, are ranked like the rest (W12).
 
 1. **Set up.** When the hub lacks them, copy `<skill>/templates/WATCH.md` into `_build/WATCH.md`
