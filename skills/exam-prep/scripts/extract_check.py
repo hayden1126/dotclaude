@@ -25,7 +25,8 @@ UNDERSTOOD. Each in-scope row is checked by its source's kind:
   and a Pages count, every in-scope page.
 Blocks are the `### [<doc> <locator>] title` headers in _build/extract/*.md and
 _build/solutions/*.md: `p.N` (`p.N-M` for a run of build frames), `#/h` or `#/h/v`, a question
-part (`Q3a`), a stem (`Q3 stem`) or any other name (a source without pages). Inside a question
+part (`Q` and a digit: `Q3a`, `Q1.2`), a stem (`Q3 stem`) or any other name (a source without
+pages; `[CODE Queue.java]` and `[L2 Quiz]` are no question blocks). Inside a question
 block, a `[<doc> p.N]` cite covers that page when <doc> is the block's own or an answers file
 whose `for` key names the block's doc. In an extract, a cite of another doc's page, or of a key
 page of its own doc, covers nothing (that page's block goes in a solutions file). A question block
@@ -161,8 +162,10 @@ import os
 import re
 import sys
 
+# A block header. A question's locator is `Q` and a digit (`Q1`, `Q1a`, `Q1.2`, `Q12b`), with ` stem`
+# for a stem (`Q3 stem`); any other name, `Queue.java` or `Quiz` among them, is an `other` block.
 HEADER = re.compile(r"^###\s+\[(?P<doc>[A-Za-z0-9_.-]+)\s+(?:p\.(?P<page>\d+)(?:-(?P<end>\d+))?"
-                    r"|(?P<frag>#/\d+(?:/\d+)?)|(?P<q>Q[\w.]+(?: stem)?)|(?P<other>[^\]]+))\]")
+                    r"|(?P<frag>#/\d+(?:/\d+)?)|(?P<q>Q\d[\w.]*(?: stem)?)|(?P<other>[^\]]+))\]")
 CITE = re.compile(r"\[(?P<doc>[A-Za-z0-9_.-]+)\s+(?P<loc>[^\]]+)\]")
 CITE_PAGES = re.compile(r"pp?\.\s*(?P<page>\d+)(?:\s*-\s*(?P<end>\d+))?")
 IMAGE_ONLY = re.compile(r"\(image only\b", re.I)
@@ -223,7 +226,8 @@ PAGES_LINE = re.compile(r"^[-*\s]*Pages:(.*)")
 LOC_PAGES = re.compile(r"\bpp?\.\s*(?P<list>\d+(?:\s*[-–]\s*\d+)?"
                        r"(?:\s*,\s*\d+(?:\s*[-–]\s*\d+)?)*)", re.I)
 SEPARATORS = re.compile(r"(?:[\s,;&]|and\b)*")
-PART = re.compile(r"Q[\w.]+")
+# A question part's locator: HEADER's `q` with no ` stem`.
+PART = re.compile(r"Q\d[\w.]*")
 # A solution in an extract, either form the extract format has written: the bracketed
 # `Solution [<doc> <loc>]` (bold around the word or the whole marker, `Official` before it, a list,
 # quote or heading mark first, more cites after it) then a colon or the line's end, so starter code

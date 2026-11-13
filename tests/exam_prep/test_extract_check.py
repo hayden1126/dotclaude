@@ -2169,6 +2169,40 @@ class LeakFiles(unittest.TestCase):
                             "2026-11-01 | | yes | |\n")
         self.assertEqual(self.leak(), (0, ""))
 
+    def test_a_section_name_starting_with_q_is_no_question(self):
+        # r18-1 #1: `Q[\w.]+` read `[CODE Queue.java]` as a question block, so the lecture became
+        # an unattempted set and its extract moved from `allow` to `questions`. A question's
+        # locator is `Q` and a number.
+        for loc in ("Q1", "Q1a", "Q3 stem", "Q1.2", "Q12b"):
+            with self.subTest(loc):
+                m = extract_check.HEADER.match(f"### [HW1 {loc}] t")
+                self.assertEqual((m.group("q"), m.group("other")), (loc, None))
+                self.assertEqual(bool(extract_check.PART.fullmatch(loc)), "stem" not in loc)
+        for loc in ("Queue.java", "Queues", "Quiz", "Q", "Qa"):
+            with self.subTest(loc):
+                m = extract_check.HEADER.match(f"### [CODE {loc}] t")
+                self.assertEqual((m.group("q"), m.group("other")), (None, loc))
+        self.manifest(extra="| CODE | `sources/code/Queue.java` | - | in | no | | n/a | lecture "
+                            "code |\n| DS | `sources/ds.docx` | - | in | no | | n/a | |\n"
+                            "| L2 | `sources/l2.docx` | - | in | no | | n/a | |\n")
+        self.write("_build/extract/code.md", "### [CODE Queue.java] Queue\n\"A queue removes "
+                                             "items in the same order that they were added to it.\"\n")
+        self.write("_build/extract/ds.md", "### [DS Queues] Queues\n\"FIFO.\"\n")
+        self.write("_build/extract/l2.md", "### [L2 Quiz] Quiz\n\"Warm-up.\"\n")
+        self.assertEqual(self.leak(), (0, "allow _build/extract/code.md\n"
+                                          "allow _build/extract/d1.md\n"
+                                          "allow _build/extract/ds.md\n"
+                                          "questions _build/extract/hw1.md\n"
+                                          "allow _build/extract/l2.md\n"
+                                          "questions _build/solutions/hw1.md\n"))
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            extract_check.main(["--root", self.root])
+        self.assertIn("CODE: 1 blocks, 0 image only, 0 UNREADABLE\n", out.getvalue())
+        # Its twin: a real question block of the same doc makes it a set.
+        self.write("_build/extract/code.md", "### [CODE Q1] Queue\n\"Trace it.\"\n")
+        self.assertIn("questions _build/extract/code.md\n", self.leak()[1])
+
     def test_no_manifest_exits_2(self):
         os.remove(os.path.join(self.root, "MANIFEST.md"))
         err = io.StringIO()

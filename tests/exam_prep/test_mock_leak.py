@@ -646,6 +646,21 @@ class HubQuestions(unittest.TestCase):
         self.write("MANIFEST.md", HUB_HEAD + rows.format("no, attempted 2026-11-02"))
         self.assertEqual(self.hub(page_text=page)[:2], (0, "QUESTIONS OK: no unattempted set\n"))
 
+    def test_a_section_name_starting_with_q_is_no_set(self):
+        # r18-1 #1: `[CODE Queue.java]` read as a question block made the lecture an unattempted
+        # set, so notes quoting its code failed.
+        sentence = "A queue removes items in the same order that they were added to it."
+        self.write("MANIFEST.md", HUB_HEAD + "| CODE | `sources/code/Queue.java` | - | in | no | | "
+                                             "n/a | lecture code |\n")
+        self.write("_build/extract/code.md", f"### [CODE Queue.java] Queue\n\"{sentence}\"\n")
+        page = f"Recall: {sentence}\n"
+        rc, out, err = self.hub(page_text=page)
+        self.assertEqual((rc, out, err), (0, "QUESTIONS OK: no unattempted set\n", ""))
+        # Its twin: a question block of the doc (`Q` and a number) makes it a set: the copy fails.
+        self.write("_build/extract/code.md", f"### [CODE Q1] Queue\n\"{sentence}\"\n")
+        rc, out, err = self.hub(page_text=page)
+        self.assertEqual((rc, err), (1, ""), out)
+
     def test_bad_usage(self):
         self.write("_build/extract/hw1.md", "### [HW1 Q1a] Round\n")
         for name, args, message in (
