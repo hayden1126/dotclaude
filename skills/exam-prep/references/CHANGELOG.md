@@ -179,12 +179,14 @@ evidence ids.
   - FB-094 and FB-075: STYLE S34, the concise box (CONVERT's box, CHASSIS C6, the Review view
     shows each box untagged and counts it toward its minutes, `07-cheatsheet` setting measured
     minutes when the boxes alone pass them, a build's set minutes asked at `08-practice` step 8's
-    opening, a stage run alone's once it has ended, intake question 5 and FB-143 saying so, `10-polish`'s
+    opening, a stage run alone's once it has ended, a rebuild's after step 8.4 at once, intake question 5 and FB-143 saying so, `10-polish`'s
     box pass, the briefs), and S18 reworded "Concise, never
     compressed" (I1.C10, I3.C3, J1.C4, I2.C13, I2.C14, I2.C15, I1.C24).
   - FB-062, FB-115 and FB-125: STYLE S11 widened to diagram first, `03-backbone` step 5's sweep
-    and `Diagram-taught` lines (its shortlist logged in STATUS in the build and shown to the
-    student only when run alone, offered at `08-practice` step 8's opening), intake's and
+    and `Diagram-taught` lines (its shortlist logged in STATUS whenever a `Build running` line
+    stands, the build's or `11-next-exam`'s source path's, and shown to the student only when run
+    alone without one, offered at `08-practice` step 8's opening or, after `Stage 08 built`, at
+    the source path's step 5 report), intake's and
     PLAN.md's Figures default (a step-through for every drilled trace), `coverage_check.py`'s
     figure floor, CONVERT's slide-image figure (its crops in `_build/img/`, gitignored as renders
     under hard rule 5, FB-011, the line added to an older hub's `.gitignore` before the first crop

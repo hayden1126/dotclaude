@@ -69,12 +69,16 @@ sweep, then a cut (STYLE S11).
    shortlist table, and STATUS points there; each figure is also on its section's Figures line.
    Every backticked id in the backbone is in the registry `linkcheck.py` checks, so a figure
    dropped later loses both its shortlist row and its Figures line.
-4. **The student's adds and cuts.** In the build, which asks nothing (hard rule 1), the
+4. **The student's adds and cuts.** Whenever a `Build running` line stands (the build, or
+   `11-next-exam`'s "A source added to this exam", which runs this stage under its own), nothing is
+   asked (hard rule 1, and while a mock is untaken the student has looked away), and the
    figures are built from the shortlist as it stands: write the shortlist and its cut rows, one
    line each, to `_build/logs/figures.md`, and add `Figure shortlist: <N> kept, <M> cut, for the
    student to review (_build/logs/figures.md)` to STATUS as a judgment call (hard rule 10).
-   `08-practice` step 8's opening offers it, and the student's adds and cuts go in by a
-   `10-polish` figure pass. Run alone on request with the student present, show the shortlist and
+   `08-practice` step 8's opening offers it; after `Stage 08 built`, when that opening has passed,
+   the source path's step 5 report to the student offers it instead. The student's adds and cuts
+   go in by a `10-polish` figure pass. Run alone, which means with no `Build running` line, on
+   request with the student present, show the shortlist and
    the cut rows, one line each, before any figure is built (FB-062), and apply what they add or
    cut.
 
@@ -116,5 +120,5 @@ but isn't one.
 
 `coverage_check.py` exits 0 (every block mapped, every diagram-taught section with its figure);
 every id is in the registry; every section has its Diagram-taught line and the backbone holds the
-figure shortlist (logged in STATUS in the build, shown to the student when run alone); every practice question part has its How it's tested row; `examples.py` exits 0, or PLAN.md's Checker line says nothing in the course
+figure shortlist (logged in STATUS while a `Build running` line stands, shown to the student when run alone without one); every practice question part has its How it's tested row; `examples.py` exits 0, or PLAN.md's Checker line says nothing in the course
 is computable; and the backbone is committed.

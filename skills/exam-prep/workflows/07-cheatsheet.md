@@ -224,7 +224,7 @@ on request with the student present, the session asks once the stage has ended a
 running` line is out (as step 6's prune list). The student keeps the minutes or sets new
 ones (fewer than the measured count can't hold the view's untagged content, which they hear
 first); new ones go on PLAN.md's `Review view:` line and the view is rebuilt from item 2 here
-(more minutes tag more) through item 5. Either way, the STATUS line comes out once they answer. Otherwise (a pass once every mock is taken, a `09-tutor` patch's merge, `08-practice` step 8.4) the main session asks the student.
+(more minutes tag more) through item 5. Either way, the STATUS line comes out once they answer. Otherwise (a pass once every mock is taken, a `09-tutor` patch's merge, `08-practice` step 8.4, whose page rebuild is `08-practice` step 7.4 run on its own) the main session asks the student at once.
 
 1. **Rank the subsections.** Before the cram order exists, by the backbone's How it's tested
    weights; once it exists (`08-practice` step 7), in its rows' order. A subsection under a `Not on

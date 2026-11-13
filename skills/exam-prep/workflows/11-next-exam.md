@@ -399,7 +399,9 @@ build is this build's end, not a stage's.
    product that is published, its version bumped), and log `republished`. Then the report to the
    student: what was added where (a placement that differs from step 2's report), each text
    reworded, the version, and what they must redo, as that item 5 lists it (a changed sheet printed
-   again, the cram order's next mock line). Last, log `step 5 done`, hand off and commit;
+   again, the cram order's next mock line). After `Stage 08 built`, a `Figure shortlist:` line
+   this path's `03-backbone` step 5.4 wrote is offered in the same report, as `08-practice` step
+   8's opening offers one (a no logged and the line taken out). Last, log `step 5 done`, hand off and commit;
    the closing commit takes out the `Build running` line and any `Skip asked:` line for it, and
    rewrites the source's line as `Source added: <doc> <date>: done (<the log>)`. This path
    spawns no key recheck: while a mock is untaken, that line is what `08-practice` step 8.1's key

@@ -277,8 +277,9 @@ Then:
    the notes or a sheet" items 1 and 3 to 5 for the notes page (its compare against the keys, the
    rebuild and checks, the republish to the same URL; a rebuild over the Review view's minutes is
    untagged as item 3 says, or with no `.rv` tag left, new minutes as `07-cheatsheet`'s "Tag the
-   review" opening says: set and logged for the student to confirm in this build, which is
-   unattended, and asked in step 8's opening, with the student present). Plain-text notes have no
+   review" opening says: set and logged for the student to confirm, asked in step 8's opening,
+   with the student present, when this runs in the build, which is unattended; after step 8.4 the
+   session asks at once (`07-cheatsheet`'s "Tag the review")). Plain-text notes have no
    page: the cram order stays a file. This item runs on its own: after items 1 to 3 here, after step 8.4, and
    after items 1 and 2 for any other later change to the cram order's tiers, rows or skip list. A
    change to the cram order inside "Changing the notes or a sheet" (a row that quotes the changed
@@ -315,7 +316,7 @@ keeps it in STATUS. Any student's links on the
    (`cat`, hard rule 12) and add the line `_build/videos/` to `.gitignore`, before any transcript
    or frame lands (W35). When `_build/watch/` already holds a run (a rerun in this exam), take that
    run's files out before the first wave, or the merge and the cut-loss slot read a topic's old
-   gap-wave ranking or old cuts as this run's: `git rm -q --ignore-unmatch '_build/watch/cand-*'
+   gap-wave ranking or old cuts as this run's: `git rm -q -f --ignore-unmatch '_build/watch/cand-*'
    '_build/watch/rank-*' '_build/watch/annot-*' _build/watch/merge-log.md`, then `rm -f` any of
    them still there (a run cut short before its commit). Git keeps the committed ones in history.
    `fetch-log.md` stays: item 2's first fetch starts it fresh. Draft the topic list in `_build/watch/topics.md`: one topic per notes
