@@ -176,7 +176,7 @@ that must not see answers read the extract, so it holds none.}}
     a key page still goes under its part's block, and the key page's block holds what else is on
     that page. When {{SOLDOC}} solves several sets, its page or section blocks go in its own
     file instead, {{ROOT}}/_build/solutions/<doc id in lower case>.md, written in full the same
-    way, and each set's part blocks in that set's file, beside its extract; the check fails a
+    way, and each part's block beside the extract holding its question block; the check fails a
     block in any other file (`WRONG SOLUTIONS FILE`). A set's home is the solutions file beside
     each extract holding any block of that set (a page, section or slide block counts, not only
     a question part's), so a deck split into parts `r3.md` and `r3b.md` keeps a key slide beside

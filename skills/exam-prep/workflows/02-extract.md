@@ -14,13 +14,15 @@ transcribes and never summarizes.
   part's last three pages, as context only. A slide is never split between agents (FB-041).
 - **Small documents share an agent:** a homework or recitation with an answers file that solves
   it alone (its Key cell `for HW1`), or a past exam holding its own key (the brief's SOLUTIONS
-  slots). That agent writes both files of the pair, the extract and the set's solutions file
-  `_build/solutions/<name>.md`, under the extract's `<name>`, each solution keyed by its question
+  slots). That agent writes both files of the pair, the extract and the solutions file beside it,
+  `_build/solutions/<name>.md` under the extract's `<name>`, each solution keyed by its question
   part's block id (below, "The solutions file").
 - **An answers file that solves several sets gets its own agent** (its Key cell `for HW1, HW2
   and HW3`). It reads those sets' question pages for their part ids, and the answers file, and
-  writes each set's part blocks in that set's solutions file, `_build/solutions/<name>.md` under
-  that set's extract `<name>`, plus the answers file's own page or section blocks, held in full
+  writes, for each set, one solutions file beside each extract that holds the set's blocks,
+  `_build/solutions/<name>.md` under that extract's `<name>`, holding that extract's part blocks
+  (a deck split over two extracts may need two), plus the answers file's own page or section
+  blocks, held in full
   like any answers page, in its own file, `_build/solutions/<doc id in lower case>.md`
   (`_build/solutions/hws.md` for `HWS`). Each set's own agent, in the same wave or an earlier
   one, writes only its extract (the brief without the SOLUTIONS slots), with the same part ids. An agent may write several files,

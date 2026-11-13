@@ -414,7 +414,9 @@ Waiting checks`. Run `01-ingest` for the file (its MANIFEST.md row `Answers: yes
 `for <doc>`) and `02-extract` for the set again with its solutions, as its step 1 says: an
 answers file that solves this set alone shares its agent, which writes the pair (the extract,
 and the solutions file with each solution under its part's block id); one that solves several
-sets gets its own agent, which writes each set's solutions file and one for its own pages, while
+sets gets its own agent, which writes, for each set, one solutions file beside each extract that
+holds the set's blocks (a deck split over two extracts may need two), and one for its own pages,
+while
 each set's own agent writes only its extract.
 Then `05-verify`, "Official solutions that arrive late", which adds them to the self-test and
 diffs every answer against the notes and any `practice/tutor/` values file. That
