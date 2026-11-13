@@ -87,7 +87,10 @@ Topic cuts: {{none | one line each:}}
     A paged doc fails it (`SECTIONS KEY ON A PAGED DOC`).
   - `extract_check.py` fails an in-scope Answers `yes` row with an empty Key cell (`NO KEY`),
     any other wording (`UNREAD KEY`), and a filled Key cell on a row whose Answers isn't `yes`
-    (`KEY WITHOUT ANSWERS`). A row on a STATUS `Unverified:` line solves nothing until verified.
+    (`KEY WITHOUT ANSWERS`). A row on a STATUS `Unverified:` line solves nothing until verified,
+    but its Key cell gets these checks all the same, and every other one that reads this table
+    alone. An Answers `yes` row whose Key cell is empty or unread counts as an unattempted set
+    for the questions check until it holds the attempt mark, since what it solves is unknown.
 - **Topic cuts** name what the exam leaves out inside an `in` range, which no page range can say
   ("negative weights are not on Exam 1", from a staff post). They are a list under the table, never
   a second table, and scope like the rows: `03-backbone` marks the subsections a cut reaches and

@@ -119,7 +119,8 @@ key material whatever page reference it carries (`[PE3 Marking scheme p.2]` is k
 the Key cell that carries a page reference itself (`sections: Answers p.4`) matches its block,
 `[PE3 Answers p.4]`. A `reserved`,
 `pending` or `out` answers file solves nothing, nor does a row on a STATUS `Unverified:` line
-until it is verified. An answers file solves only in-scope sets: a `for ...` cell naming a
+until it is verified, yet that row's Key cell gets the checks that read MANIFEST.md alone (all
+but `KEY SECTION NOT FOUND` and `ANSWERS WITH NO PAIRING`, which need its blocks). An answers file solves only in-scope sets: a `for ...` cell naming a
 `pending`, `reserved` or `out` set fails `KEY NAMES A SET NOT IN SCOPE` (step 3), since that set
 is never extracted and its answers would have no home. The brief's `{{KEY PAGES}}` slot gives the agent what the Key cell names:
 the pages, `none` for `inline`, or the key sections by locator. Only those pages or sections go
@@ -307,5 +308,6 @@ judgment call. Its warnings (a solutions block for a stem, a
 loose `Solution:` line or an `Answer:` line in a solved doc's extract) are each read and either
 fixed or noted in STATUS. It
 skips a doc on a STATUS `Unverified:` line (`11-next-exam`, "A source added unverified") until
-that doc has a block. Commit the extracts and the solutions files: they are tracked in the hub,
+that doc has a block, but for its Key cell's checks that read MANIFEST.md alone, which run on
+that row too. Commit the extracts and the solutions files: they are tracked in the hub,
 which stays local.
