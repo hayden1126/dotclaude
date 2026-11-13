@@ -488,7 +488,8 @@ how those surface.
 Role: `general-purpose`: it searches the web and writes one output file per part. One per topic,
 in waves of a few (`08-practice`, "Watch list", step 2), in two parts with a fetch between them: a
 delegated agent can't run `yt-dlp`, a Python program (L07), or reach a host the sandbox doesn't
-list (L02), so the main session fetches. Part 1, **Search**, writes the candidates; then the main
+list (L02), so the main session fetches (in a build, with the video hosts in `allowed_domains`
+only, and a fetch log it starts fresh each run). Part 1, **Search**, writes the candidates; then the main
 session fetches each one's captions, chapters and storyboard frames; part 2, **Judge**, ranks from
 those files, by the same agent resumed (SendMessage to its id) or a fresh one from this brief with
 `{{PART}}` set to `judge` (`search` for part 1). A later wave fills the GAPS slot for the gaps the first one flagged,
@@ -535,7 +536,8 @@ session merges every topic's file into the page.
   {{URLS}}. | drop this line}}
 - Judge part: read your search file, {{ROOT}}/_build/watch/cand-{{TOPIC}}{{GAPS: -gaps}}.json, and judge each
   candidate from its transcript (auto-captions), its chapters and its storyboard frames, which the main session fetched into {{ROOT}}/_build/videos/{{TOPIC}}/, named
-  by video id, and from {{ROOT}}/_build/watch/fetch-log.md for what it couldn't fetch; never from
+  by video id, and from {{ROOT}}/_build/watch/fetch-log.md for what it couldn't fetch (this run's
+  only: the main session starts it fresh each run, so every line in it is current); never from
   a title or a description alone. Judge a full lecture by its chapters and keep a segment of it
   (W11), read back to the lecture's start (W20).
 - Tools: web search, and Read, Write and Glob on the files above. No shell: you run no `yt-dlp`,

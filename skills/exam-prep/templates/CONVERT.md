@@ -132,7 +132,7 @@ one list, an item that opens with no label or another word, and a label repeated
   `assemble.py` adds the rest: a source key, the page's last section, with a row per code the page
   cites (from `MANIFEST.md`), and on each citation an href to its code's row (`#src-D5`, from its
   first word) and a title naming the file. A code matches its row in any case (`Ed #12` links to
-  the row `ED`), and the key uses the row's spelling. A code with no `MANIFEST.md` row fails the
+  the row `ED`), and the key uses the row's spelling (FB-123). A code with no `MANIFEST.md` row fails the
   build. The `§` in a bracket that opens with a document id is that document's,
   never one of the notes' sections: it is no bare reference.
 - Every Markdown link `[text](#id)` becomes `<a class="xref" href="#id">text</a>`. A link to a

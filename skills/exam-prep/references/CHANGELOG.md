@@ -125,8 +125,9 @@ evidence ids.
   - FB-111: every section's own dark-mode highlight band, set by `assemble.py` (J1.C11, I3.C9).
   - FB-015: a check new to the skill passes an existing hub's form with a warning naming the pass
     that upgrades it: a cram order with no depth labels or a backbone with no `Diagram-taught`
-    lines builds with a WARN; separately, citation codes now match their MANIFEST.md row in any
-    case, silently (I3.C8, I3.G8, J1.G5, I1 (section 2)).
+    lines builds with a WARN (I3.C8, I3.G8, J1.G5, I1 (section 2)).
+  - FB-123: citation codes now match their MANIFEST.md row in any case, silently, the source key
+    keeping the row's spelling (I3.C8).
   - FB-056: question-only copies of the extracts with solutions (`qonly.py`, `02-extract` step
     3.4, checked by `extract_check.py`), read by every answer-blind brief (I3.C18, I3.G9, I2.G10).
   - FB-193: each cram row names its needs, and the cram order gets a Read already line, which
@@ -134,8 +135,12 @@ evidence ids.
   - FB-194: the watch list: `templates/WATCH.md`'s rules W1 to W39, `videos.py`,
     `verify_videos.mjs`, `08-practice`'s "Watch list", intake question 6 (and the reopen's
     question 7), PLAN.md's line and three briefs; the rankers search and judge in two parts and
-    the main session fetches between them (L07, L02); run alone it waits while a `Build running`
-    line stands, a polish pass's included, never on a finished pass's `Polish:` line (hard rule 1); L72 to L75 are its tool lessons, which W36 to W39 cite
+    the main session fetches between them (L07, L02), in a build with `allowed_domains` only,
+    into a fetch log started fresh each run; a gap wave writes its own `-gaps` candidate and
+    ranking files, which the merge and the cut-loss reviewer read too; `11-next-exam` step 5
+    archives it with the finished exam and lists its URL under `Earlier exams:`, so a new run
+    publishes to a new URL; run alone it waits while a `Build running` line stands, a polish
+    pass's included, never on a finished pass's `Polish:` line (hard rule 1); L72 to L75 are its tool lessons, which W36 to W39 cite
     (I.O, I1.C5, I1.C6, I1.C7,
     I1.C9, I1.C13, I1.C14, I1.C15, I1.C16, I1.C17, I1.C18, I1.C25, I1.C26, I3.C2, I3.C3, I1.G4,
     I1.G5, I1.G6, I1.G7, I3.G7).

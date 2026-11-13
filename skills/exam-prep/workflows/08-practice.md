@@ -326,8 +326,14 @@ keeps it in STATUS. Any student's links on the
       storyboard frames into `_build/videos/<topic>/`, named by video id, with `yt-dlp` and W36 to
       W39's fixes (a looped child's stdin from `/dev/null`, `--sub-langs "en.*,en"`, one fetch at a
       time with a pause, H.264, one frame opened before any is judged). It runs with the video
-      hosts in `allowed_domains` (exact hosts, as the sandbox's block names them), or with the
-      sandbox off. Each candidate it can't fetch goes in `_build/watch/fetch-log.md` with why.
+      hosts in `allowed_domains` (exact hosts, as the sandbox's block names them). In a build
+      that is the only way: a sandbox-off call can stop at a permission prompt no one answers
+      (hard rule 1), and it would run `yt-dlp` on untrusted pages outside the sandbox. Run alone,
+      with the student present, a fetch the sandbox still blocks runs with the sandbox off only
+      when the student says so. The run's first fetch starts `_build/watch/fetch-log.md` fresh
+      (`: > _build/watch/fetch-log.md`), so no earlier run's entry reaches the judge; each
+      candidate it can't fetch goes in it with why, and the build goes on. A later wave's fetch
+      appends, and a re-fetch that succeeds takes its candidate's line out.
    3. **Judge.** Each topic's ranker, resumed (SendMessage to its id) or a fresh one from the
       same brief, part `judge`, ranks from those files into its own
       `_build/watch/rank-<topic>.json`; a fetch it asks for again goes back through item 2.
