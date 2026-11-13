@@ -7,9 +7,11 @@ a stray digit in a note maps nothing, a cell that doesn't parse fails, a target 
 `skip (why)` or a subsection the backbone defines, and no blocks at all fails.
 
 The figure floor (STYLE S11): a section marked `Diagram-taught: yes` names a figure on its Figures
-line; a section with no such line (written before the rule) passes with a WARN naming 10-polish's
-figure pass, whether or not other sections carry it (a reopened hub's extended backbone, FB-015),
-and a backbone with none gets one WARN in all; two lines or a value other than yes or no fails."""
+line; a reopened hub's older section marked `Diagram-taught: pre-S11` passes with a WARN naming
+10-polish's figure pass (FB-015); a section with no line fails once any section carries one, and a
+backbone with none gets one WARN in all; two lines, a value other than yes, no or pre-S11, a
+misspelled line (`- **Diagram-taught:** yes`, `- Diagram taught: yes`) and a duplicate `## §N`
+heading fail."""
 import contextlib
 import importlib.util
 import io
@@ -297,17 +299,43 @@ class FigureFloor(unittest.TestCase):
                       warns[0])
         self.assertIn("10-polish figure pass", warns[0])
 
-    def test_a_section_without_the_line_warns_when_others_carry_it(self):
-        # A hub reopened for the next exam extends its backbone: its new sections carry the line,
-        # its old ones don't. Failing them stopped the reopened build at stage 03 (FB-015).
+    def test_a_section_without_the_line_fails_when_others_carry_it(self):
+        # It used to warn and pass, so a fresh build that left the line out passed too. A reopened
+        # hub marks its older sections `pre-S11` instead (FB-015).
         self.backbone(FLOOR.replace("- Diagram-taught: no\n", ""))
         code, out = self.run_check()
-        self.assertEqual(code, 0, out)
-        self.assertNotIn("§2:", out)
-        warns = self.err.getvalue().splitlines()
-        self.assertEqual(len(warns), 1, warns)
-        self.assertIn("coverage_check: WARN: §2: no `Diagram-taught: yes|no` line", warns[0])
-        self.assertIn("10-polish figure pass", warns[0])
+        self.assertEqual(code, 1, out)
+        self.assertIn("§2: no `Diagram-taught: yes|no` line", out)
+        self.assertIn("pre-S11", out)
+        self.assertNotIn("§1:", out)
+
+    def test_a_near_miss_line_fails_as_malformed(self):
+        # A misspelled line read as no line at all and passed, even on a `yes` section with no
+        # figure.
+        for line in ("- **Diagram-taught:** yes", "* Diagram-taught: yes", "- Diagram taught: yes",
+                     "- diagram-taught: yes", "Diagram-taught: yes", "- **Diagram taught**: yes",
+                     "1. Diagram-taught: yes", "- Diagramtaught: yes"):
+            self.backbone(FLOOR.replace("- Diagram-taught: no\n", line + "\n"))
+            code, out = self.run_check()
+            self.assertEqual(code, 1, line)
+            self.assertIn(f"§2: MALFORMED Diagram-taught line `{line}`", out, line)
+        # In a backbone with no exact line anywhere it still fails.
+        self.backbone(FLOOR.replace("- Diagram-taught: no\n", "- **Diagram-taught:** yes\n")
+                      .replace("- Diagram-taught: yes (D1 pp.3-6 teach it through stage "
+                               "diagrams)\n", "").replace("- Diagram-taught: yes\n", ""))
+        code, out = self.run_check()
+        self.assertEqual(code, 1, out)
+        self.assertIn("§2: MALFORMED Diagram-taught line", out)
+
+    def test_a_duplicate_section_number_fails(self):
+        # The second `## §1` used to overwrite the first, hiding its broken floor.
+        self.backbone(FLOOR.replace("## §3 Shapes", "## §1 Shapes").replace(
+            "- Figures: `fig-1-stages` Fig 1.1 (static: a widget passing stage to stage)\n  [D1 p.4].",
+            "- Figures: none."))
+        code, out = self.run_check()
+        self.assertEqual(code, 1, out)
+        self.assertIn("§1: DUPLICATE section number: 2 `## §1` headings", out)
+        self.assertIn("§1: Diagram-taught: yes, but its Figures line names no `fig-` id", out)
 
     def test_a_reopened_hubs_old_section_warns_and_the_new_one_is_held(self):
         old_new = """# Backbone
@@ -319,6 +347,7 @@ class FigureFloor(unittest.TestCase):
 | 1.1 | Stages | `sec-1-stages` | D1 pp.1-9 | | trace |
 
 - Figures: none
+- Diagram-taught: pre-S11
 
 ## §2 New (`sec-2`, file `notes/02-new.md`, full)
 
@@ -340,8 +369,13 @@ class FigureFloor(unittest.TestCase):
         self.assertEqual(code, 0, out)
         warns = self.err.getvalue().splitlines()
         self.assertEqual(len(warns), 1, warns)
-        self.assertIn("WARN: §1: no `Diagram-taught: yes|no` line", warns[0])
+        self.assertIn("WARN: §1: Diagram-taught: pre-S11", warns[0])
         self.assertIn("10-polish figure pass", warns[0])
+        # Without the marker the old section reads as a fresh omission and fails.
+        self.backbone(old_new.replace("- Diagram-taught: pre-S11\n", ""))
+        code, out = self.run_check()
+        self.assertEqual(code, 1, out)
+        self.assertIn("§1: no `Diagram-taught: yes|no` line", out)
         # The new section is still held to the floor.
         self.backbone(old_new.replace("- Figures: `fig-2-x`", "- Figures: none"))
         code, out = self.run_check()
@@ -360,6 +394,10 @@ class FigureFloor(unittest.TestCase):
         code, out = self.run_check()
         self.assertEqual(code, 1, out)
         self.assertIn("§2: `Diagram-taught: maybe` is neither yes nor no", out)
+        self.backbone(FLOOR.replace("- Diagram-taught: no\n", "- Diagram-taught: pre-S12\n"))
+        code, out = self.run_check()
+        self.assertEqual(code, 1, out)
+        self.assertIn("§2: `Diagram-taught: pre-S12` is neither yes nor no", out)
 
     def test_the_templates_sections_carry_the_line(self):
         with open(os.path.join(REPO, "skills", "exam-prep", "templates", "backbone.md.tmpl"),

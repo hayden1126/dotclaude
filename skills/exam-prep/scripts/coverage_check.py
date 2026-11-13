@@ -26,12 +26,16 @@ other locator (`### [C1 main.py]`, or `Q3C`, which isn't a part) is mapped only 
 
 The figure floor (STYLE S11): each `## §N` section of the backbone carries a `- Diagram-taught:
 yes|no` line beside its `- Figures:` line, and a section marked `yes` (its slides teach it through
-diagrams) must name at least one `fig-` id on its Figures line. A section with no such line was
-written before the rule (a hub reopened for the next exam extends its backbone, so its old
-sections lack the line while the new ones carry it, FB-015): it passes, with a WARN line on stderr
-naming 10-polish's figure pass, which adds the lines. A backbone with none at all gets one such
-WARN for the whole backbone; otherwise each section lacking the line gets its own. Two lines in a
-section, a value other than yes or no, or a `yes` with no figure fails.
+diagrams) must name at least one `fig-` id on its Figures line. A hub reopened for the next exam
+extends its backbone, and its older sections, written before the rule, say `- Diagram-taught:
+pre-S11` (FB-015): each passes with a WARN line on stderr naming 10-polish's figure pass, which
+sets yes or no and adds the figures. A backbone with no such line anywhere predates the rule and
+gets one WARN for the whole backbone. Once any section carries a line, a section with none fails:
+a fresh build that left it out looks the same as an old section, so the old ones are marked. A
+line that misspells the form (`- **Diagram-taught:** yes`, `* Diagram-taught: yes`, `- Diagram
+taught: yes`, any case) fails as malformed rather than reading as absent. Two lines in a section,
+a value other than yes, no or pre-S11, a `yes` with no figure, or two `## §N` headings with the
+same number (the second would hide the first's floor) fails.
 
 Exit 1 when a block is unmapped, a row's cell doesn't parse, a target isn't a subsection, a line
 looks like a block header but isn't one, the extracts hold no blocks (or a file holds none), or a
@@ -65,6 +69,9 @@ SEPARATOR = re.compile(r"\|[\s:|-]+\|?")
 EN_DASH = chr(0x2013)
 SECTION_HEAD = re.compile(r"^## §(\d+)\b.*$", re.M)
 DIAGRAM_TAUGHT = re.compile(r"^\s*-\s*Diagram-taught:\s*(.*)$")
+# Any list, quote, heading or bold form of the words, in any case: a line this matches and
+# DIAGRAM_TAUGHT doesn't is a misspelled Diagram-taught line, never an absent one.
+NEAR_DIAGRAM_TAUGHT = re.compile(r"^[\s>#]*(?:[-*+]|\d+[.)])?[\s*_]*diagram[-_ ]?taught", re.I)
 FIGURES = re.compile(r"^\s*-\s*Figures:(.*)$")
 FIG_ID = re.compile(r"`fig-[\w-]+`")
 # A backbone with no Diagram-taught line anywhere predates the rule; it passes with this warning.
@@ -199,18 +206,26 @@ def matrix(backbone):
 def figure_floor(backbone):
     """([problems], [warnings]) for the figure floor: each `## §N` section's `- Diagram-taught:`
     line and, when it says yes, a `fig-` id on its `- Figures:` line (a Figures line may wrap onto
-    indented lines). A section with no such line is a warning, never a problem (FB-015)."""
+    indented lines). A `pre-S11` section is a warning (FB-015); a section with no line is one only
+    when no section carries a line (or a misspelled one)."""
     heads = list(SECTION_HEAD.finditer(backbone))
-    found, bad = {}, []
+    found, bad, count = [], [], {}
+    for head in heads:
+        count[head.group(1)] = count.get(head.group(1), 0) + 1
+    for num in sorted((n for n, c in count.items() if c > 1), key=int):
+        bad.append(f"§{num}: DUPLICATE section number: {count[num]} `## §{num}` headings; each "
+                   "section number heads one section")
     for i, head in enumerate(heads):
         end = heads[i + 1].start() if i + 1 < len(heads) else len(backbone)
         body = re.split(r"^## ", backbone[head.end():end], maxsplit=1, flags=re.M)[0]
         lines = body.splitlines()
-        taught, figures = [], ""
+        taught, malformed, figures = [], [], ""
         for n, line in enumerate(lines):
             m = DIAGRAM_TAUGHT.match(line)
             if m:
                 taught.append(m.group(1).strip())
+            elif NEAR_DIAGRAM_TAUGHT.match(line):
+                malformed.append(line.strip())
             m = FIGURES.match(line)
             if m:
                 figures = m.group(1)
@@ -218,22 +233,34 @@ def figure_floor(backbone):
                     if not more.startswith((" ", "\t")) or not more.strip():
                         break
                     figures += " " + more.strip()
-        found[head.group(1)] = (taught, figures)
-    if not any(taught for taught, _ in found.values()):
-        return [], [PRE_S11] if found else []
+        found.append((head.group(1), taught, malformed, figures))
+    if not any(taught or malformed for _, taught, malformed, _ in found):
+        return bad, [PRE_S11] if found else []
     warnings = []
-    for num, (taught, figures) in found.items():
+    for num, taught, malformed, figures in found:
+        for line in malformed:
+            bad.append(f"§{num}: MALFORMED Diagram-taught line `{line}`: write it "
+                       "`- Diagram-taught: yes|no` (or `pre-S11` for a reopened hub's older "
+                       "section)")
+        if malformed:
+            continue
         if not taught:
-            warnings.append(f"§{num}: no `Diagram-taught: yes|no` line: a section written before "
-                            "the figure floor (STYLE S11, FB-015), so it isn't held to it; a "
-                            "10-polish figure pass adds the line and the figure")
+            bad.append(f"§{num}: no `Diagram-taught: yes|no` line, though other sections carry "
+                       "one: a fresh section states it, and a reopened hub's older section says "
+                       "`- Diagram-taught: pre-S11` (FB-015)")
             continue
         if len(taught) > 1:
             bad.append(f"§{num}: {len(taught)} Diagram-taught lines; a section has one")
             continue
+        if re.match(r"pre-S11(?:\s|$|\()", taught[0]):
+            warnings.append(f"§{num}: Diagram-taught: pre-S11, a section written before the "
+                            "figure floor (STYLE S11, FB-015), so it isn't held to it; a "
+                            "10-polish figure pass sets yes or no and adds the figure")
+            continue
         word = re.match(r"(yes|no)\b", taught[0])
         if not word:
-            bad.append(f"§{num}: `Diagram-taught: {taught[0]}` is neither yes nor no")
+            bad.append(f"§{num}: `Diagram-taught: {taught[0]}` is neither yes nor no "
+                       "(nor pre-S11)")
         elif word.group(1) == "yes" and not FIG_ID.search(figures):
             bad.append(f"§{num}: Diagram-taught: yes, but its Figures line names no `fig-` id: a "
                        "section its slides teach through diagrams leads with a figure (STYLE S11)")
