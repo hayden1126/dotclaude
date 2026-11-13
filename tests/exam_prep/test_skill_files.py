@@ -240,7 +240,8 @@ class QuestionsCheckFiles(unittest.TestCase):
         self.assertNotIn("questions check against that set", flat)
 
     def test_no_workflow_passes_question_files(self):
-        for name in sorted(os.listdir(os.path.join(SKILL, "workflows"))):
+        for name in sorted(n for n in os.listdir(os.path.join(SKILL, "workflows"))
+                           if n.endswith(".md")):
             self.assertNotIn("--questions", self.flat(name), name)
             self.assertNotIn("--pages notes/", self.flat(name), name)
 
@@ -323,7 +324,8 @@ class QuestionsCheckFiles(unittest.TestCase):
                 self.assertIn(phrase, flat, (name, phrase))
         self.assertIn("`no file holds <DOC>, ...; extract it, then rerun`",
                       self.flat("05-verify.md"))
-        for name in sorted(os.listdir(os.path.join(SKILL, "workflows"))):
+        for name in sorted(n for n in os.listdir(os.path.join(SKILL, "workflows"))
+                           if n.endswith(".md")):
             flat = self.flat(name)
             for old in ("rendered text, extracted or not", "thin rendered text",
                         "its rendered text thin", "checked against its rendered text"):
