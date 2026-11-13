@@ -42,11 +42,13 @@ Topic cuts: {{none | one line each:}}
   its own.
 - **Answers:** `yes` marks a file that holds answers (official solutions, a past exam's key).
   - Only an in-scope row (`in` or `concepts only`) answers anything. Its answers are extracted into
-    `_build/solutions/`, one file per set beside its extract (every page of a separate answers
-    file; a past exam's key pages or sections, and each part's solution under its part), never
-    into an extract. A past exam's other pages (the cover, the rules, a formula sheet) stay in its
-    extract (`02-extract`). Mock writers never read
-    `_build/solutions/`.
+    `_build/solutions/`, one file per set, `_build/solutions/<name>.md` beside each set's extract
+    `_build/extract/<name>.md` (each part's solution under its part; a separate answers file's
+    pages, or a past exam's key pages or sections), never into an extract. An answers file that
+    solves several sets keeps its own pages in `_build/solutions/<answers file name>.md`, each
+    holding only the line `(transcribed under the sets' blocks)`: its text sits in each set's own
+    file. A past exam's other pages (the cover, the rules, a formula sheet) stay in its extract
+    (`02-extract`). Mock writers never read `_build/solutions/`.
   - Nothing published quotes a set's official solution until the student has attempted every part
     of that set, which the set's own row then records in its Answers cell: `no, attempted
     YYYY-MM-DD` for a set with no key of its own (`HW1` above), `yes, attempted YYYY-MM-DD` for a
@@ -58,13 +60,17 @@ Topic cuts: {{none | one line each:}}
   looking at the file, in exactly one of these forms, and `extract_check.py` reads the whole cell:
   - empty or `-`: not an answers doc (and a `pending` row until its file arrives);
   - `for HW1, HW2 and HW3`: a separate answers file, naming the sets it solves, each a doc id of
-    this table (`KEY NAMES NO DOC` otherwise);
-  - `pp. 7-9, 11` or `p.N`: a doc holding its own key (a past exam), on those pages;
+    this table (`KEY NAMES NO DOC` otherwise) and never its own row's (`KEY NAMES ITS OWN DOC`: a
+    doc holding its own key takes one of the forms below);
+  - `pp. 7-9, 11` or `p.N`: a doc holding its own key (a past exam), on those pages, only for a
+    PDF or a row whose Pages is a number (`PAGES KEY ON AN UNPAGED DOC` otherwise);
   - `inline`: a doc holding its own key, each solution under its question on the same page, so
     no page is a key page;
-  - `sections: Marking scheme, Answers`: a source without pages (a Word exam) whose key is the
-    sections with exactly those locators (`### [PE3 Marking scheme] ...`); a paged doc fails it
-    (`SECTIONS KEY ON A PAGED DOC`).
+  - `sections: Marking scheme, Answers`: a source without pages, a Word file or a slide deck,
+    whose key is the sections or slides with exactly those locators (`### [PE3 Marking scheme]
+    ...`; a deck's slides as `sections: #/5, #/6`); a block whose locator is such a name
+    followed by ` Q...` or a comma is key material too. A paged doc fails it (`SECTIONS KEY ON A
+    PAGED DOC`).
   - `extract_check.py` fails an in-scope Answers `yes` row with an empty Key cell (`NO KEY`),
     any other wording (`UNREAD KEY`), and a filled Key cell on a row whose Answers isn't `yes`
     (`KEY WITHOUT ANSWERS`). A row on a STATUS `Unverified:` line solves nothing until verified.
