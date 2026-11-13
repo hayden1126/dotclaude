@@ -156,14 +156,26 @@ its extract is `allow`.
 `questions`: every extract holding any block of an unattempted set, every existing home
 solutions file of one (the homes above), and each multi-set answers file's own
 _build/solutions/<doc id lower>.md, when it exists, while any set it names is unattempted; a file
-serving an attempted set too is still listed. An unattempted set no extract holds a block of (a
-source added unverified, 11-next-exam, has a row and renders but no extract) is read from its
-rendered text instead: `questions _build/text/<doc>/` when that directory holds a page's text,
-else `questions _build/text/<doc lower>.md` (or `<doc>.md`, a Word file's) when it exists; with
-neither it prints `no file holds <doc>, an unattempted set: ...; render it (01-ingest) or extract
-it, then rerun` on stderr and exits 2. `allow`: every other extract. With no unattempted set it
-prints nothing; it exits 0, 2 with no MANIFEST.md, one with no rows under a header it knows (the
-main check's reason, on stderr) or a set with neither, 1 on a MANIFEST.md it can't read.
+serving an attempted set too is still listed. Beside them, the rendered text of every unattempted
+set and of every in-scope answers file whose `for` key names one, whether or not anything of it
+was extracted (an answers file added late is in no extract or solutions file):
+`questions _build/text/<doc>/` when that directory holds a page's text, else
+`questions _build/text/<doc lower>.md` (or `<doc>.md`, a Word file's) when it exists; a reveal
+deck or a course page (File ends .html), which 01-ingest never renders, is read from its source,
+`questions <its File path>`, when that exists. Such a doc that nothing extracted holds (a set with
+no block in any extract, such as a source added unverified by 11-next-exam; an answers file with
+no block or cite in a listed solutions file) is read from its rendered text alone, so with none it
+prints `no file holds <doc>, an unattempted set: ...; render it (01-ingest) or extract it, then
+rerun` (`the answers to an unattempted set (<set>)` for an answers file; `extract it` alone for a
+source 01-ingest doesn't render) on stderr and exits 2, and with thin text (under 200 characters
+that are not whitespace a page on average, render_pdf.sh's bar: a scanned PDF's text layer of form
+feeds, or an empty _build/text/<doc>/) it prints `<doc>'s rendered text <path> is thin (...) and
+nothing of it is extracted: extract it, then rerun` and exits 2: thin text compares nothing. A
+known limit: pdftotext -layout can interleave a two-column page's columns, so a quote of such a
+page may not appear as a run in its rendered text; the extracts stay the primary source. `allow`:
+every other extract. With no unattempted set it prints nothing; it exits 0, 2 with no MANIFEST.md,
+one with no rows under a header it knows (the main check's reason, on stderr) or a doc it can't
+read (above), 1 on a MANIFEST.md it can't read.
 Stdlib only, plus reveal_slice.py from this directory."""
 import argparse
 import contextlib
@@ -280,6 +292,11 @@ DIRS = ("extract", "solutions")
 NO_ROWS = "MANIFEST.md has no rows under a `| Doc id | File | ... |` header"
 # The files the questions check reads in a directory (mock_leak.py's SUFFIXES).
 TEXT_SUFFIXES = (".md", ".txt", ".tex", ".html", ".htm")
+# render_pdf.sh's thin page: fewer characters that are not whitespace than this (a scanned PDF's
+# text layer is empty or a form feed).
+THIN = 200
+# The sources 01-ingest renders to _build/text/: a PDF (render_pdf.sh) and a Word file (pandoc).
+RENDERS = (".pdf", ".docx")
 
 def numbers(text):
     """`17-20, 23` -> {17, 18, 19, 20, 23}."""
@@ -1125,38 +1142,80 @@ def unattempted(rows, extracts):
     return sorted(doc for doc in sets if not rows[doc]["attempted"])
 
 
-def rendered_text(root, doc):
-    """A doc's rendered text (01-ingest), relative to root: the directory _build/text/<doc>/ (a
-    PDF's pages) when it holds a file the questions check reads, else _build/text/<doc lower>.md
-    or _build/text/<doc>.md (a Word file's) when it exists; None for neither."""
+def nonblank(path):
+    """The number of characters in a file that are not whitespace (render_pdf.sh's count; a form
+    feed is whitespace), read as bytes, so a file that isn't UTF-8 still counts."""
+    with open(path, "rb") as f:
+        return len(re.sub(rb"\s", b"", f.read()))
+
+
+def rendered_text(root, doc, row):
+    """(a doc's rendered text relative to root or None, whether it is thin). A reveal deck or a
+    course page (File ends .html or .htm), which 01-ingest never renders to _build/text/, is its
+    source file, the File cell's path, when that exists, never thin. Any other doc's is the
+    directory _build/text/<doc>/ (render_pdf.sh's pages) when it holds a file the questions check
+    reads, else _build/text/<doc lower>.md or _build/text/<doc>.md (pandoc's, of a Word file)
+    when it exists, else _build/text/<doc>/ when it exists, empty. Thin is render_pdf.sh's bar:
+    fewer than THIN characters that are not whitespace a page on average (a .md file counts as one
+    page), an empty directory included, as a scanned PDF's text layer is."""
+    if row["file"].lower().endswith((".html", ".htm")):
+        found = os.path.isfile(os.path.join(root, row["file"]))
+        return (row["file"] if found else None), False
     d = os.path.join(root, "_build", "text", doc)
-    if any(f.endswith(TEXT_SUFFIXES) for _, _, fs in os.walk(d) for f in fs):
-        return f"_build/text/{doc}/"
+    pages = [os.path.join(p, f) for p, _, fs in os.walk(d) for f in fs if f.endswith(TEXT_SUFFIXES)]
+    if pages:
+        return f"_build/text/{doc}/", sum(map(nonblank, pages)) < THIN * len(pages)
     for name in dict.fromkeys((doc.lower(), doc)):
-        if os.path.isfile(os.path.join(root, "_build", "text", f"{name}.md")):
-            return f"_build/text/{name}.md"
-    return None
+        path = os.path.join(root, "_build", "text", f"{name}.md")
+        if os.path.isfile(path):
+            return f"_build/text/{name}.md", nonblank(path) < THIN
+    return (f"_build/text/{doc}/", True) if os.path.isdir(d) else (None, False)
+
+
+def unread(doc, row, text, thin, solves=()):
+    """Why the questions check can't read a doc leak_files() must read that nothing extracted
+    holds: an unattempted set (`solves` empty) or an answers file solving the unattempted sets in
+    `solves`, given rendered_text()'s (text, thin); None when its rendered text serves. A source
+    01-ingest doesn't render (RENDERS) is told to be extracted only."""
+    if thin:
+        return (f"{doc}'s rendered text {text} is thin (under {THIN} characters a page on average: "
+                "a scan?) and nothing of it is extracted: extract it, then rerun")
+    if text:
+        return None
+    what = (f"the answers to an unattempted set ({', '.join(solves)}): no solutions file"
+            if solves else "an unattempted set: no extract")
+    name = row["file"].lower()
+    if name.endswith((".html", ".htm")):
+        lacks, fix = f"its source {row['file']} isn't there", "extract it"
+    else:
+        lacks = "_build/text/ holds no rendered text of it"
+        fix = "render it (01-ingest) or extract it" if name.endswith(RENDERS) else "extract it"
+    return f"no file holds {doc}, {what} holds a block of it and {lacks}; {fix}, then rerun"
 
 
 def no_text(missing):
-    """The reason the questions check can't read the unattempted sets in `missing`, each with no
-    block in any extract and no rendered text (leak_files())."""
-    return "; ".join(f"no file holds {doc}, an unattempted set: no extract holds a block of it and "
-                     "_build/text/ holds no rendered text of it; render it (01-ingest) or extract "
-                     "it, then rerun" for doc in missing)
+    """The reasons the questions check can't run, leak_files()'s third item, as one line."""
+    return "; ".join(missing)
 
 
 def leak_files(root, rows=None):
-    """(unattempted(), [(kind, path)], the unattempted sets with neither an extract nor rendered
-    text) for the questions check (mock_leak.py --hub), each path relative to root, sorted by
-    path, each once. `questions`: every extract holding any block of an unattempted set
-    (set_homes()), every existing home solutions file of one, its rendered text (rendered_text())
-    when no extract holds a block of it, and each multi-set answers file's own
-    _build/solutions/<doc id lower>.md, when it exists, while any set it names is unattempted; a
-    file serving an attempted set too is listed (fail closed). `allow`: every other extract. With
-    no unattempted set the list is empty. Its callers refuse to run while the third item names a
-    set (no_text()). `rows` is manifest_rows() (read from root's MANIFEST.md when None; it raises
-    as that does, and raises ValueError(NO_ROWS) on no rows)."""
+    """(unattempted(), [(kind, path)], the reasons it can't read a doc it must (unread())) for the
+    questions check (mock_leak.py --hub), each path relative to root, sorted by path, each once.
+    `questions`: every extract holding any block of an unattempted set (set_homes()), every
+    existing home solutions file of one, each multi-set answers file's own
+    _build/solutions/<doc id lower>.md, when it exists, while any set it names is unattempted, and
+    the rendered text (rendered_text()) of every unattempted set and of every in-scope answers
+    file whose `for` key names one, whether or not anything of it was extracted (an answers file
+    added late is in no extract or solutions file); a file serving an attempted set too is listed
+    (fail closed). `allow`: every other extract. With no unattempted set the list is empty. The
+    third item names each of those docs that nothing extracted holds (a set with no block in any
+    extract; an answers file with no block or cite in a listed solutions file) and whose rendered
+    text is missing or thin (a scan's empty text layer compares nothing); its callers refuse to
+    run while it names one (no_text()). `rows` is manifest_rows() (read from root's MANIFEST.md
+    when None; it raises as that does, and raises ValueError(NO_ROWS) on no rows, and files()'s
+    ValueError on a file that isn't UTF-8).
+    Known limit: pdftotext -layout can interleave a two-column page's columns, so a quote of such
+    a page may not appear as a run in its rendered text; the extracts stay the primary source."""
     if rows is None:
         rows = manifest_rows(os.path.join(root, "MANIFEST.md"))
     if not rows:
@@ -1166,22 +1225,31 @@ def leak_files(root, rows=None):
     if not sets:
         return sets, [], []
     homes = set_homes(extracts)
-    questions, texts, missing = set(), set(), []
+    questions = set()
     for doc in sets:
         for name in homes.get(doc, ()):
             questions.add(f"_build/extract/{name}")
             questions.add(f"_build/solutions/{name}")
-        if doc not in homes:
-            # A source added unverified (11-next-exam) has a row and its renders, no extract.
-            text = rendered_text(root, doc)
-            if text:
-                texts.add(text)
-            else:
-                missing.append(doc)
+    solving = {}  # {each in-scope answers file whose `for` key names an unattempted set: those sets}
     for doc, row in rows.items():
-        if key_of(row) == "for" and len(row["key"]["docs"]) > 1 and row["key"]["docs"] & set(sets):
+        named = sorted(row["key"]["docs"] & set(sets)) if key_of(row) == "for" else []
+        if named and row["kind"] in ("in", "concepts") and doc not in sets:
+            solving[doc] = named
+        if named and len(row["key"]["docs"]) > 1:
             questions.add(f"_build/solutions/{doc.lower()}.md")
-    questions = {p for p in questions if os.path.isfile(os.path.join(root, p))} | texts
+    questions = {p for p in questions if os.path.isfile(os.path.join(root, p))}
+    cited = {c.group("doc") for rel, lines in files(root, "solutions") if rel in questions
+             for line in lines for c in CITE.finditer(line)}
+    missing = []
+    for doc in sorted(set(sets) | set(solving)):
+        text, thin = rendered_text(root, doc, rows[doc])
+        if text:
+            questions.add(text)
+        if doc in (homes if doc in sets else cited):
+            continue
+        reason = unread(doc, rows[doc], text, thin, solving.get(doc, ()))
+        if reason:
+            missing.append(reason)
     allow = {rel for rel, _ in extracts} - questions
     listed = [("questions", p) for p in questions] + [("allow", p) for p in allow]
     return sets, sorted(listed, key=lambda item: item[1]), missing

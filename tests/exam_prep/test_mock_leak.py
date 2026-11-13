@@ -543,6 +543,8 @@ HUB_HEAD = ("| Doc id | File | Pages | Scope | Answers | Key | Rendered | Notes 
             "|---|---|---|---|---|---|---|---|\n")
 KEY_TEXT = "the courier settles the depot first and then every customer by distance"
 VALUE_TEXT = "the round costs 17, then 29, and finally 41 units in total"
+# A rendered page's other lines, so its text isn't thin (render_pdf.sh's bar, 200 characters a page).
+FILLER = "Each further line of the page restates the rules of the round for the reader.\n" * 4
 
 
 class HubQuestions(unittest.TestCase):
@@ -552,7 +554,9 @@ class HubQuestions(unittest.TestCase):
     unattempted set it passes at once. It runs under `python3 -I`, where the script's own
     directory is not on sys.path. Round 18: a section named `Queue.java` makes no set; an
     unextracted set is read from its rendered text, and one with neither is bad usage, as is a
-    MANIFEST.md with no rows it reads; with no --pages the notes and the cheat sheets are read."""
+    MANIFEST.md with no rows it reads; with no --pages the notes and the cheat sheets are read.
+    Round 19: an answers file never extracted is read from its rendered text, and thin rendered
+    text read alone (a scanned PDF's) is bad usage."""
 
     def setUp(self):
         tmp = tempfile.TemporaryDirectory()
@@ -686,7 +690,7 @@ class HubQuestions(unittest.TestCase):
         self.write("_build/extract/hw1.md", "### [HW1 Q1a] Round\nPages: [HW1 p.1]\n\"Round it.\"\n")
         self.write("_build/pages/HW1/p-001.png", "")
         self.write("STATUS.md", "Unverified: PE4, S9, 2026-11-12\n")
-        text = self.write("_build/text/PE4/p-003.txt", f"{KEY_TEXT}.\n")
+        text = self.write("_build/text/PE4/p-003.txt", f"{KEY_TEXT}.\n" + FILLER)
         page = f"# Rounds\n\nRecall that {KEY_TEXT}.\n"
         rc, out, err = self.hub(page_text=page)
         self.assertEqual((rc, err), (1, ""), out)
@@ -700,8 +704,10 @@ class HubQuestions(unittest.TestCase):
         rc, out, err = self.hub(page_text=page)
         self.assertEqual((rc, err), (1, ""), out)
         self.assertIn(f"words in a row match {text}:1", out)
-        # With neither an extract nor rendered text, it exits 2 naming the set, alone or not.
+        # With neither an extract nor rendered text, it exits 2 naming the set, alone or not (an
+        # empty _build/text/PE4/ would be thin text, r19-1 #2).
         os.remove(text)
+        os.rmdir(os.path.dirname(text))
         for hw1 in ("no", "no, attempted 2026-11-01"):
             with self.subTest(hw1=hw1):
                 self.write("MANIFEST.md", HUB_HEAD + rows.format(hw1))
@@ -711,6 +717,52 @@ class HubQuestions(unittest.TestCase):
                                       "extract holds a block of it and _build/text/ holds no "
                                       "rendered text of it; render it (01-ingest) or extract it, "
                                       "then rerun\n")
+
+    def test_an_answers_file_never_extracted_is_read_from_its_rendered_text(self):
+        # r19-1 #1: HW4S, added late, has rendered text and no block anywhere; it was never read,
+        # so notes quoting its answer passed.
+        rows = ("| HW4 | `sources/hw4.pdf` | 1 | in | {} | | yes | hw |\n"
+                "| HW4S | `sources/hw4s.pdf` | 1 | in | yes | for HW4 | yes | sol |\n")
+        self.write("MANIFEST.md", HUB_HEAD + rows.format("no"))
+        self.write("_build/extract/hw4.md", "### [HW4 Q1a] Tree\nPages: [HW4 p.1]\n\"Find the "
+                                            "minimum spanning tree of the graph shown.\"\n")
+        sentence = "The minimum spanning tree has total weight 42 since edges ab bc cd are chosen first."
+        text = self.write("_build/text/HW4S/p-001.txt", f"{sentence}\n" + FILLER)
+        page = f"# Trees\n\n{sentence}\n"
+        rc, out, err = self.hub(page_text=page)
+        self.assertEqual((rc, err), (1, ""), out)
+        self.assertIn(f"words in a row match {text}:1", out)
+        # Its twins: a page that copies nothing passes; HW4 attempted, nothing is read.
+        rc, out, err = self.hub()
+        self.assertEqual((rc, out, err), (0, "QUESTIONS OK: 1 pages checked against 2 question "
+                                             "files\n", ""))
+        self.write("MANIFEST.md", HUB_HEAD + rows.format("no, attempted 2026-11-01"))
+        self.assertEqual(self.hub(page_text=page)[:2], (0, "QUESTIONS OK: no unattempted set\n"))
+        # The rendered page alone with under 200 characters (the review's own repro) is thin:
+        # bad usage, extract it.
+        self.write("MANIFEST.md", HUB_HEAD + rows.format("no"))
+        self.write("_build/text/HW4S/p-001.txt", f"{sentence}\n")
+        rc, out, err = self.hub(page_text=page)
+        self.assertEqual((rc, out), (2, ""), err)
+        self.assertEqual(err, "mock_leak: HW4S's rendered text _build/text/HW4S/ is thin (under 200 "
+                              "characters a page on average: a scan?) and nothing of it is "
+                              "extracted: extract it, then rerun\n")
+
+    def test_thin_rendered_text_alone_is_bad_usage(self):
+        # r19-1 #2: a scanned PDF renders a form feed a page; read alone it compared nothing, so
+        # the hub passed.
+        rows = "| PE4 | `sources/pe4.pdf` | 4 | in | yes | pp. 3-4 | yes | exam |\n"
+        self.write("MANIFEST.md", HUB_HEAD + rows)
+        self.write("_build/text/PE4/p-001.txt", "\f")
+        rc, out, err = self.hub(page_text=f"Recall that {KEY_TEXT}.\n")
+        self.assertEqual((rc, out), (2, ""), err)
+        self.assertEqual(err, "mock_leak: PE4's rendered text _build/text/PE4/ is thin (under 200 "
+                              "characters a page on average: a scan?) and nothing of it is "
+                              "extracted: extract it, then rerun\n")
+        # Its twin: once extracted, the extract is read and the page that copies it fails.
+        self.write("_build/extract/pe4.md", f"### [PE4 Q1] Rounds\nPages: [PE4 p.1]\n\"{KEY_TEXT}\"\n")
+        rc, out, err = self.hub(page_text=f"Recall that {KEY_TEXT}.\n")
+        self.assertEqual((rc, err), (1, ""), out)
 
     def bare_hub(self, *args):
         """--hub with no --pages: the hub's notes/ and cheatsheet/ are the pages."""

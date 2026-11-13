@@ -67,7 +67,13 @@ and `[L2 Quiz]` are no question blocks; an unattempted set no extract holds a bl
 by its rendered text (`_build/text/<doc>/`, else `_build/text/<doc lower>.md`), and one with
 neither exits 2; a MANIFEST.md with no rows under a header the reader knows exits 2; KEY NAMES A
 SET NOT IN SCOPE on a Key naming that set alone says only to give the answers row the same
-Scope."""
+Scope.
+
+Review round 19: the rendered text of every unattempted set and of every answers file solving one
+is listed whether or not anything was extracted (a deck's source in its place); one that nothing
+extracted holds exits 2 with no rendered text (an answers file too, and the advice is `extract it`
+alone for a source 01-ingest doesn't render) or with thin text (under 200 characters a page on
+average, or an empty folder)."""
 import contextlib
 import importlib.util
 import io
@@ -559,6 +565,8 @@ PE = ("### [PE1 p.1] Practice exam\n\"Time: 50 minutes.\"\n"
       "### [PE1 Q1] Trace\nPages: [PE1 p.1-2]\n\"Trace a breadth-first search from s.\"\n")
 PE_KEY = "### [PE1 p.3] Key\n\"Q1: s, a, b\"\n"
 PE_SOLS = "### [PE1 Q1] Trace\nSolution [PE1 p.3]: s, a, b\n"
+# A rendered page with text enough not to be thin (render_pdf.sh's bar, 200 characters a page).
+FULL_PAGE = "A page of text a scanned page would lack.\n" * 8
 
 
 class SolutionsFiles(unittest.TestCase):
@@ -2241,7 +2249,7 @@ class LeakFiles(unittest.TestCase):
         pe4 = "| PE4 | `sources/pe4.pdf` | 4 | in | yes | pp. 3-4 | yes | |\n"
         self.manifest(extra=pe4)
         self.write("STATUS.md", "Unverified: PE4, S9, 2026-11-12\n")
-        self.write("_build/text/PE4/p-003.txt", "Question 1.\n")
+        self.write("_build/text/PE4/p-003.txt", FULL_PAGE)
         self.assertEqual(self.leak(), (0, "allow _build/extract/d1.md\n"
                                           "questions _build/extract/hw1.md\n"
                                           "questions _build/solutions/hw1.md\n"
@@ -2250,10 +2258,11 @@ class LeakFiles(unittest.TestCase):
         os.remove(os.path.join(self.root, "_build/text/PE4/p-003.txt"))
         self.manifest(extra=pe4.replace("pe4.pdf` | 4 | in | yes | pp. 3-4", "pe4.docx` | - | in | "
                                                                              "yes | inline"))
-        self.write("_build/text/pe4.md", "Question 1.\n")
+        self.write("_build/text/pe4.md", FULL_PAGE)
         self.assertIn("questions _build/text/pe4.md\n", self.leak()[1])
         # Neither: it exits 2 naming the set, whatever other set is listed.
         os.remove(os.path.join(self.root, "_build/text/pe4.md"))
+        os.rmdir(os.path.join(self.root, "_build/text/PE4"))
         err = io.StringIO()
         with contextlib.redirect_stderr(err):
             self.assertEqual(self.leak(), (2, ""))
@@ -2261,12 +2270,147 @@ class LeakFiles(unittest.TestCase):
                                          "extract holds a block of it and _build/text/ holds no "
                                          "rendered text of it; render it (01-ingest) or extract "
                                          "it, then rerun\n")
-        # Its twin: once extracted, its extract is listed and its text isn't.
+        # Its twin: once extracted, its extract is listed, and so is its rendered text (r19-1 #1:
+        # the rendered text is read whether or not anything was extracted).
         self.write("_build/extract/pe4.md", "### [PE4 Q1] Trace\nPages: [PE4 p.1]\n")
         self.assertEqual(self.leak(), (0, "allow _build/extract/d1.md\n"
                                           "questions _build/extract/hw1.md\n"
                                           "questions _build/extract/pe4.md\n"
                                           "questions _build/solutions/hw1.md\n"))
+        self.write("_build/text/pe4.md", "Question 1.\n")
+        self.assertEqual(self.leak(), (0, "allow _build/extract/d1.md\n"
+                                          "questions _build/extract/hw1.md\n"
+                                          "questions _build/extract/pe4.md\n"
+                                          "questions _build/solutions/hw1.md\n"
+                                          "questions _build/text/pe4.md\n"))
+
+    def leak_err(self):
+        """(exit code, stdout, stderr) of `--leak-files`."""
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            code = extract_check.main(["--root", self.root, "--leak-files"])
+        return code, out.getvalue(), err.getvalue()
+
+    def test_rendered_text_is_read_whether_or_not_anything_was_extracted(self):
+        # r19-1 #1: HW4S, an answers file added late, was never extracted, so its rendered text
+        # was never read (the list held only HW4's extract); and an extracted set's rendered text
+        # was left out too.
+        hw4 = ("| HW4 | `sources/hw4.pdf` | 1 | in | no | | yes | hw |\n"
+               "| HW4S | `sources/hw4s.pdf` | 1 | in | yes | for HW4 | yes | sol |\n")
+        self.manifest(hw1="no, attempted 2026-11-01", extra=hw4)
+        self.write("_build/extract/hw4.md", "### [HW4 Q1a] Tree\nPages: [HW4 p.1]\n\"Find the "
+                                            "minimum spanning tree of the graph shown.\"\n")
+        self.write("_build/text/HW4S/p-001.txt", "The minimum spanning tree has total weight 42.\n"
+                   + FULL_PAGE)
+        listed = ("allow _build/extract/d1.md\n"
+                  "allow _build/extract/hw1.md\n"
+                  "questions _build/extract/hw4.md\n")
+        self.assertEqual(self.leak(), (0, listed + "questions _build/text/HW4S/\n"))
+        # The set's own rendered text is read beside its extract.
+        self.write("_build/text/HW4/p-001.txt", FULL_PAGE)
+        self.assertEqual(self.leak(), (0, listed + "questions _build/text/HW4/\n"
+                                                   "questions _build/text/HW4S/\n"))
+        # Its twin: HW4 attempted, nothing is read.
+        self.manifest(hw1="no, attempted 2026-11-01",
+                      extra=hw4.replace("| in | no |", "| in | no, attempted 2026-11-02 |"))
+        self.assertEqual(self.leak(), (0, ""))
+
+    def test_a_decks_source_is_read_as_its_rendered_text(self):
+        # 01-ingest never renders a reveal deck to _build/text/: its source is read instead.
+        r3 = "| R3 | `sources/r3.html` | 6 | in | yes | sections: #/5 | n/a | recitation |\n"
+        self.manifest(hw1="no, attempted 2026-11-01", extra=r3)
+        self.write("_build/extract/r3.md", "### [R3 #/0] S0\n### [R3 Q1] Trace\nPages: [R3 #/0]\n")
+        self.assertEqual(self.leak(), (0, "allow _build/extract/d1.md\n"
+                                          "allow _build/extract/hw1.md\n"
+                                          "questions _build/extract/r3.md\n"))
+        self.write("sources/r3.html", DECK)
+        self.assertEqual(self.leak(), (0, "allow _build/extract/d1.md\n"
+                                          "allow _build/extract/hw1.md\n"
+                                          "questions _build/extract/r3.md\n"
+                                          "questions sources/r3.html\n"))
+        # Unextracted, the source alone is read.
+        os.remove(os.path.join(self.root, "_build/extract/r3.md"))
+        self.assertEqual(self.leak(), (0, "allow _build/extract/d1.md\n"
+                                          "allow _build/extract/hw1.md\n"
+                                          "questions sources/r3.html\n"))
+        # Neither the source nor an extract: 01-ingest renders no deck, so the advice is to
+        # extract it only (r19-1 #3).
+        os.remove(os.path.join(self.root, "sources/r3.html"))
+        self.assertEqual(self.leak_err(), (2, "", "extract_check: no file holds R3, an unattempted "
+                                                  "set: no extract holds a block of it and its "
+                                                  "source sources/r3.html isn't there; extract it, "
+                                                  "then rerun\n"))
+        # Any other source 01-ingest doesn't render (code, an ebook): extract it, too.
+        self.manifest(hw1="no, attempted 2026-11-01",
+                      extra="| C1 | `sources/c1.java` | - | in | yes | inline | n/a | |\n")
+        self.assertEqual(self.leak_err(), (2, "", "extract_check: no file holds C1, an unattempted "
+                                                  "set: no extract holds a block of it and "
+                                                  "_build/text/ holds no rendered text of it; "
+                                                  "extract it, then rerun\n"))
+
+    def test_an_answers_file_with_neither_rendered_text_nor_a_block_exits_2(self):
+        hw4 = ("| HW4 | `sources/hw4.pdf` | 1 | in | no | | yes | hw |\n"
+               "| HW4S | `sources/hw4s.pdf` | 1 | in | yes | for HW4 | yes | sol |\n")
+        self.manifest(hw1="no, attempted 2026-11-01", extra=hw4)
+        self.write("_build/extract/hw4.md", "### [HW4 Q1a] Tree\nPages: [HW4 p.1]\n")
+        self.assertEqual(self.leak_err(), (2, "", "extract_check: no file holds HW4S, the answers "
+                                                  "to an unattempted set (HW4): no solutions file "
+                                                  "holds a block of it and _build/text/ holds no "
+                                                  "rendered text of it; render it (01-ingest) or "
+                                                  "extract it, then rerun\n"))
+        # Its twin: a solutions block citing it is its extracted text.
+        self.write("_build/solutions/hw4.md", "### [HW4 Q1a] Tree\nSolution [HW4S p.1]: weight "
+                                              "42.\n")
+        self.assertEqual(self.leak(), (0, "allow _build/extract/d1.md\n"
+                                          "allow _build/extract/hw1.md\n"
+                                          "questions _build/extract/hw4.md\n"
+                                          "questions _build/solutions/hw4.md\n"))
+
+    def test_thin_rendered_text_alone_exits_2(self):
+        # r19-1 #2: a scanned PDF's text layer is empty or a form feed a page; read alone it
+        # compared nothing and passed.
+        pe4 = "| PE4 | `sources/pe4.pdf` | 4 | in | yes | pp. 3-4 | yes | exam |\n"
+        self.manifest(hw1="no, attempted 2026-11-01", extra=pe4)
+        thin = ("extract_check: PE4's rendered text _build/text/PE4/ is thin (under 200 characters "
+                "a page on average: a scan?) and nothing of it is extracted: extract it, then "
+                "rerun\n")
+        self.write("_build/text/PE4/p-001.txt", "\f")
+        self.assertEqual(self.leak_err(), (2, "", thin))
+        os.remove(os.path.join(self.root, "_build/text/PE4/p-001.txt"))
+        self.assertEqual(self.leak_err(), (2, "", thin))  # an empty folder
+        self.write("_build/text/PE4/p-001.txt", "Question 1.\n")
+        self.write("_build/text/PE4/p-002.txt", "\f")
+        self.assertEqual(self.leak_err(), (2, "", thin))
+        # Its twins: enough text a page on average is read; and thin text beside an extract is
+        # listed, the extract being the source.
+        self.write("_build/text/PE4/p-002.txt", FULL_PAGE * 2)
+        self.assertEqual(self.leak(), (0, "allow _build/extract/d1.md\n"
+                                          "allow _build/extract/hw1.md\n"
+                                          "questions _build/text/PE4/\n"))
+        self.write("_build/text/PE4/p-002.txt", "\f")
+        self.write("_build/extract/pe4.md", "### [PE4 Q1] Trace\nPages: [PE4 p.1]\n")
+        self.assertEqual(self.leak(), (0, "allow _build/extract/d1.md\n"
+                                          "allow _build/extract/hw1.md\n"
+                                          "questions _build/extract/pe4.md\n"
+                                          "questions _build/text/PE4/\n"))
+        # An answers file read from thin text alone, and a Word file's thin text, exit 2 too.
+        hw4 = ("| HW4 | `sources/hw4.pdf` | 1 | in | no | | yes | hw |\n"
+               "| HW4S | `sources/hw4s.pdf` | 1 | in | yes | for HW4 | yes | sol |\n")
+        self.manifest(hw1="no, attempted 2026-11-01", extra=hw4)
+        self.write("_build/extract/hw4.md", "### [HW4 Q1a] Tree\nPages: [HW4 p.1]\n")
+        self.write("_build/text/HW4S/p-001.txt", "The minimum spanning tree has total weight 42 "
+                                                 "since edges ab bc cd are chosen first.\n")
+        self.assertEqual(self.leak_err()[::2], (2, "extract_check: HW4S's rendered text "
+                                                   "_build/text/HW4S/ is thin (under 200 characters "
+                                                   "a page on average: a scan?) and nothing of it "
+                                                   "is extracted: extract it, then rerun\n"))
+        self.manifest(hw1="no, attempted 2026-11-01",
+                      extra="| W1 | `sources/w1.docx` | - | in | yes | inline | yes | |\n")
+        self.write("_build/text/w1.md", "![](media/image1.png)\n")
+        self.assertEqual(self.leak_err()[::2], (2, "extract_check: W1's rendered text "
+                                                   "_build/text/w1.md is thin (under 200 characters "
+                                                   "a page on average: a scan?) and nothing of it "
+                                                   "is extracted: extract it, then rerun\n"))
 
     def test_no_manifest_exits_2(self):
         os.remove(os.path.join(self.root, "MANIFEST.md"))

@@ -67,13 +67,15 @@ usage (a missing file, no question file or page, a file that isn't UTF-8).
 The same check on the files the hub's own homes give (extract_check.py's leak_files(), the list
 `extract_check.py --leak-files` prints): its `questions` files as --questions, its `allow` files
 as --allow, so the list never drifts from the homes the extract check computes (a deck's second
-part, a stray block's solutions file, an unextracted set's rendered text under _build/text/).
-With no unattempted set it prints `QUESTIONS OK: no unattempted set` and exits 0. Output and exit
-codes otherwise as --questions; bad usage too is a hub with no MANIFEST.md or one it can't read (a
+part, a stray block's solutions file, the rendered text under _build/text/ of each unattempted
+set and of each answers file solving one, extracted or not, or a deck's source). With no
+unattempted set it prints `QUESTIONS OK: no unattempted set` and exits 0. Output and exit codes
+otherwise as --questions; bad usage too is a hub with no MANIFEST.md or one it can't read (a
 table header it doesn't know, which gives no rows, among them), --hub with --questions or
---allow, or an unattempted set with neither a block in any extract nor rendered text (`no file
-holds <doc>, an unattempted set: ...; render it (01-ingest) or extract it, then rerun`). It can't
-be combined with the other forms. With no --pages, the pages are every file under the hub's
+--allow, and a doc it must read that nothing extracted holds while its rendered text is missing
+(`no file holds <doc>, an unattempted set: ...; render it (01-ingest) or extract it, then rerun`)
+or thin, as a scanned PDF's is (`<doc>'s rendered text <path> is thin (...) and nothing of it is
+extracted: extract it, then rerun`). It can't be combined with the other forms. With no --pages, the pages are every file under the hub's
 notes/ that a directory stands for above, and the files directly in cheatsheet/ (each folder when
 it exists; cheatsheet/<exam-slug>/ is a finished exam's frozen archive and isn't read), so a cheat
 sheet that rebuilds an unattempted set's setup fails as a notes page does; no page is bad usage
