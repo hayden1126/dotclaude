@@ -180,7 +180,9 @@ gets its own agent, which writes each set's `_build/solutions/<name>.md` and
 `_build/solutions/<answers file name>.md` for its own pages, and each set's own agent then writes
 its extract again. Add them to the self-test (and rerun
 `extract_check.py --parts` for `PARTS`), diff every answer against the notes and any solved key,
-and record the verdict in STATUS: what matched, what was wrong, what changed (FB-107). One that changes the reference or a convention reruns the examples as in step 5.
+and record the verdict in STATUS by doc, page and part (`HW1S p.2, HW1 Q2a: matched`, `HW1S
+p.3, HW1 Q3b: notes changed`): what matched, what was wrong, what changed, never a value, since
+STATUS names none (step 1) (FB-107). One that changes the reference or a convention reruns the examples as in step 5.
 
 ## The mock
 
