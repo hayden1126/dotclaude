@@ -556,7 +556,8 @@ class HubQuestions(unittest.TestCase):
     Round 19: an answers file never extracted is read from its rendered text, and thin rendered
     text read alone (a scanned PDF's) is bad usage. Round 20 (Hayden, 2026-11-13): rendered text
     is never read, so a set or an answers file solving one that no extract or solutions file
-    holds is bad usage whatever its rendered text."""
+    holds is bad usage whatever its rendered text. Round 21: a Word set's rendered text, or a
+    course page's source, is read beside its extract."""
 
     def setUp(self):
         tmp = tempfile.TemporaryDirectory()
@@ -738,6 +739,33 @@ class HubQuestions(unittest.TestCase):
                                              "files\n", ""))
         # HW4 attempted, nothing is read.
         self.write("MANIFEST.md", HUB_HEAD + rows.format("no, attempted 2026-11-01"))
+        self.assertEqual(self.hub(page_text=page)[:2], (0, "QUESTIONS OK: no unattempted set\n"))
+
+    def test_a_word_sets_rendered_text_is_read_beside_its_extract(self):
+        # r21-1 #1, the review's repro: PE4, a Word file, has no page or slide coverage, so its
+        # extract skipping Q3 passed the main check, and notes copying Q3 from the rendered text
+        # passed --hub. Hayden (2026-11-13): its rendered text is read too, beside the extract.
+        row = "| PE4 | `sources/pe4.docx` | - | in | {} | inline | yes | exam |\n"
+        self.write("MANIFEST.md", HUB_HEAD + row.format("yes"))
+        self.write("_build/extract/pe4.md", "### [PE4 Q1] Trace\n")
+        self.write("_build/solutions/pe4.md", "### [PE4 Q1] Trace\nSolution [PE4 Q1]: s, a, b.\n")
+        text = self.write("_build/text/pe4.md", f"Q1. Trace it.\n\nQ3. Show that {KEY_TEXT}.\n")
+        page = f"# Rounds\n\nRecall that {KEY_TEXT}.\n"
+        rc, out, err = self.hub(page_text=page)
+        self.assertEqual((rc, err), (1, ""), out)
+        self.assertIn(f"words in a row match {text}:3", out)
+        rc, out, err = self.hub()
+        self.assertEqual((rc, out, err), (0, "QUESTIONS OK: 1 pages checked against 3 question "
+                                             "files\n", ""))
+        # A course page (not a deck) is read from its own source, as HTML.
+        self.write("MANIFEST.md", HUB_HEAD + row.format("yes").replace("pe4.docx", "pe4.html"))
+        src = self.write("sources/pe4.html", f"<html><body><h2>Q3</h2>\n<p>Show that {KEY_TEXT}."
+                                             "</p></body></html>\n")
+        rc, out, err = self.hub(page_text=page)
+        self.assertEqual((rc, err), (1, ""), out)
+        self.assertIn(f"words in a row match {src}:2", out)
+        # Its twin: PE4 attempted, nothing is read.
+        self.write("MANIFEST.md", HUB_HEAD + row.format("yes, attempted 2026-11-01"))
         self.assertEqual(self.hub(page_text=page)[:2], (0, "QUESTIONS OK: no unattempted set\n"))
 
     def test_an_unverified_row_with_an_unread_key_is_a_set(self):

@@ -67,8 +67,10 @@ usage (a missing file, no question file or page, a file that isn't UTF-8).
 The same check on the files the hub's own homes give (extract_check.py's leak_files(), the list
 `extract_check.py --leak-files` prints): its `questions` files as --questions, its `allow` files
 as --allow, so the list never drifts from the homes the extract check computes (a deck's second
-part, a stray block's solutions file). Only extracts and solutions files are read, never rendered
-text under _build/text/ or a deck's source. With no unattempted set it prints `QUESTIONS OK: no
+part, a stray block's solutions file). Extracts and solutions files are read, and beside them the
+rendered text of a set (or an answers file solving one) with no page or slide coverage: a Word
+file's _build/text/<doc lower>.md or _build/text/<doc>.md, or a course page's own .html source,
+read as a page's HTML is. A PDF's _build/text/<doc>/ and a deck's source never are. With no unattempted set it prints `QUESTIONS OK: no
 unattempted set` and exits 0. Output and exit codes otherwise as --questions; bad usage too is a
 hub with no MANIFEST.md or one it can't read (a table header it doesn't know, which gives no rows,
 among them), --hub with --questions or --allow, and a doc it must read that no file holds: an

@@ -163,9 +163,14 @@ its extract is `allow`.
 `questions`: every extract holding any block of an unattempted set, every existing home
 solutions file of one (the homes above), and each multi-set answers file's own
 _build/solutions/<doc id lower>.md, when it exists, while any set it names is unattempted; a file
-serving an attempted set too is still listed. `allow`: every other extract. Only the extracts and
-the solutions files are read: rendered text (_build/text/) and a deck's or course page's source
-never are, so every doc the check must read has to be extracted first. An unattempted set with no
+serving an attempted set too is still listed. Also `questions`, beside its extract: the rendered
+text of each unattempted set, and of each in-scope answers file whose `for` key names one, that
+has no page or slide coverage (its File is neither a PDF nor a reveal deck, so the main check
+can't see an omitted question): a Word file's `_build/text/<doc lower>.md`, else
+`_build/text/<doc>.md`, and a course page's own source (File `.html` or `.htm`, not a deck), when
+it exists; a missing one adds nothing. `allow`: every other extract. A PDF's `_build/text/<doc>/`
+and a deck's source are never listed, and rendered text never stands in for an extract, so every
+doc the check must read has to be extracted first. An unattempted set with no
 block in any extract (such as a source added unverified by 11-next-exam) prints `no file holds
 <doc>, an unattempted set: no extract holds a block of it; extract it, then rerun`, and an
 in-scope answers file whose `for` key names an unattempted set, with no block or cite in a listed
@@ -728,6 +733,19 @@ def is_deck(root, row, scope):
     return reveal_slice().Deck(source).container is not None
 
 
+def no_coverage(root, row):
+    """Whether check() can't see an omitted question of a doc: its File is neither a PDF (checked
+    page by page against its renders) nor a reveal deck (is_deck(), checked slide by slide), so a
+    Word file or a course page saved as HTML passes with any block at all. check()'s page count
+    for such a doc (a numeric Pages cell and page-cited blocks) is not counted as coverage: it
+    rests on the extract citing pages. leak_files() lists such a doc's rendered text
+    (rendered_text()) when it is an unattempted set or answers one."""
+    name = row["file"].lower()
+    if name.endswith(".pdf"):
+        return False
+    return not (name.endswith((".html", ".htm")) and is_deck(root, row, scope_of(row)))
+
+
 def deck_slides(root, row, scope):
     """The fragments of the deck's in-scope slides, or a string saying why there are none."""
     reveal = reveal_slice()
@@ -790,6 +808,7 @@ def check(root, doc, row, b):
         if unrendered:
             line += f"; NOT RENDERED {spans(unrendered)}"
         return line, bool(missing or unrendered or not pages_in) or open_flags
+    # From here on the doc has no page or slide coverage (no_coverage()).
     if not b["blocks"]:
         return f"{doc}: no blocks; MISSING all", True
     if pages_in and b["pages"]:
@@ -1152,8 +1171,9 @@ def unread(doc, row, solves=()):
     """Why the questions check can't read a doc leak_files() must read that nothing extracted
     holds: an unattempted set (`solves` empty) with no block in any extract, or an answers file
     solving the unattempted sets in `solves` with no block or cite in a solutions file it lists.
-    Rendered text is never read in its place: the extracts and solutions files are the only
-    source. A set that counts as one by its empty or unread Key cell (blind_key()) says so."""
+    Rendered text is never read in its place: a doc with no page or slide coverage has its
+    rendered text listed beside its extract or solutions file (rendered_text()), never instead of
+    it. A set that counts as one by its empty or unread Key cell (blind_key()) says so."""
     if solves:
         return (f"no file holds {doc}, the answers to an unattempted set ({', '.join(solves)}): "
                 "no solutions file holds a block of it; extract it, then rerun")
@@ -1164,6 +1184,22 @@ def unread(doc, row, solves=()):
                 "extract holds a block of it; fix its Key cell and extract it, then rerun")
     return (f"no file holds {doc}, an unattempted set: no extract holds a block of it; extract "
             "it, then rerun")
+
+
+def rendered_text(root, doc, row):
+    """The path, relative to root, of the rendered text leak_files() lists for a doc with no page
+    or slide coverage (no_coverage()), or None. A course page (File ends .html or .htm, not a
+    reveal deck) is its own source file, the File cell's path; any other such doc's is pandoc's
+    _build/text/<doc lower>.md, else _build/text/<doc>.md (01-ingest's, of a Word file). None for
+    a PDF or a reveal deck, whose _build/text/<doc>/ and source are never listed, and None when
+    the file isn't there: the text only adds to the extract, so its absence costs nothing."""
+    if not no_coverage(root, row):
+        return None
+    if row["file"].lower().endswith((".html", ".htm")):
+        names = [row["file"]]
+    else:
+        names = [f"_build/text/{name}.md" for name in dict.fromkeys((doc.lower(), doc))]
+    return next((p for p in names if os.path.isfile(os.path.join(root, p))), None)
 
 
 def no_text(missing):
@@ -1177,11 +1213,16 @@ def leak_files(root, rows=None):
     `questions`: every extract holding any block of an unattempted set (set_homes()), every
     existing home solutions file of one, and each multi-set answers file's own
     _build/solutions/<doc id lower>.md, when it exists, while any set it names is unattempted; a
-    file serving an attempted set too is listed (fail closed). `allow`: every other extract. With
-    no unattempted set the list is empty. The third item names each unattempted set with no block
+    file serving an attempted set too is listed (fail closed). Also `questions` (r21-1 #1): the
+    rendered text (rendered_text()), when it exists, of each unattempted set, and of each in-scope
+    answers file whose `for` key names one, with no page or slide coverage (no_coverage(): a Word
+    file or a course page, where check() can't see an omitted question), beside its extract or
+    solutions file; a PDF's
+    _build/text/<doc>/ and a deck's source never are. `allow`: every other extract. With no
+    unattempted set the list is empty. The third item names each unattempted set with no block
     in any extract, and each in-scope answers file whose `for` key names one with no block or cite
-    in a listed solutions file: nothing else (no rendered text, no deck source) is read in their
-    place, so its callers refuse to run while it names one (no_text()). `rows` is manifest_rows()
+    in a listed solutions file: rendered text is never read in their place, so its callers refuse
+    to run while it names one (no_text()); a missing rendered text names nothing. `rows` is manifest_rows()
     (read from root's MANIFEST.md when None; it raises as that does, and raises ValueError(NO_ROWS)
     on no rows, and files()'s ValueError on a file that isn't UTF-8)."""
     if rows is None:
@@ -1210,6 +1251,8 @@ def leak_files(root, rows=None):
              for line in lines for c in CITE.finditer(line)}
     missing = [unread(doc, rows[doc], solving.get(doc, ())) for doc in sorted(set(sets) | set(solving))
                if doc not in (homes if doc in sets else cited)]
+    questions |= {text for doc in set(sets) | set(solving)
+                  for text in [rendered_text(root, doc, rows[doc])] if text}
     allow = {rel for rel, _ in extracts} - questions
     listed = [("questions", p) for p in questions] + [("allow", p) for p in allow]
     return sets, sorted(listed, key=lambda item: item[1]), missing

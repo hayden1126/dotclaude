@@ -81,7 +81,12 @@ required: rendered text and a deck's source are never listed, an unattempted set
 any extract and an answers file solving one with no block or cite in a listed solutions file exit
 2, whatever rendered text they have. A row an `Unverified:` line skips still gets the Key checks
 that read MANIFEST.md alone (UNREAD KEY, NO KEY and the rest), and an Answers `yes` row whose Key
-cell is empty or unread is an unattempted set for `--leak-files` (r20-1 #2)."""
+cell is empty or unread is an unattempted set for `--leak-files` (r20-1 #2).
+
+Review round 21 (Hayden, 2026-11-13): an unattempted set, or an answers file solving one, with no
+page or slide coverage (a Word file, a course page that isn't a deck) also has its rendered text
+listed as `questions`, beside its extract: `_build/text/<doc lower>.md` or `_build/text/<doc>.md`,
+or the course page's source. A missing one adds nothing; a PDF's or a deck's never is listed."""
 import contextlib
 import importlib.util
 import io
@@ -2375,6 +2380,93 @@ class LeakFiles(unittest.TestCase):
                 self.manifest(hw1="no, attempted 2026-11-01",
                               extra=pe5.format(answers, "pages 2"))
                 self.assertEqual(self.leak(), (0, ""))
+
+    PE4_WORD = "| PE4 | `sources/pe4.docx` | - | in | {} | inline | yes | exam |\n"
+
+    def pe4_word(self, answers="yes"):
+        """r21-1 #1's repro: a Word-file set whose extract holds Q1 and skips Q3."""
+        self.manifest(hw1="no, attempted 2026-11-01", extra=self.PE4_WORD.format(answers))
+        self.write("_build/extract/pe4.md", "### [PE4 Q1] Trace\n")
+        self.write("_build/solutions/pe4.md", "### [PE4 Q1] Trace\nSolution [PE4 Q1]: s, a, b.\n")
+
+    def test_a_word_sets_rendered_text_is_listed_beside_its_extract(self):
+        # r21-1 #1: the main check has no coverage test for a Word file, so an extract skipping
+        # Q3 passed and notes copying Q3 from the rendered text passed --hub. Hayden, 2026-11-13:
+        # list its rendered text too, beside the extract (still required).
+        self.pe4_word()
+        self.write("_build/text/pe4.md", "Q3. Run a search from the depot to every customer.\n")
+        self.assertEqual(self.leak(), (0, "allow _build/extract/d1.md\n"
+                                          "allow _build/extract/hw1.md\n"
+                                          "questions _build/extract/pe4.md\n"
+                                          "questions _build/solutions/pe4.md\n"
+                                          "questions _build/text/pe4.md\n"))
+        # Pandoc's file named by the doc id as it is serves too.
+        os.remove(os.path.join(self.root, "_build/text/pe4.md"))
+        self.write("_build/text/PE4.md", "Q3. Run a search from the depot to every customer.\n")
+        self.assertIn("questions _build/text/PE4.md\n", self.leak()[1])
+        # Its twin: PE4 attempted, nothing is listed for it.
+        self.pe4_word(answers="yes, attempted 2026-11-02")
+        self.assertEqual(self.leak(), (0, ""))
+
+    def test_a_word_set_with_no_rendered_text_lists_its_extract_alone(self):
+        # Additive only: a missing rendered file adds nothing and never exits 2.
+        self.pe4_word()
+        self.assertEqual(self.leak_err(), (0, "allow _build/extract/d1.md\n"
+                                              "allow _build/extract/hw1.md\n"
+                                              "questions _build/extract/pe4.md\n"
+                                              "questions _build/solutions/pe4.md\n", ""))
+        # Its twin: the extract is still required, rendered text or not.
+        os.remove(os.path.join(self.root, "_build/extract/pe4.md"))
+        self.write("_build/text/pe4.md", "Q3. Run a search from the depot to every customer.\n")
+        self.assertEqual(self.leak_err(), (2, "", "extract_check: no file holds PE4, an "
+                                                  "unattempted set: no extract holds a block of "
+                                                  "it; extract it, then rerun\n"))
+
+    def test_a_pdf_sets_rendered_text_is_never_listed(self):
+        # A PDF has page coverage, so its _build/text/<DOC>/ (or a stray .md) adds nothing.
+        self.manifest(hw1="no, attempted 2026-11-01",
+                      extra="| PE4 | `sources/pe4.pdf` | 2 | in | yes | pp. 2 | yes | exam |\n")
+        self.write("_build/extract/pe4.md", "### [PE4 Q1] Trace\nPages: [PE4 p.1]\n")
+        self.write("_build/text/PE4/p-001.txt", FULL_PAGE)
+        self.write("_build/text/pe4.md", FULL_PAGE)
+        self.assertEqual(self.leak(), (0, "allow _build/extract/d1.md\n"
+                                          "allow _build/extract/hw1.md\n"
+                                          "questions _build/extract/pe4.md\n"))
+
+    def test_a_course_pages_source_is_listed_and_a_decks_is_not(self):
+        row = "| PE4 | `sources/pe4.html` | {} | in | yes | inline | n/a | exam |\n"
+        self.manifest(hw1="no, attempted 2026-11-01", extra=row.format("-"))
+        self.write("_build/extract/pe4.md", "### [PE4 Q1] Trace\n")
+        self.write("sources/pe4.html", "<html><body><p>Q3. Run a search.</p></body></html>\n")
+        self.write("_build/text/pe4.md", FULL_PAGE)
+        self.assertEqual(self.leak(), (0, "allow _build/extract/d1.md\n"
+                                          "allow _build/extract/hw1.md\n"
+                                          "questions _build/extract/pe4.md\n"
+                                          "questions sources/pe4.html\n"))
+        self.assertTrue(extract_check.no_coverage(self.root, extract_check.manifest_rows(
+            os.path.join(self.root, "MANIFEST.md"))["PE4"]))
+        # Its twin: a reveal deck has slide coverage, so its source is not listed.
+        self.write("sources/pe4.html", DECK)
+        self.assertEqual(self.leak(), (0, "allow _build/extract/d1.md\n"
+                                          "allow _build/extract/hw1.md\n"
+                                          "questions _build/extract/pe4.md\n"))
+
+    def test_a_word_answers_files_rendered_text_is_listed_while_its_set_is_unattempted(self):
+        # The same gap on the answers side: a Word answers file `for` an unattempted set.
+        rows = ("| HW4 | `sources/hw4.pdf` | 1 | in | {} | | yes | hw |\n"
+                "| HW4S | `sources/hw4s.docx` | - | in | yes | for HW4 | yes | sol |\n")
+        self.manifest(hw1="no, attempted 2026-11-01", extra=rows.format("no"))
+        self.write("_build/extract/hw4.md", "### [HW4 Q1a] Tree\nPages: [HW4 p.1]\n")
+        self.write("_build/solutions/hw4.md", "### [HW4 Q1a] Tree\nSolution [HW4S Q1a]: 42.\n")
+        self.write("_build/text/hw4s.md", "Q1a. The tree has total weight 42.\n")
+        self.assertEqual(self.leak(), (0, "allow _build/extract/d1.md\n"
+                                          "allow _build/extract/hw1.md\n"
+                                          "questions _build/extract/hw4.md\n"
+                                          "questions _build/solutions/hw4.md\n"
+                                          "questions _build/text/hw4s.md\n"))
+        # Its twin: HW4 attempted, nothing is listed.
+        self.manifest(hw1="no, attempted 2026-11-01", extra=rows.format("no, attempted 2026-11-02"))
+        self.assertEqual(self.leak(), (0, ""))
 
     def test_an_extract_that_isnt_utf8_exits_2_with_no_traceback(self):
         # r19-1 #4: round 18 moved leak_files() out of the try, so a non-UTF-8 extract printed a
