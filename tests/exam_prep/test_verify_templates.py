@@ -8,7 +8,8 @@ official part; the example generator replaces its output only on a run that succ
 the backbone's worked examples exactly, so a failed run keeps the last good output; the
 sibling import works under -I; PARTS's documented command counts the solutions files' part
 blocks; and each `.py` template the CHANGELOG's newest round names carries that round's date,
-while a newest round with no Files item, or one naming no `.py` template, fails."""
+while a newest round with no Files item, or one naming no file at all, fails (one naming files
+but no `.py` template passes: that round changed none)."""
 import os
 import re
 import subprocess
@@ -35,7 +36,8 @@ GOOD = "# good output\n"
 
 def newest_round(text):
     """(the newest `## Round <n> (<date>)` entry's date, the `templates/*.py` files its `- **Files:**`
-    item names) in a CHANGELOG's text, as its header describes the entries."""
+    item names) in a CHANGELOG's text, as its header describes the entries. The names are None
+    when the entry has no Files item, or one naming no backquoted path at all (unparsable)."""
     heads = list(re.finditer(r"^## Round (\d+) \((\d{4}-\d{2}-\d{2})\)[ \t]*$", text, re.M))
     if not heads:
         return None, None
@@ -43,23 +45,22 @@ def newest_round(text):
     end = text.find("\n## ", head.end())
     section = text[head.end():end if end != -1 else len(text)]
     files = re.search(r"^- \*\*Files:\*\*(.*?)(?=^- \*\*|\Z)", section, re.M | re.S)
-    if not files:
+    if not files or not re.search(r"`[^`\s]+`", files.group(1)):
         return head.group(2), None
     return head.group(2), set(re.findall(r"`templates/([^`/\s]+\.py)`", files.group(1)))
 
 
 def baseline_problems(text, templates):
     """What is wrong with the `.py` templates' baseline dates against a CHANGELOG's text: each
-    template the newest round's Files list names must carry that round's date. A missing entry, a
-    missing Files item, or one naming no `templates/*.py` file is a problem too: the check would
-    otherwise pass on nothing."""
+    template the newest round's Files list names must carry that round's date. A missing entry,
+    or a Files item missing or naming no file it can read, is a problem too: the check would
+    otherwise pass on nothing. A Files item naming files but no `templates/*.py` one passes: that
+    round changed no `.py` template."""
     date, names = newest_round(text)
     if not date:
         return ["no `## Round <n> (<date>)` entry in the CHANGELOG"]
     if names is None:
-        return [f"the Round entry of {date} has no `- **Files:**` item"]
-    if not names:
-        return [f"the Round entry of {date} names no `templates/*.py` file in its Files item"]
+        return [f"the Round entry of {date} has no `- **Files:**` item naming a backquoted file"]
     out = []
     for name in sorted(names):
         path = os.path.join(templates, name)
@@ -98,8 +99,8 @@ class BaselineDate(unittest.TestCase):
                     ("# Changelog\n", "no `## Round"),
                     ("## Round 2 (2026-02-03)\n\n- Files: `templates/verify-a.py`.\n",
                      "has no `- **Files:**` item"),
-                    ("## Round 2 (2026-02-03)\n\n- **Files:** `SKILL.md`, `scripts/x.py`.\n",
-                     "names no `templates/*.py` file"),
+                    ("## Round 2 (2026-02-03)\n\n- **Files:** SKILL.md and scripts/x.py.\n",
+                     "has no `- **Files:**` item"),
                     ("## Round 2 (2026-02-04)\n\n- **Files:** `templates/verify-a.py`.\n",
                      "carries 2026-02-03, not the round's 2026-02-04"),
                     ("## Round 2 (2026-02-03)\n\n- **Files:** `templates/verify-b.py`.\n",
@@ -108,6 +109,10 @@ class BaselineDate(unittest.TestCase):
                     problems = baseline_problems(text, tmp)
                     self.assertEqual(len(problems), 1, problems)
                     self.assertIn(needle, problems[0])
+            # Review round 12: a round naming files but no `.py` template changed none, and
+            # passes.
+            self.assertEqual(baseline_problems(
+                "## Round 2 (2026-02-03)\n\n- **Files:** `SKILL.md`, `scripts/x.py`.\n", tmp), [])
 
     def test_the_round_parser_reads_the_newest_entry(self):
         text = ("# Changelog\n\n- **Files:** `templates/x.py`, from the header's format.\n\n"
@@ -120,6 +125,10 @@ class BaselineDate(unittest.TestCase):
         self.assertEqual(newest_round(text.replace("- **Files:** `SKILL", "- Files: `SKILL")),
                          ("2026-02-03", None))
         self.assertEqual(newest_round("# Changelog\n"), (None, None))
+        self.assertEqual(newest_round("## Round 3 (2026-03-04)\n\n- **Files:** none.\n"),
+                         ("2026-03-04", None))
+        self.assertEqual(newest_round("## Round 3 (2026-03-04)\n\n- **Files:** `SKILL.md`.\n"),
+                         ("2026-03-04", set()))
 
 
 class Skeleton(unittest.TestCase):
