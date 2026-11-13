@@ -37,7 +37,8 @@ the bracketed slots that apply and delete the rest.
 An answers file that solves several sets (its MANIFEST.md Key cell `for HW1, HW2 and HW3`,
 `02-extract` step 1) gets an agent of its own, from this brief with every SOLUTIONS slot kept:
 {{DOC}} names those sets, whose question pages it reads only for their part ids, and it uses
-those ids as the extracts do, `### [<set> <part>]`; {{SOLDOC}} is the answers file. Its End
+those ids as the extracts do, `### [<set> <part>]`, never with the answers file's id;
+{{SOLDOC}} is the answers file. Its End
 state, Artifact path and Format drop every line about the extract, and it writes one solutions
 file per set, {{ROOT}}/_build/solutions/<name>.md under that set's extract `<name>`, holding that
 set's part blocks, plus its own file, {{ROOT}}/_build/solutions/<doc id in lower case>.md
@@ -155,8 +156,10 @@ that must not see answers read the extract, so it holds none.}}
 - The solutions file, {{ROOT}}/_build/solutions/{{OUT}}:
   - First lines: `# {{DOC}} solutions (extract)`, then the extract's `Sources:` line.
   - One block per question part of {{DOC}}, in the extract's order, its header the part's own
-    block id from the extract, `### [{{DOC}} Q3a]` (a title after it is optional). A stem gets
-    no block: each of its parts gets its own. The block holds one of two things:
+    block id from the extract, `### [{{DOC}} Q3a]` (a title after it is optional). A stem or
+    part block always carries the set's id, {{DOC}}, never the answers file's: a block labelled
+    `[HW1S Q1 stem]` for set `HW1` fails `ANSWERS FILE ID ON A QUESTION`. A stem gets no block:
+    each of its parts gets its own. The block holds one of two things:
     - the official solution on a line of its own, cited to its pages:
       `Solution [{{SOLDOC}} p.N]: ...`, or `Solution [{{SOLDOC}} <its section>]: ...` for a file
       without pages ({{SOLDOC}} is {{DOC}} when the solutions sit in the same file). It starts

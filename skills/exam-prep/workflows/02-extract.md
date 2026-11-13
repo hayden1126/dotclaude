@@ -163,6 +163,9 @@ STATUS).
      main session, adds it, as the line says:
      `NO SOLUTION BLOCK: write its solution or "No official solution." under ### [<doc> <part>] in _build/solutions/<name>.md`;
    - `NO SUCH PART`: a solutions block names a part no extract has;
+   - `ANSWERS FILE ID ON A QUESTION: [HW1S Q1 stem] names the answers file HW1S; label it with the set it solves ([HW1 Q1 stem])`:
+     a stem or part block labelled with a separate answers file's id. A question's block always
+     carries its set's id, never the answers file's: relabel it as the line says;
    - `TWO SOLUTIONS BLOCKS`: a part has two blocks across the solutions files;
    - `WRONG SOLUTIONS FILE: [<doc> <loc>] belongs in _build/solutions/<name>.md, <why>`: a block
      sits in a solutions file other than its home ("The solutions file"), and `<why>` names the
@@ -278,8 +281,9 @@ audits the second group against their images (FB-052, FB-104).
 `extract_check.py` exits 0 (it fails while any `UNREADABLE:` flag is open in either folder,
 though not on a value marked `(illegible at 300 dpi: ...)`, while a question part of a solved doc
 has no solutions block or a part has two, while any solutions block sits outside its home file
-(`WRONG SOLUTIONS FILE`) or has none (`NO HOME FILE`), while a solutions
-block names no extract's part or holds neither a `Solution [` line nor `No official solution.`,
+(`WRONG SOLUTIONS FILE`) or has none (`NO HOME FILE`), while a stem or part block carries an
+answers file's id (`ANSWERS FILE ID ON A QUESTION`), while a solutions block names no extract's
+part or holds neither a `Solution [` line nor `No official solution.`,
 while an extract holds a solution line, a line citing an answers page or a block of an answers
 page, and while an in-scope MANIFEST row fails:
 `NO KEY`, `UNREAD KEY`, `KEY NAMES NO DOC`, `KEY NAMES ITS OWN DOC`,
