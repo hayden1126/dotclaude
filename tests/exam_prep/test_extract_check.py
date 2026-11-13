@@ -73,7 +73,8 @@ Review round 19: the rendered text of every unattempted set and of every answers
 is listed whether or not anything was extracted (a deck's source in its place); one that nothing
 extracted holds exits 2 with no rendered text (an answers file too, and the advice is `extract it`
 alone for a source 01-ingest doesn't render) or with thin text (under 200 characters a page on
-average, or an empty folder)."""
+average, or an empty folder). An extract that isn't UTF-8 makes `--leak-files` exit 2 naming the
+file, with no traceback."""
 import contextlib
 import importlib.util
 import io
@@ -2411,6 +2412,18 @@ class LeakFiles(unittest.TestCase):
                                                    "_build/text/w1.md is thin (under 200 characters "
                                                    "a page on average: a scan?) and nothing of it "
                                                    "is extracted: extract it, then rerun\n"))
+
+    def test_an_extract_that_isnt_utf8_exits_2_with_no_traceback(self):
+        # r19-1 #4: round 18 moved leak_files() out of the try, so a non-UTF-8 extract printed a
+        # traceback.
+        path = os.path.join(self.root, "_build/extract/bad.md")
+        with open(path, "wb") as f:
+            f.write(b"### [D1 p.1] Flows\n\xff\xfe\n")
+        self.assertEqual(self.leak_err(), (2, "", "extract_check: can't read the hub: "
+                                                  "_build/extract/bad.md isn't UTF-8 text\n"))
+        # Its twin: the same file in UTF-8 lists.
+        self.write("_build/extract/bad.md", "### [D1 p.1] Flows\n")
+        self.assertEqual(self.leak_err()[0], 0)
 
     def test_no_manifest_exits_2(self):
         os.remove(os.path.join(self.root, "MANIFEST.md"))

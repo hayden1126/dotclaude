@@ -764,6 +764,20 @@ class HubQuestions(unittest.TestCase):
         rc, out, err = self.hub(page_text=f"Recall that {KEY_TEXT}.\n")
         self.assertEqual((rc, err), (1, ""), out)
 
+    def test_an_extract_that_isnt_utf8_is_bad_usage(self):
+        # r19-1 #4: the reason names the file, not the codec's byte offset.
+        self.write("MANIFEST.md", HUB_HEAD + "| HW1 | `sources/hw1.pdf` | 1 | in | no | | yes | |\n")
+        self.write("_build/extract/hw1.md", "### [HW1 Q1a] Round\nPages: [HW1 p.1]\n")
+        with open(os.path.join(self.root, "_build/extract/bad.md"), "wb") as f:
+            f.write(b"### [HW1 p.1] Round\n\xff\n")
+        rc, out, err = self.hub()
+        self.assertEqual((rc, out), (2, ""), err)
+        self.assertEqual(err, f"mock_leak: can't read the hub {os.path.abspath(self.root)}: "
+                              "_build/extract/bad.md isn't UTF-8 text\n")
+        # Its twin: the same file in UTF-8 is read.
+        self.write("_build/extract/bad.md", "### [HW1 p.1] Round\n")
+        self.assertEqual(self.hub()[0], 0)
+
     def bare_hub(self, *args):
         """--hub with no --pages: the hub's notes/ and cheatsheet/ are the pages."""
         r = subprocess.run([sys.executable, "-I", os.path.join(SCRIPTS, "mock_leak.py"), "--hub",

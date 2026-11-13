@@ -3,7 +3,8 @@
 
   extract_check.py [--root DIR]                check; exit 0 or 1
   extract_check.py --parts [--root DIR]        print the self-test's PARTS and exit 0
-  extract_check.py --leak-files [--root DIR]   print the questions check's files and exit 0
+  extract_check.py --leak-files [--root DIR]   print the questions check's files; exit 0, 2 when
+                                               they can't be read, 1 on a MANIFEST.md it can't read
 
 MANIFEST's table is read by its header names (Doc id, File, Pages, Scope, Answers, Key, Notes;
 any other column, such as the optional By, is ignored); with no Doc id, File or Scope column it
@@ -173,9 +174,10 @@ feeds, or an empty _build/text/<doc>/) it prints `<doc>'s rendered text <path> i
 nothing of it is extracted: extract it, then rerun` and exits 2: thin text compares nothing. A
 known limit: pdftotext -layout can interleave a two-column page's columns, so a quote of such a
 page may not appear as a run in its rendered text; the extracts stay the primary source. `allow`:
-every other extract. With no unattempted set it prints nothing; it exits 0, 2 with no MANIFEST.md,
-one with no rows under a header it knows (the main check's reason, on stderr) or a doc it can't
-read (above), 1 on a MANIFEST.md it can't read.
+every other extract. With no unattempted set it prints nothing. It exits 0; 2 with no
+MANIFEST.md, one with no rows under a header it knows (the main check's reason, on stderr), a doc
+it can't read (above), or an extract or solutions file that isn't UTF-8 (`can't read the hub:
+<file> isn't UTF-8 text`, as mock_leak.py --hub says); 1 on a MANIFEST.md it can't read.
 Stdlib only, plus reveal_slice.py from this directory."""
 import argparse
 import contextlib
@@ -487,8 +489,12 @@ def files(root, kind):
     out = []
     for name in sorted(os.listdir(d)) if os.path.isdir(d) else []:
         if name.endswith(".md"):
-            with open(os.path.join(d, name), encoding="utf-8") as f:
-                out.append((f"_build/{kind}/{name}", f.read().splitlines(keepends=True)))
+            rel = f"_build/{kind}/{name}"
+            try:
+                with open(os.path.join(d, name), encoding="utf-8") as f:
+                    out.append((rel, f.read().splitlines(keepends=True)))
+            except UnicodeDecodeError:
+                raise ValueError(f"{rel} isn't UTF-8 text") from None
     return out
 
 
@@ -1291,7 +1297,14 @@ def main(argv=None):
         if not rows:
             print(f"extract_check: {NO_ROWS}", file=sys.stderr)
             return 2
-        _, listed, missing = leak_files(args.root, rows)
+        try:
+            _, listed, missing = leak_files(args.root, rows)
+        except (OSError, ValueError) as e:
+            # A file under _build/ it can't read (not UTF-8): the list can't be computed, which
+            # is unusable input as a missing MANIFEST.md is, and mock_leak.py --hub, calling the
+            # same function, exits 2 on it too.
+            print(f"extract_check: can't read the hub: {e}", file=sys.stderr)
+            return 2
         if missing:
             print(f"extract_check: {no_text(missing)}", file=sys.stderr)
             return 2
