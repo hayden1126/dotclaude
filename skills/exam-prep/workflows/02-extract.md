@@ -90,7 +90,7 @@ text and nothing reads them for this), on in-scope rows (Scope `in` or `concepts
 Answers is `yes`. A Key cell `for HW1, HW2 and HW3` marks a separate answers file solving the docs
 it names, each a MANIFEST doc id and never the row's own. Any other Key form marks a doc holding
 its own key (a past exam), which solves itself: `pp. 7-9, 11` or `p.N` names its key pages, on a
-PDF or a row whose Pages is a number; `inline` names none, since each solution sits under its
+PDF only; `inline` names none, since each solution sits under its
 question on the same page; `sections: Marking scheme, Answers` names the key sections of a source
 without pages (a Word exam, or a slide deck by its slides, `sections: #/5, #/6`) by their exact
 locators, and its extract agent writes each one as a block with that locator, `### [PE3 Marking
@@ -188,7 +188,7 @@ STATUS).
    - `<doc>: SECTIONS KEY ON A PAGED DOC: use "pp. N-M" or "inline"`: `sections: ...` on a doc
      with pages, whose key is named by its pages.
    - `<doc>: PAGES KEY ON AN UNPAGED DOC: use "sections: <name>, <name>" or "inline"`: a `p.` or
-     `pp.` key on a row that is neither a PDF nor has a numeric Pages. A Word file or a slide deck
+     `pp.` key on a row whose File isn't a PDF, whatever its Pages holds. A Word file or a slide deck
      names its key sections or slides by their exact locators: `sections: Marking scheme`,
      `sections: #/5, #/6`.
    - `<doc>: KEY SECTION NOT FOUND: no block [<doc> <name>] in _build/solutions/`: a section the

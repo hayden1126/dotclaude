@@ -54,8 +54,8 @@ sections), in exactly one of these forms (the template's legend gives them too):
 - empty or `-`, for a doc that isn't an answers doc;
 - `for HW1, HW2 and HW3`, for a separate answers file: the sets it solves, each a doc id of this
   table, never its own row's;
-- `pp. 7-9, 11` or `p.N`, for a doc holding its own key (a past exam) on those pages, a PDF or a
-  row whose Pages is a number;
+- `pp. 7-9, 11` or `p.N`, for a doc holding its own key (a past exam) on those pages, a PDF only
+  (a deck's Pages holds its slide count, so a deck is never paged);
 - `inline`, when each solution sits under its question on the same page, so no page is a key
   page;
 - `sections: Marking scheme, Answers`, for a source without pages, such as a Word exam or a
