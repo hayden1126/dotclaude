@@ -207,6 +207,25 @@ class Coverage(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertIn("NO BLOCKS in drift.md", out)
 
+    def test_an_answers_only_extract_passes_on_its_solutions_file(self):
+        # An extract agent given only a separate answers file writes its page blocks to
+        # _build/solutions/<name>.md, which the matrix never maps: its extract holds no block and
+        # passes, while one whose solutions file holds no block either still fails.
+        self.extract("D1.md", "### [D1 p.2] x\n")
+        self.extract("hw1s.md", "# HW1S (extract)\nSources: HW1S 2.\n")
+        solutions = os.path.join(self.root, "_build", "solutions")
+        os.makedirs(solutions)
+        with open(os.path.join(solutions, "hw1s.md"), "w") as f:
+            f.write("# HW1S solutions (extract)\n### [HW1S p.1] Solutions\n### [HW1S p.2] More\n")
+        code, out = self.run_check()
+        self.assertEqual(code, 0, out)
+        self.assertIn("1 extract blocks; 0 unmapped", out)
+        with open(os.path.join(solutions, "hw1s.md"), "w") as f:
+            f.write("# HW1S solutions (extract)\n")
+        code, out = self.run_check()
+        self.assertEqual(code, 1, out)
+        self.assertIn("NO BLOCKS in hw1s.md", out)
+
 
 # Three sections, each with its Figures and Diagram-taught lines; the matrix maps one block.
 FLOOR = """# Backbone

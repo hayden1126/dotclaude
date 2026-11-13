@@ -22,7 +22,9 @@ row of its question; a deeper part, `Q3b.1`, `Q3aii` or its dotted form `Q3a.ii`
 letter, and a part of two
 or more of i, v and x, `Q3ii`, is a roman part, not `i` and a sub-part). A block with any
 other locator (`### [C1 main.py]`, or `Q3C`, which isn't a part) is mapped only by its doc's
-`(all)` row.
+`(all)` row. The solutions files (_build/solutions/*.md) hold answers, which the matrix never
+maps, so their blocks are read only to pass an extract with no block of its own whose solutions
+file of the same name holds one (an extract agent given only an answers file).
 
 The figure floor (STYLE S11): each `## §N` section of the backbone carries a `- Diagram-taught:
 yes|no` line beside its `- Figures:` line, and a section marked `yes` (its slides teach it through
@@ -295,6 +297,16 @@ def covered(row, m):
     return parts[key] is None or (part is not None and part in parts[key])
 
 
+def solutions_blocks(root, name):
+    """Whether _build/solutions/<name> holds a block: an extract whose sources were all answers
+    (a separate answers file) holds none of its own, and the matrix maps no answers."""
+    try:
+        with open(os.path.join(root, "_build", "solutions", name), encoding="utf-8") as f:
+            return any(BLOCK.match(line) for line in f)
+    except OSError:
+        return False
+
+
 def unmapped(root):
     with open(os.path.join(root, "_build", "backbone.md"), encoding="utf-8") as f:
         backbone = f.read()
@@ -319,7 +331,7 @@ def unmapped(root):
             found += 1
             if not covered(rows.get(m.group("doc")), m):
                 missing.append(f"{m.group(0)[4:].strip()} ({name})")
-        if not found:
+        if not found and not solutions_blocks(root, name):
             bad.append(f"NO BLOCKS in {name} (a header that isn't `### [<doc> <locator>]`?)")
     return total, missing, bad, warnings
 
