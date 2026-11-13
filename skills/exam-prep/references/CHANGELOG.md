@@ -138,9 +138,9 @@ evidence ids.
     (I3.C8, I3.G8, J1.G5, I1 (section 2)).
   - FB-123: citation codes now match their MANIFEST.md row in any case, silently, the source key
     keeping the row's spelling (I3.C8).
-  - FB-056: official solutions move out of the extracts into `_build/solutions/`, one file per
-    set, `_build/solutions/<name>.md` beside its extract `_build/extract/<name>.md`, holding one
-    block per question part of the set plus an answers doc's page blocks (`02-extract`, "The
+  - FB-056: official solutions move out of the extracts into `_build/solutions/`,
+    `_build/solutions/<name>.md` beside each extract `_build/extract/<name>.md` that needs one,
+    holding one block per question part of the set plus an answers doc's page blocks (`02-extract`, "The
     solutions file"). The set's extract agent writes it, or, for an answers file that solves
     several sets, that file's own agent writes each set's part blocks in that set's file, plus its
     own pages, in full, in `_build/solutions/<doc id in lower case>.md` (hard rule 6: an agent may
@@ -171,10 +171,8 @@ evidence ids.
     YYYY-MM-DD` (no key of its own) or `yes, attempted YYYY-MM-DD` (a doc holding its own key);
     a separate answers file's row stays `yes`, since it may solve several sets, and the notes
     quote a set's official solution only once its own row says `attempted` and every set its
-    answers file solves is attempted. `05-verify` step 5's questions check reads each unattempted
-    set's extract and its solutions file when it has one, plus a multi-set answers file's own file
-    while any set it solves is unattempted, never an attempted set's own file, and every hit is a
-    blocker. An erratum's corrected value sits in its part's solutions block, and the
+    answers file solves is attempted. `05-verify` step 5's questions check reads every unattempted
+    set's official text (its file list is below), and every hit is a blocker. An erratum's corrected value sits in its part's solutions block, and the
     backbone names its doc and part only. Answer-blind briefs read the extracts and never open
     `_build/solutions/`; the writers, section reviewers, checker and tutor read both. An older
     hub's extracts with solutions inline, or its answers notes in Notes, aren't supported
@@ -187,6 +185,18 @@ evidence ids.
   - FB-191: `mock_leak.py`'s questions mode drops only the extract brief's own note lines (a
     `Pages:` line of cites alone, `**Shape:**`, `**Conventions:**` and the closing `Coverage:`
     line), so question text on any other `Pages:` or `Coverage:` line is checked (round 6 review).
+  - FB-056 and FB-191: the questions check is one command at every site, `mock_leak.py --hub .
+    --pages <page>...`, which builds its own file list, so no site lists files by hand: the
+    question files are every extract holding a block of an unattempted set, every existing home
+    solutions file of one, and a multi-set answers file's own file while any set it solves is
+    unattempted, and every other extract is allowed. `extract_check.py --leak-files` prints that
+    list, and with no unattempted set the check prints `QUESTIONS OK: no unattempted set` (round
+    17 review).
+  - FB-056: an answers file solves only in-scope sets: a Key cell `for ...` naming a `pending`,
+    `reserved` or `out` set fails `KEY NAMES A SET NOT IN SCOPE`, fixed by dropping the set from
+    the cell and cutting its pages from the answers file's Scope, or by giving the answers file
+    the set's Scope (a `pending` set's answers file waits with it); a stem or part block labelled
+    with the answers file's id fails `ANSWERS FILE ID ON A QUESTION` (round 17 review).
   - FB-193: each cram row names its needs, and the cram order gets a Read already line, which
     `cram_check.py` checks (J.O, I1.C15, I1.C18).
   - FB-194: the watch list: `templates/WATCH.md`'s rules W1 to W39, `videos.py`,
