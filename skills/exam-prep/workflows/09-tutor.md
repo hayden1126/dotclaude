@@ -436,12 +436,15 @@ already attempted in full gets `yes, attempted` in the new row at once (Step 7).
 - When every part of a set has been attempted or its solution shown, in walk-throughs and quizzes
   together, the MANIFEST.md row whose Notes say `solutions to <that set>`, if there is one, gets
   `yes, attempted` in its Answers cell: the notes and sheets may quote it from then on (`04-write`).
-  With no such row, the set's own row's Answers cell becomes `no, attempted YYYY-MM-DD` (today's
-  date), the one place `05-verify` step 5's questions check reads it. A check waiting on the set
+  With no such row, the set's own row's Answers cell records it, with today's date: a set that
+  holds its own key (Answers `yes`, a past exam) becomes `yes, attempted YYYY-MM-DD`, and a set
+  with no answers anywhere (Answers `no`) becomes `no, attempted YYYY-MM-DD`. `05-verify` step 5's
+  questions check reads these cells. A check waiting on the set
   (Step 6) runs then. During a build the cell waits under `## Waiting checks` for the build's end
   (Step 1).
 - Once a set is attempted (its solutions row reads `yes, attempted`, or with no solutions row its
-  own row's Answers cell reads `no, attempted YYYY-MM-DD`), each `_build/held.md` entry that names
+  own row's Answers cell reads `yes, attempted YYYY-MM-DD` or `no, attempted YYYY-MM-DD`), each
+  `_build/held.md` entry that names
   it is offered back as a patch (FB-191): a passage `05-verify` step 5 cut or held back because it
   overlapped that set. Show the student its section and its original text, and on their yes dispatch
   it as Step 5 says. Remove the entry once its patch merges or the student declines it. While

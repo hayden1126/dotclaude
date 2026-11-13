@@ -123,11 +123,13 @@ order (`08-practice`) get the same audit when they exist.
 - Before anything is published, the questions check: check the notes against every set the
   student hasn't attempted (FB-191), since a worked example has rebuilt a practice question's
   setup, and a gloss has named a practice step. Those sets, all read from MANIFEST.md: each set
-  answered by a row whose Answers cell is exactly `yes` (not `yes, attempted`); and each question
-  set that no row's `solutions to <doc>` names, unless its own row's Answers cell reads `no,
-  attempted YYYY-MM-DD` (the one place a set with no solutions row records its attempt:
+  answered by a row whose Answers cell is exactly `yes` (a `solutions to <doc>` row, or a past
+  exam's own row with its key; once attempted, the cell reads `yes, attempted`, dated on a past
+  exam's own row); and each question set with Answers `no` that no row's `solutions to <doc>`
+  names, unless its cell reads `no, attempted YYYY-MM-DD`. A set with no solutions row records its
+  attempt in its own row, as `yes, attempted YYYY-MM-DD` or `no, attempted YYYY-MM-DD`:
   `00-intake` and `11-next-exam` write it from the student's word, `09-tutor` Step 7 when its last
-  part is done).
+  part is done.
   With no such set, skip the run and log `no unattempted set` in STATUS. Otherwise give each set's
   extract (`_build/extract/<name>.md`) and its solutions file, if it has one
   (`_build/solutions/<name>.md`), as question files, and the lecture extracts the notes cite as

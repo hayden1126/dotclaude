@@ -88,7 +88,8 @@ questions, each only when the reading left it open:
    its last in-scope slide, each as the PDF page or the printed slide number (FB-024: a deck split
    across exams starts partway). Ask too which answer sets the student has attempted since (their
    Answers cells become `yes, attempted`), and which question sets with no solutions row (their
-   Answers cells become `no, attempted YYYY-MM-DD`).
+   own Answers cells become `yes, attempted YYYY-MM-DD` for a past exam with its key, else `no,
+   attempted YYYY-MM-DD`).
 3. Missing sources (question 3).
 4. This exam's rules (question 4): date and time, length, room (where it is split, the student's
    by last name), what to bring and what is banned, sheet, calculator, book, question types: the
@@ -129,8 +130,8 @@ Draft each of these in `<root>`, as `00-intake` step 4 does, before showing anyt
   renumbered or reused: citations use them); the finished exam's rows `in` when this exam covers
   them, else `out` with "on <old exam>" as Notes' remark; each carried row's Notes as
   `<what it is>[; <remark>]`, what it is filled where the old row lacks it, and its By; Answers cells carried, each set the student
-  has attempted since marked `yes, attempted`, or with no solutions row `no, attempted
-  YYYY-MM-DD` (question 2); topic cuts for this exam only. A
+  has attempted since marked `yes, attempted`, or with no solutions row in its own cell `yes,
+  attempted YYYY-MM-DD` (a past exam with its key) or `no, attempted YYYY-MM-DD` (question 2); topic cuts for this exam only. A
   cumulative exam needs no other scope word: its old rows are `in`.
 - **`CLAUDE.md`**: its Exam facts become this exam's, from
   `<skill>/templates/hub-CLAUDE.md.tmpl`, with a line `Earlier exams:` naming each earlier exam,
