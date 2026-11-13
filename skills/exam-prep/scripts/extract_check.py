@@ -111,7 +111,9 @@ stem of one is a block of that row, as in an extract. It fails, naming the file 
   above; NO KEY, an Answers `yes` row with an empty Key cell (or no Key column); ANSWERS WITH NO
   PAIRING, a doc with its own key and no question block in any extract; KEY NAMES A SET NOT IN
   SCOPE, a `for` key naming a set whose Scope is `pending`, `reserved` or `out` (an answers row
-  that is itself not in scope solves nothing and isn't checked).
+  that is itself not in scope solves nothing and isn't checked): its fix is `drop it from the Key
+  cell and cut its pages from <doc>'s Scope, or give <doc> the same Scope`, or only `give <doc>
+  the same Scope` when the Key names that set alone (dropping it would leave the Key empty).
 It warns, by file and line, outside a code fence in a solved doc's extract block (or before the
 first block of a file holding one), for a person to read: on a loose `Solution:` line (a `####
 Solution` heading, `Solutions:`), and on an answer line, one starting (after list or quote marks)
@@ -1071,10 +1073,12 @@ def key_check(doc, row, rows, qdocs, keyed, homes):
                        "solves; a doc holding its own key uses \"pp. N-M\", \"inline\" or "
                        "\"sections: <name>\"")
         # An in-scope answers file solving a set that isn't in scope: its official text would
-        # have no home the questions check reads (block_home()).
-        out += [f"{doc}: KEY NAMES A SET NOT IN SCOPE: {word} is {rows[word]['kind']}: drop it "
-                f"from the Key cell and cut its pages from {doc}'s Scope, or give {doc} the same "
-                "Scope"
+        # have no home the questions check reads (block_home()). When the Key names only that
+        # set, dropping it would leave the Key empty (NO KEY), so the fix is the Scope alone.
+        out += [f"{doc}: KEY NAMES A SET NOT IN SCOPE: {word} is {rows[word]['kind']}: "
+                + (f"give {doc} the same Scope" if key["docs"] - {doc} == {word} else
+                   f"drop it from the Key cell and cut its pages from {doc}'s Scope, or give "
+                   f"{doc} the same Scope")
                 for word in sorted(key["docs"] & set(rows))
                 if rows[word]["kind"] in ("pending", "reserved", "out")]
         return out

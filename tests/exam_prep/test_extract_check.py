@@ -1995,15 +1995,19 @@ class SolutionsFiles(unittest.TestCase):
                     "| 1 | in | no | | yes | Homework 1 |", f"| 1 | {scope} | no | | no | |"))
                 code, out = self.check()
                 self.assertEqual(code, 1, out)
-                self.assertIn(f"HW1S: KEY NAMES A SET NOT IN SCOPE: HW1 is {kind}: drop it from "
-                              "the Key cell and cut its pages from HW1S's Scope, or give HW1S the "
+                # r18-2 #4: the Key names HW1 alone, so "drop it from the Key cell" would leave
+                # it empty (NO KEY): the fix is the Scope alone.
+                self.assertIn(f"HW1S: KEY NAMES A SET NOT IN SCOPE: HW1 is {kind}: give HW1S the "
                               "same Scope\n", out)
+                self.assertNotIn("drop it", out)
         # One set of several out of scope fails alone.
         self.write("MANIFEST.md", SOL_MANIFEST.replace("| for HW1 |", "| for HW1 and HW2 |")
                    .replace("| 1 | in | no | | yes | Homework 1 |", "| 1 | out | no | | no | |")
                    + "| HW2 | `sources/hw2.pdf` | 1 | in | no | | yes | |\n")
         out = self.check()[1]
-        self.assertIn("HW1S: KEY NAMES A SET NOT IN SCOPE: HW1 is out", out)
+        # Its twin: the Key names another set, so dropping HW1 leaves a Key: both fixes.
+        self.assertIn("HW1S: KEY NAMES A SET NOT IN SCOPE: HW1 is out: drop it from the Key cell "
+                      "and cut its pages from HW1S's Scope, or give HW1S the same Scope\n", out)
         self.assertNotIn("HW2 is", out)
         # Its twins: the answers row out of scope too solves nothing, so it isn't checked; both
         # in scope pass.
