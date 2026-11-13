@@ -33,7 +33,9 @@ The shell is fixed. Design freedom goes into the render.
 
 A big mock may keep its config and generated assets in separate files and splice them in with a script. Splice or slice between the `/* ==== MOCK CONFIG` and `/* ==== END OF MOCK CONFIG` markers, never at a `<script>` tag: a render's string can hold scripts of its own.
 
-To compare typefaces in place on real screens, read `<skill dir>/references/type-in-place.md`.
+## Patterns
+
+- Comparing typefaces in place on real screens, without shipping the fonts: read `<skill dir>/references/type-in-place.md`.
 
 ## With the Artifact tool and artifact-design
 
