@@ -26,15 +26,21 @@ What counts as an answer, by the extract format (02-extract, "Solutions in an ex
   one). So does the bold marker (`**Solution:**`, `**Solution**`, `**Official solution:**`), which
   is Markdown and never a code comment: a starter fence whose closer was forgotten, closed by the
   solution's own bare fence line, used to hide it. Those strict forms cut in every block. In a
-  question part's block (`### [<doc> Q..]`) of a doc with solutions (an Answers `yes` doc, one a
-  `solutions to <doc>` note names, or any doc while an Answers `yes` row has no such note, since
-  that row pairs with any doc: solved()), wider forms cut too: the word `Worked solution`,
-  `Answer`, `Answer key` or `Key`, and a qualifier that names a part (`Solution to Q1a [...]:`,
-  `Solution, part (a) [...]:`, `**Solution (Q1):**`, `**Answer:**`, `Key: ...`; the bracketed
-  form with a qualifier only with its colon, and with `Answer` or `Key` only when its first cite
-  points into answers: bracketed()). Lecture text never sits in such a block, and a qualifier
-  that names no part (`**Solutions to recurrences** are unique.`, `**Solution set:**`) is never
-  a marker anywhere. A cut that starts inside a closed fence keeps
+  question part's block (`### [<doc> Q1a]`, never a stem's or a page's) of a doc with solutions
+  (an Answers `yes` doc, one a `solutions to <doc>` note names, or any doc while an Answers `yes`
+  row has no such note, since that row pairs with any doc: solved()), wider forms cut too: the
+  word `Worked solution`, `Answer`, `Answer key` or `Key`, and a qualifier that names a part
+  (`Solution to Q1a [...]:`, `Solution, part (a) [...]:`, `**Solution (Q1):**`, `**Answer:**`,
+  `Answer [<answers cite>]:`; the bracketed form with a qualifier only with its colon, and with
+  `Answer` or `Key` only when its first cite points into answers: bracketed()). Not every line
+  shaped so is one (wide_form()): a plain `Key:`, `Keys:` or `Answer:` (no bold, no qualifier,
+  no cite) is a legend, the data or an answer blank as often as a solution, so it never cuts;
+  nor does an `Answer` or `Key` with nothing after it but blanks, underscores or dots (`**Answer:**
+  ____`); nor a wide form with a `**Shape:**` or `**Conventions:**` line after it in its block,
+  since the brief puts the solution last. Each falls through to the unmarked-part warning.
+  Lecture text never sits in a part's block, and a qualifier that names no part (`**Solutions to
+  recurrences** are unique.`, `**Solution set:**`) is never a marker anywhere. A cut that starts
+  inside a closed fence keeps
   the fence's closing line, so the copy's fences pair as the extract's do. A looser marker (a
   `#### Solution` heading, a `# solution` comment, `Solution:`) inside a closed fence is code and
   cuts nothing (extract_check.py warns, naming its line: loose_in_fences()), unless a fence
@@ -59,14 +65,16 @@ question part's pages are read across every extract (hub_question_pages()), so a
 from another extract isn't a key page. A solution with no marker and no such cite (it cites its
 own question page, or nothing) can't be told from question text: extract_check.py warns about
 each question part of a doc MANIFEST names as having solutions (the first two cases above)
-that no marker cuts (unmarked()), and about each
-marker that cuts but isn't the brief's form (off_form()).
+that no marker cuts (unmarked()), and about each official part's marker that cuts but isn't the
+brief's form (off_form()).
 A copy is due for every extract that holds one of those, or any block of an Answers `yes` doc.
 Its first line names the extract and the SHA-256 of its bytes, which is how extract_check.py
 tells a stale copy. A run rewrites a copy whose text changed, leaves an unchanged one alone, and
 removes a copy it wrote whose extract is gone or holds no answer now (one it didn't write, with no
-such first line, is reported and left). `--parts` prints the number of markers it cuts across
-the extracts, one per official answer part (parts(): the self-test's PARTS). Exit 0 done, 1 on a
+such first line, is reported and left). `--parts` prints the number of official answer parts
+across the extracts (parts(): the self-test's PARTS): the first marker that cuts in each
+question part's block of a doc with solutions, and each `Solution [<doc> <loc>]` line of a block
+taken out whole; never a stem's, a lecture's or another page block's marker. Exit 0 done, 1 on a
 MANIFEST.md it can't read, 2 with no MANIFEST.md. Stdlib only, plus extract_check.py from this
 directory."""
 import argparse
@@ -92,10 +100,11 @@ BRACKETED_STRICT = re.compile(r"^[-*>#\s]*(?:\*\*)?(?:official\s+)?solutions?(?:
 # or heading mark before it. Markdown, never code, so it cuts even inside a fence; the closing `**`
 # keeps a Python `**solution` (dict unpacking) from reading as one.
 BOLD_STRICT = re.compile(r"^[-*>#\s]*\*\*(?:official\s+)?solutions?\s*:?\s*\*\*", re.I)
-# The wide markers, read only in a question part's block (`### [<doc> Q..]`) of a doc with
-# solutions (solved()): there a solution worded a little off the format is likelier than lecture
-# text, which never sits in a question part. The word may be `Solution` (`Official` or `Worked`
-# before it), `Answer`, `Answer key` or `Key`, and a qualifier after it must name a part: a
+# The wide markers, read only in a question part's block (`### [<doc> Q1a]`, not a stem's) of a
+# doc with solutions (solved()): there a solution worded a little off the format is likelier than
+# lecture text, which never sits in a question part. wide_form() leaves out the shapes question
+# text takes too (a plain `Key:`, an answer blank). The word may be `Solution` (`Official` or
+# `Worked` before it), `Answer`, `Answer key` or `Key`, and a qualifier after it must name a part: a
 # parenthesised label (`(Q1)`, `(a)`, `(part b)`), `to` or `for` then `Q1a`, `part (a)`,
 # `problem 3`, `question 2`, `exercise 4`, `(a)` or `all parts`, or a comma then one of those
 # (`, part (a)`, `, all parts`). So `**Solutions to recurrences** are unique.`, `**Solution
@@ -110,13 +119,22 @@ QUAL = (r"(?:\s*\((?:(?:Q|" + PART_WORD + r")\s*)?" + LABELS + r"\)"
         r"|\s+(?:to|for)\s+(?:all\s+parts|Q\s*" + LABELS + r"|" + PART_WORD + r"\s*" + LABELS
         + r"|\(" + LABELS + r"\))"
         r"|\s*,\s*(?:all\s+parts|Q\s*" + LABELS + r"|" + PART_WORD + r"\s*" + LABELS + r"))")
-WORD = r"(?:(?:official|worked)\s+)?(?P<word>solution|answer(?:\s+key)?|key)s?\b"
+# PREFIX and WORDS are mirrored in templates/verify-set-key.py's MARKER (its test compares them).
+PREFIX = r"(?:official|worked)"
+WORDS = r"solution|answer(?:\s+key)?|key"
+WORD = r"(?:(?P<pre>" + PREFIX + r")\s+)?(?P<word>" + WORDS + r")s?\b"
 BRACKETED = re.compile(r"^[-*>#\s]*(?:\*\*)?" + WORD + r"(?P<qual>(?:" + QUAL + r"){1,3})?"
                        r"(?:\*\*)?\s*\[(?P<doc>[A-Za-z0-9_.-]+)\s+(?P<loc>[^\]\s][^\]]*)\]"
                        r"(?:\s*" + CITED + r")*(?:\*\*)?\s*(?::|(?(qual)(?!)|$))", re.I)
-BOLD = re.compile(r"^[-*>#\s]*\*\*" + WORD + r"(?:" + QUAL + r"){0,3}\s*:?\*\*", re.I)
-LOOSE = re.compile(r"^[-*>#\s]*(?:\*\*)?" + WORD + r"(?:" + QUAL + r"){0,3}(?:\*\*)?\s*"
-                   r"(?::|\*\*|$)", re.I)
+BOLD = re.compile(r"^[-*>#\s]*\*\*" + WORD + r"(?P<qual>(?:" + QUAL + r"){1,3})?\s*:?\*\*", re.I)
+LOOSE = re.compile(r"^[-*>#\s]*(?:\*\*)?" + WORD + r"(?P<qual>(?:" + QUAL + r"){1,3})?(?:\*\*)?"
+                   r"\s*(?::|\*\*|$)", re.I)
+# What may follow an `Answer` or `Key` marker on an answer blank: blanks, underscores, dots.
+FILL_IN = re.compile(r"[\s:*]*[_.…][\s_.…]*")
+# A part's Shape or Conventions field: a wide form above one is question text (the brief puts the
+# solution after them).
+FIELD_LINE = re.compile(r"^[-*+>\s]*\*\*(?:Shape|Conventions)(?::\*\*|\*\*:)")
+HEADING = re.compile(r"^\s*#")
 # The form the extract brief writes; any other marker that cuts is a warning (extract_check.py).
 CANONICAL = re.compile(r"^[-*\s]*Solution \[[A-Za-z0-9_.-]+\s+[^\]\s][^\]]*\](?:\s*" + CITED
                        + r")*\s*:")
@@ -251,18 +269,39 @@ def bracketed(line, rows, qpages=None):
             or answers_cite(m.group("doc"), m.group("loc"), rows, qpages or {}))
 
 
-def marker(line, code, i, rows, wide=False, qpages=None):
-    """Whether lines[i] is a solution marker: the strict bracketed or bold form anywhere, the
-    loose one only outside a fence; with `wide` (a question part of a doc with solutions), also
-    the wide bracketed or bold form anywhere and the wide loose one outside a fence."""
-    if BRACKETED_STRICT.match(line) or BOLD_STRICT.match(line):
-        return True
-    if i not in code and SOLUTION.match(line):
-        return True
-    if not wide:
+def wide_form(line, rows, qpages=None, loose=True):
+    """Whether the line is a wide marker (read only in a question part of a doc with solutions):
+    the wide bracketed form (bracketed()), the wide bold one, or with `loose` (outside a fence)
+    the wide loose one. Never a plain `Key:`, `Keys:`, `Answer:` or `Answer key:` (no bold, no
+    qualifier, no cite, no `Official` or `Worked`, no heading mark: a legend, the data or an
+    answer blank), nor an `Answer` or `Key` followed by nothing but blanks, underscores or dots
+    (FILL_IN). cuts() also skips one with a Shape or Conventions line after it in its block."""
+    m = BRACKETED.match(line)
+    if m and not bracketed(line, rows, qpages):
+        m = None
+    m = m or BOLD.match(line) or (LOOSE.match(line) if loose else None)
+    if not m:
         return False
-    return bool(bracketed(line, rows, qpages) or BOLD.match(line)
-                or (i not in code and LOOSE.match(line)))
+    if m.group("word").lower() == "solution":
+        return True
+    if FILL_IN.fullmatch(line[m.end():].rstrip("\r\n")):
+        return False
+    return bool(m.group("pre") or m.group("qual") or "**" in m.group(0) or "[" in m.group(0)
+                or HEADING.match(line))
+
+
+def strict(line, code, i):
+    """Whether lines[i] is a strict marker, read in every block: the bracketed or bold form
+    anywhere, the loose `Solution:` one only outside a fence."""
+    return bool(BRACKETED_STRICT.match(line) or BOLD_STRICT.match(line)
+                or (i not in code and SOLUTION.match(line)))
+
+
+def marker(line, code, i, rows, wide=False, qpages=None):
+    """Whether lines[i] is a solution marker: a strict one (strict()); with `wide` (a question
+    part of a doc with solutions), also a wide one (wide_form(): its loose form outside a fence
+    only)."""
+    return strict(line, code, i) or bool(wide and wide_form(line, rows, qpages, i not in code))
 
 
 def segments(lines, code=None):
@@ -337,11 +376,14 @@ def hub_question_pages(root):
 class Cut:
     """What cuts() reads in a text: `lines`; `keep`, whether each is kept; `runs`, [(first line,
     end, why)] for each run taken out; `answers_doc`, whether it holds a block of an Answers `yes`
-    doc; `marks`, [(line index, whether it starts a run)] for each solution marker qonly.py cuts
-    (one per question part: a block's first marker, and each marker line in a block taken out
-    whole); `unmarked`, the header index of each question part of a doc MANIFEST names as having
-    solutions in which no marker cuts anything; `wide`, the indices of the lines in a block read
-    with the wide markers; `qpages`, the question pages it used (question_pages())."""
+    doc; `marks`, [(line index, whether it starts a run, whether only a wide form reads it)] for
+    each official part's marker (the first marker that cuts in a question part's block of a doc
+    with solutions, and each `Solution [<doc> <loc>]` line, BRACKETED_STRICT, in a block taken out
+    whole; never a stem's, a lecture's or another page block's); `unmarked`, the header index of
+    each question part of a doc MANIFEST names as having solutions in which no marker cuts
+    anything; `wide`, the indices of the lines read with the wide markers (a question part's of a
+    doc with solutions, after its last Shape or Conventions line); `qpages`, the question pages it
+    used (question_pages())."""
 
     def __init__(self, **kw):
         self.__dict__.update(kw)
@@ -349,7 +391,8 @@ class Cut:
 
 def cuts(text, rows, qpages=None):
     """Cut for the text. A question part's block of a doc with solutions (solved()) reads the
-    wide markers too, any other block the strict ones only. A run that starts inside a closed
+    wide markers too below its last Shape or Conventions line (FIELD_LINE), any other block (a
+    stem's, a page's) the strict ones only. A run that starts inside a closed
     fence keeps that fence's closing line, so the copy pairs its fences as the extract does.
     `qpages` adds question pages from other extracts (hub_question_pages())."""
     lines = text.splitlines(keepends=True)
@@ -371,19 +414,20 @@ def cuts(text, rows, qpages=None):
     for kind, start, end, m in segs:
         if kind != "block":
             if kind == "pre":
-                cut = next((i for i in range(start, end) if marker(lines[i], code, i, rows)),
-                           None)
+                cut = next((i for i in range(start, end) if strict(lines[i], code, i)), None)
                 if cut is not None:
                     drop(cut, end, "a solution before the first block")
-                    marks.append((cut, True))
             continue
         doc, loc = m.group("doc"), m.group("loc").strip()
-        wide = bool(QUESTION.fullmatch(loc)) and (doc in named or anydoc)
-        if wide:
-            wide_lines.update(range(start + 1, end))
+        official = bool(PART.fullmatch(loc)) and (doc in named or anydoc)
+        if official:
+            last = max((i for i in range(start + 1, end)
+                        if i not in code and FIELD_LINE.match(lines[i])), default=start)
+            wide_lines.update(range(last + 1, end))
 
         def found(i):
-            return marker(lines[i], code, i, rows, wide, qpages)
+            return strict(lines[i], code, i) or (
+                i in wide_lines and wide_form(lines[i], rows, qpages, i not in code))
         row = rows.get(doc) or {}
         if row.get("answers"):
             answers_doc = True
@@ -398,12 +442,14 @@ def cuts(text, rows, qpages=None):
                     why = f"a block of {doc} (answers yes) on no question part's page"
             if why:
                 drop(start, end, why)
-                marks.extend((i, False) for i in range(start + 1, end) if found(i))
+                marks.extend((i, False, False) for i in range(start + 1, end)
+                             if BRACKETED_STRICT.match(lines[i]))
                 continue
         cut = next((i for i in range(start + 1, end) if found(i)), None)
         if cut is not None:
             drop(cut, end, f"the solution in [{doc} {loc}]")
-            marks.append((cut, True))
+            if official:
+                marks.append((cut, True, not strict(lines[cut], code, cut)))
         elif doc in named and PART.fullmatch(loc):
             unmarked.append(start)
     return Cut(lines=lines, keep=keep, runs=runs, answers_doc=answers_doc, marks=marks,
@@ -411,10 +457,10 @@ def cuts(text, rows, qpages=None):
 
 
 def loose_in_fences(text, rows, qpages=None):
-    """The indices of the lines that read as a loose solution marker (SOLUTION, or LOOSE in a
-    block read with the wide markers; not a bracketed or bold form) inside a closed code fence and
-    that the copy keeps, or the extract keeps when no copy is due: exempt as code, so
-    extract_check.py warns about each for a person to look at."""
+    """The indices of the lines that read as a loose solution marker (SOLUTION, or the loose
+    wide_form() on a line read with the wide markers; not a bracketed or bold form) inside a
+    closed code fence and that the copy keeps, or the extract keeps when no copy is due: exempt
+    as code, so extract_check.py warns about each for a person to look at."""
     c = cuts(text, rows, qpages)
     code = fenced(c.lines)
     out = []
@@ -422,9 +468,9 @@ def loose_in_fences(text, rows, qpages=None):
         line, wide = c.lines[i], i in c.wide
         if not c.keep[i] or BRACKETED_STRICT.match(line) or BOLD_STRICT.match(line):
             continue
-        if wide and (bracketed(line, rows, c.qpages) or BOLD.match(line)):
+        if wide and wide_form(line, rows, c.qpages, loose=False):
             continue
-        if SOLUTION.match(line) or (wide and LOOSE.match(line)):
+        if SOLUTION.match(line) or (wide and wide_form(line, rows, c.qpages)):
             out.append(i)
     return out
 
@@ -472,11 +518,14 @@ def leaks(text, rows, qpages=None):
 
 
 def off_form(text, rows, qpages=None):
-    """The indices of the marker lines that start a cut and aren't the brief's `Solution [<doc>
-    <loc>]:` form (CANONICAL): extract_check.py warns about each, since a marker the patterns
-    read only by luck is one rewording away from a leak."""
+    """[(line index, whether only a wide form reads it)] for each official part's marker
+    (Cut.marks) that starts a cut and isn't the brief's `Solution [<doc> <loc>]:` form
+    (CANONICAL): extract_check.py warns about each, since a marker the patterns read only by luck
+    is one rewording away from a leak, and a wide-only one may be question text. A lecture's or a
+    stem's marker gets none: it is no official part."""
     c = cuts(text, rows, qpages)
-    return [i for i, starts in c.marks if starts and not CANONICAL.match(c.lines[i])]
+    return [(i, wide) for i, starts, wide in c.marks
+            if starts and not CANONICAL.match(c.lines[i])]
 
 
 def unmarked(text, rows, qpages=None):
@@ -523,8 +572,9 @@ def due(text, rows, qpages=None):
 
 
 def parts(root, rows):
-    """The number of solution markers qonly.py cuts across the extracts (Cut.marks): one per
-    official answer part, the self-test's PARTS (verify-selftest.py)."""
+    """The number of official answer parts across the extracts (Cut.marks): a question part's
+    first marker that cuts, and each `Solution [<doc> <loc>]` line of a block taken out whole;
+    the self-test's PARTS (verify-selftest.py)."""
     qpages = hub_question_pages(root)
     total = 0
     for name in extracts(root):

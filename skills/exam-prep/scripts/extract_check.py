@@ -54,10 +54,13 @@ extract) and that no solution marker cuts, so the copy keeps it (qonly.leaks()):
 marker is worded off the format; a copy holding such a line fails too. A solution that cites
 nothing, or only its own question page, has no such cite and doesn't fail: each question part of
 a doc with solutions in which no marker cuts anything is a warning by file and line
-(qonly.unmarked()), for a person to read, since an official solution may skip a part. Each marker
-that cuts but isn't the brief's `Solution [<doc> <loc>]:` form (`**Solution:**`, `Solution to Q1a
-[...]:`, `**Answer:**`) is a warning by file and line too (qonly.off_form()): it passes, so older
-extracts still do, but a rewording away from it is a leak. A copy with no extract holding
+(qonly.unmarked()), for a person to read, since an official solution may skip a part. Each
+official part's marker that cuts but isn't the brief's `Solution [<doc> <loc>]:` form
+(`**Solution:**`, `Solution to Q1a [...]:`, `**Answer:**`) is a warning by file and line too
+(qonly.off_form()): it passes, so older extracts still do, but a rewording away from it is a
+leak. One only a question part's wide forms read may be question text, so its warning asks
+which it is: a solution is rewritten in the brief's form, question text left or quoted. A
+lecture's or a stem's marker is no official part and gets none. A copy with no extract holding
 answers is read as an extract would be and fails on anything qonly.py would take out. It also
 fails on an extract's code fence that never closes before the next block header, the `Coverage:`
 line or the end of the file. Fences are qonly.fences()'s, read as CommonMark reads them (a line
@@ -384,10 +387,17 @@ def qonly_check(root, rows):
                        "code fence, left in as code; if it starts a solution (a starter fence "
                        "whose closer was forgotten), close the fence above it or write it "
                        "`Solution [<doc> <loc>]:` and rerun qonly.py")
-        for i in qonly.off_form(text, rows, qpages):
-            out.append(f"warning: _build/extract/{name}:{i + 1}: a solution marker not in the "
-                       "`Solution [<doc> <loc>]:` form; qonly.py cuts it, but rewrite it as "
-                       "`Solution [<doc> <loc>]: ...` and rerun qonly.py")
+        for i, wide in qonly.off_form(text, rows, qpages):
+            if wide:
+                out.append(f"warning: _build/extract/{name}:{i + 1}: a solution marker not in "
+                           "the `Solution [<doc> <loc>]:` form, read only in a question part; "
+                           "qonly.py cuts from it to the end of the part: if it starts a "
+                           "solution, rewrite it as `Solution [<doc> <loc>]: ...`; if it is "
+                           "question text, leave it or quote it; then rerun qonly.py")
+            else:
+                out.append(f"warning: _build/extract/{name}:{i + 1}: a solution marker not in "
+                           "the `Solution [<doc> <loc>]:` form; qonly.py cuts it, but rewrite "
+                           "it as `Solution [<doc> <loc>]: ...` and rerun qonly.py")
         lines = text.splitlines()
         for i in qonly.unmarked(text, rows, qpages):
             head = qonly.BLOCK.match(lines[i])
@@ -395,8 +405,7 @@ def qonly_check(root, rows):
                        f"{head.group('loc').strip()}] is a question part of a doc with solutions, "
                        "yet no solution marker cuts anything in it; if its block holds a "
                        "solution, start it `Solution [<doc> <loc>]:` and rerun qonly.py (an "
-                       "official solution that skips the part, or one on a key page, needs "
-                       "nothing)")
+                       "official solution that skips the part needs nothing)")
         needed, body = qonly.due(text, rows, qpages)
         if needed:
             due[name] = (qonly.first_line(name, src) + qonly.TAIL + body,

@@ -27,12 +27,17 @@ cut only in a question part of a doc with solutions, and a qualifier must name a
 text such as `**Solutions to recurrences** are unique.` cuts nothing; extract_check.py warns on a
 cutting marker off the brief's form and on a question part no marker cuts; `qonly.py --parts`
 counts the markers it cuts; a cite's pages are read in every form (two pages, an en dash, `P.`,
-none) and question pages across extracts."""
+none) and question pages across extracts. Round 9: the wide forms read in a question part only
+(never a stem), a plain `Key:`, `Keys:` or `Answer:`, an answer blank (`**Answer:** ____`) and a
+wide form above a Shape or Conventions line are question text; `--parts` counts official parts
+only (no lecture example, one per bracketed line of a key page dropped whole); the off-form
+warning fits its marker; the wide pattern stays fast on a long qualifier."""
 import contextlib
 import importlib.util
 import io
 import os
 import tempfile
+import time
 import unittest
 
 REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -643,8 +648,7 @@ class QOnly(unittest.TestCase):
                          ["warning: _build/extract/d1.md:1: [HW1 Q1a] is a question part of a "
                           "doc with solutions, yet no solution marker cuts anything in it; if its "
                           "block holds a solution, start it `Solution [<doc> <loc>]:` and rerun "
-                          "qonly.py (an official solution that skips the part, or one on a key "
-                          "page, needs nothing)"])
+                          "qonly.py (an official solution that skips the part needs nothing)"])
         for line in ("solution = memo[i - 1]", "solution.cache[k - 1]:", "solution (x) = [a b]"):
             self.assertFalse(qonly.BRACKETED.match(line), line)
 
@@ -715,7 +719,7 @@ class QOnly(unittest.TestCase):
         # `**Answer:**` with no cite, in a question part of a doc paired with an answers file.
         rows = extract_check.manifest_rows(os.path.join(self.root, "MANIFEST.md"))
         qonly = load("qonly")
-        for mark in ("**Answer:** 42", "Answer: 42", "**Key:** 42", "Worked solution: 42",
+        for mark in ("**Answer:** 42", "**Key:** 42", "Worked solution: 42",
                      "**Answer (a):** 42", "Key [HW1S p.1]: 42", "Answer key, part (a): 42"):
             with self.subTest(mark):
                 text = "### [HW1 Q1a] x\nPages: [HW1 p.1]\nWrite f.\n" + mark + "\nmore\n"
@@ -751,12 +755,22 @@ class QOnly(unittest.TestCase):
                    "### [HW1 Q2c] z\nPages: [HW1 p.2]\n\"Do it.\"\n"
                    "### [HW1S p.2] Solutions, continued\nSolution [HW1S p.2]: 5\n"
                    "### [D1 p.2] a page\n**Solutions to recurrences** are unique.\n")
+        # Round 9, finding 2: a lecture's worked example (`Solution:` in a page block) and every
+        # marker line of a key page dropped whole counted as official parts. A part counts its
+        # first marker; a block dropped whole counts its `Solution [<doc> <loc>]` lines only, as
+        # the self-test's old grep did; a lecture or page block counts nothing.
+        self.write("MANIFEST.md", MANIFEST + PE_ROW)
+        self.write("_build/extract/l3.md", "### [L3 p.4] Recurrences\n"
+                                           "Solution: T(n) = 2T(n/2) + n, so T(n) = n log n.\n")
+        self.write("_build/extract/pe1.md", PE + "**Solution:** s, a, b\n"
+                                                 "Solution [PE1 p.3]: s, a, b\nAnswer (Q1): s, a, b\n")
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
             code = load("qonly").main(["--parts", "--root", self.root])
         self.assertEqual(code, 0, out.getvalue())
-        # REPRO_A: 2; hw1b: Q2a, Q2b and the answers file's line; d1: none.
-        self.assertEqual(out.getvalue(), "5\n")
+        # REPRO_A: 2; hw1b: Q2a, Q2b and the answers file's line; d1: none; l3: none; pe1: its
+        # part Q1 and its key page's one bracketed line.
+        self.assertEqual(out.getvalue(), "7\n")
 
     def test_the_answers_cite_reads_every_page_and_locator_form(self):
         # Round 8, finding 5: a cite with two pages, an en dash, a capital P or no page at all
@@ -805,6 +819,118 @@ class QOnly(unittest.TestCase):
         code, out = self.check()
         self.assertEqual(code, 1, out)
         self.assertIn("_build/extract/d1.md:3: CITES AN ANSWERS PAGE", out)
+
+    # ---- round 9 ----
+
+    def test_question_text_shaped_like_a_wide_marker_is_kept(self):
+        # Round 9, finding 1: in a solved doc's part or stem, a legend (`Key: solid = tree
+        # edge.`), the data (`Keys: 10, 22, 31, 4`), an answer blank (`Answer: ____`) or an
+        # instruction (`**Answer** both parts ...`) read as a wide marker and cut the rest of the
+        # block: the question, its data, its Shape and Conventions lines.
+        self.write("MANIFEST.md", MANIFEST + self.HW2_ROW)
+        self.write("_build/pages/HW2/p-001.png", "")
+        hw2 = ("### [HW2 Q1] Flow\nPages: [HW2 p.1]\nKey: solid = tree edge.\n"
+               "Write f for the graph above. (5 points)\nSolution [HW2 p.1]: f = 3.\n")
+        hw1 = ("### [HW1 Q2 stem] Hashing\nPages: [HW1 p.2]\n\"Insert the keys in order.\"\n"
+               "Keys: 10, 22, 31, 4\n### [HW1 Q2a] Table\nPages: [HW1 p.2]\n"
+               "\"Show the table after each insert.\"\nAnswer: ____\n"
+               "**Answer** both parts in one table.\n**Shape:** trace\n"
+               "**Conventions:** linear probing\nSolution [HW1S p.2]: slots 0-3 in order.\n")
+        self.write("_build/extract/hw2.md", hw2)
+        self.write("_build/extract/hw1q2.md", hw1)
+        self.qonly()
+        self.assertEqual(self.read("_build/q-only/hw2.md").partition("\n")[2],
+                         hw2.replace("Solution [HW2 p.1]: f = 3.\n", ""))
+        self.assertEqual(self.read("_build/q-only/hw1q2.md").partition("\n")[2],
+                         hw1.replace("Solution [HW1S p.2]: slots 0-3 in order.\n", ""))
+        code, out = self.check()
+        self.assertEqual(code, 0, out)
+        self.assertNotIn("hw2.md:", out)
+        self.assertNotIn("hw1q2.md:", out)
+
+    def test_a_plain_answer_or_key_line_is_never_a_marker(self):
+        # Round 9, finding 1: a plain `Key:`, `Keys:` or `Answer:` (no bold, no qualifier, no
+        # cite) never cuts, and an answer blank (`____`, dots) never cuts in any form: the part
+        # falls through to the unmarked-part warning. Wide markers read in a part only, never a
+        # stem, and one with a Shape or Conventions line after it is question text.
+        rows = extract_check.manifest_rows(os.path.join(self.root, "MANIFEST.md"))
+        qonly = load("qonly")
+        part = "### [HW1 Q1a] x\nPages: [HW1 p.1]\nWrite f.\n"
+        for mark in ("Key: 42", "Keys: 4, 2", "Answer: 42", "- Answer: 42", "Answers: 4, 2",
+                     "Answer key: 42", "Key", "Answer:", "**Answer:** ____", "Answer (a): .....",
+                     "**Key (a)**: __ __", "Answer, part (a): " + chr(0x2026)):
+            with self.subTest(mark):
+                text = part + mark + "\nmore\n"
+                self.assertEqual(qonly.strip(text, rows)[1], [])
+                self.assertEqual(qonly.unmarked(text, rows), [0])
+        for after in ("**Shape:** compute", "- **Conventions:** none", "**Shape**: trace"):
+            with self.subTest(after):
+                text = part + "**Answer (a):** 42\n" + after + "\n"
+                self.assertEqual(qonly.strip(text, rows)[1], [])
+                # The strict forms still cut there.
+                text = part + "**Solution:** 42\n" + after + "\n"
+                self.assertEqual(qonly.strip(text, rows)[0], part)
+        for mark in ("**Answer (a):** 42", "Answer to Q1: 42", "**Key:** 42"):
+            with self.subTest(stem=mark):
+                text = "### [HW1 Q1 stem] x\nPages: [HW1 p.1]\n" + mark + "\nmore\n"
+                self.assertEqual(qonly.strip(text, rows)[1], [])
+        text = "### [HW1 Q1 stem] x\nPages: [HW1 p.1]\nSolution [HW1S p.1]: 42\n"
+        self.assertEqual(qonly.strip(text, rows)[0], "### [HW1 Q1 stem] x\nPages: [HW1 p.1]\n")
+
+    def test_the_off_form_warning_fits_its_marker(self):
+        # Round 9: a lecture's worked example (`Solution:` in a page block) got the advice to
+        # rewrite it as `Solution [`, and a wide-only marker, which may be question text, got
+        # the same advice as a solution worded off the form.
+        self.write("MANIFEST.md", MANIFEST + self.HW2_ROW + PE_ROW)
+        self.write("_build/pages/HW2/p-001.png", "")
+        for page in (1, 2, 3):
+            self.write(f"_build/pages/PE1/p-{page:03d}.png", "")
+        self.write("_build/extract/hw2.md", self.HW2)
+        self.write("_build/extract/pe1.md", PE)
+        self.write("_build/extract/d1.md", "### [HW1 p.2] a page\nSolution: T(n) = n log n.\n")
+        self.qonly()
+        code, out = self.check()
+        self.assertEqual(code, 0, out)
+        self.assertNotIn("d1.md:2:", out)
+        self.assertIn("warning: _build/extract/hw2.md:4: a solution marker not in the "
+                      "`Solution [<doc> <loc>]:` form, read only in a question part; qonly.py "
+                      "cuts from it to the end of the part: if it starts a solution, rewrite it "
+                      "as `Solution [<doc> <loc>]: ...`; if it is question text, leave it or "
+                      "quote it; then rerun qonly.py", out)
+        self.assertIn("warning: _build/extract/pe1.md:6: a solution marker not in the "
+                      "`Solution [<doc> <loc>]:` form; qonly.py cuts it, but rewrite it as "
+                      "`Solution [<doc> <loc>]: ...` and rerun qonly.py", out)
+
+    def test_a_wide_loose_marker_in_a_fence_warns(self):
+        # Round 9, finding 3: loose_in_fences()'s wide branch had no test. In a part a qualified
+        # loose marker inside a closed fence is left in as code and warned about; a plain
+        # `Key:` there is no marker at all, and a stem reads no wide marker.
+        rows = extract_check.manifest_rows(os.path.join(self.root, "MANIFEST.md"))
+        qonly = load("qonly")
+        body = "Pages: [HW1 p.1]\n\"Write f.\"\n```\nAnswer (a): 42\nKey: 7\n```\n"
+        part = "### [HW1 Q1a] x\n" + body + "**Solution:** 3\n"
+        self.assertEqual(qonly.loose_in_fences(part, rows), [4])
+        self.assertEqual(qonly.loose_in_fences("### [HW1 Q1 stem] x\n" + body, rows), [])
+        self.write("_build/extract/hw1f.md", part)
+        self.qonly()
+        out = self.check()[1]
+        self.assertIn("warning: _build/extract/hw1f.md:5: a loose solution marker inside a code "
+                      "fence", out)
+        self.assertNotIn("hw1f.md:6:", out)
+
+    def test_the_wide_patterns_stay_fast_on_a_long_qualifier(self):
+        # A qualifier repeated many times must not backtrack exponentially.
+        qonly = load("qonly")
+        rows = extract_check.manifest_rows(os.path.join(self.root, "MANIFEST.md"))
+        for line in ("Answer" + " (a)" * 40 + " x", "**Answer" + " (a)" * 40 + " x",
+                     "Answer" + " (a)" * 40 + " [HW1S p.1] x", "Key to" + " 1a and" * 40 + " x"):
+            for pattern in (qonly.BRACKETED, qonly.BOLD, qonly.LOOSE):
+                start = time.perf_counter()
+                pattern.match(line)
+                self.assertLess(time.perf_counter() - start, 0.05, (pattern.pattern, line))
+            start = time.perf_counter()
+            qonly.cuts("### [HW1 Q1a] x\n" + line + "\n", rows)
+            self.assertLess(time.perf_counter() - start, 0.05, line)
 
     def test_the_marker(self):
         solution = load("qonly").SOLUTION
