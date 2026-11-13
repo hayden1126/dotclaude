@@ -77,8 +77,8 @@ naming the id that replaces it, if one does.
 | FB-052 | Extractors view every page image as well as the text, write diagrams as data, and flag what they can't read. The run's report states image coverage per deck. | w02, t:briefs, extract_check.py | B1.C7, B4 (stage 02), D1.G5 |
 | FB-053 | One whole deck per agent. Split a big deck at a section divider with a three-page overlap. | w02 | B4 (stage 02), H1 (stage steps) |
 | FB-054 | Fan out wide for raw extraction. A stage that carries cross-references works from a fixed id registry or stays single-threaded. | w02, w04 | A4.C4 |
-| FB-055 | Check small, rotated or crowded labels on a higher-resolution crop before using the value. | w02 | B1.G9 |
-| FB-056 | Each extract that holds a solution, or a block of an answers file, gets a question-only copy under `_build/q-only/` (`qonly.py`), which `extract_check.py` fails while it is missing, stale, still holds a solution or differs from what `qonly.py` writes. Every agent that must not see answers reads the copy, never the extract. | w02, w05, w07, w08, w11, t:briefs, qonly.py, extract_check.py | I3.C18, I3.G9, I2.G10 |
+| FB-055 | Check small, rotated or crowded labels on a higher-resolution crop before using the value. | w02, t:briefs, extract_check.py | B1.G9 |
+| FB-056 | Official solutions live only in `_build/solutions/<name>.md`, written by the same extract agent as `_build/extract/<name>.md`, one block per question part of a solved doc (its `Solution [` line or `No official solution.`) plus an answers doc's page blocks; the extracts hold none, and `extract_check.py` fails a part with no solutions block and a solution or answers page left in an extract. Every agent that must not see answers reads the extracts and never opens `_build/solutions/`. | SKILL, w02, w05, w07, w08, w09, w11, t:briefs, extract_check.py | I3.C18, I3.G9, I2.G10 |
 
 ## 03-backbone
 

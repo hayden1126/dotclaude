@@ -114,10 +114,12 @@ evidence ids.
   `templates/WATCH.md` and `templates/videos-addon.html`, new, baseline 2026-11-12;
   `templates/chassis-shots/`, regenerated, with new `-pin` and `-review-pin` shots and two new
   figure shots (`-fig-1-slide`, `-fig-2-triangle`) at each width;
-  `scripts/qonly.py`, `scripts/videos.py` and `scripts/verify_videos.mjs`, new, and
+  `scripts/videos.py` and `scripts/verify_videos.mjs`, new, and
   `scripts/assemble.py`, `scripts/coverage_check.py`, `scripts/cram_check.py`,
   `scripts/extract_check.py`, `scripts/mock_leak.py`, `scripts/mockpage.py`,
-  `scripts/verify_page.mjs`, which carry no date.
+  `scripts/verify_page.mjs`, which carry no date. Outside the skill, the tests
+  `tests/exam_prep/test_agent_briefs.py`, `test_extract_check.py`, `test_set_key.py` and
+  `test_verify_templates.py` changed with them.
 - **Changes:**
   - FB-124 and L26: the theme chrome, CHASSIS C2 (themed scrollbars, an opaque page track), C3
     (a fixed theme icon with no words) and C4 (full screen where granted, the F and T keys), on
@@ -132,13 +134,19 @@ evidence ids.
     (I3.C8, I3.G8, J1.G5, I1 (section 2)).
   - FB-123: citation codes now match their MANIFEST.md row in any case, silently, the source key
     keeping the row's spelling (I3.C8).
-  - FB-056: question-only copies of the extracts with solutions (`qonly.py`, `02-extract` step
-    3.4, checked by `extract_check.py`, which warns on an off-form marker and on an unmarked
-    part, with `qonly.py --parts` feeding `05-verify`'s PARTS, FB-100), read by every
-    answer-blind brief (I3.C18, I3.G9, I2.G10).
+  - FB-056: official solutions move out of the extracts into `_build/solutions/<name>.md`,
+    written by the same extract agent as its extract (hard rule 6), one block per question part
+    of a solved doc plus an answers doc's page blocks (`02-extract`, "The solutions file").
+    `extract_check.py` checks the pairing and fails a solution or answers page left in an
+    extract, and `extract_check.py --parts` feeds `05-verify`'s PARTS (FB-100). Answer-blind
+    briefs read the extracts and never open `_build/solutions/`; the writers, section
+    reviewers, checker and tutor read both. An older hub's extracts with solutions inline aren't
+    supported (I3.C18, I3.G9, I2.G10).
   - FB-055: a value still illegible on a 300 dpi crop is written `(illegible at 300 dpi:
-    <what>)` by the main session, which `extract_check.py` counts without failing, noted in
-    STATUS and asked once no `Build running` line stands (round 9 review).
+    <what>)` by the main session, which `extract_check.py` lists by file and line without
+    failing, noted in STATUS and asked once no `Build running` line stands; the value the
+    student gives replaces the mark, then `extract_check.py` and the self-test rerun, and until
+    then the self-test skips that part, naming the mark (round 9 and round 10 reviews).
   - FB-191: `mock_leak.py`'s questions mode drops only the extract brief's own note lines (a
     `Pages:` line of cites alone, `**Shape:**`, `**Conventions:**` and the closing `Coverage:`
     line), so question text on any other `Pages:` or `Coverage:` line is checked (round 6 review).
@@ -220,8 +228,9 @@ evidence ids.
     records (round 1 retro, I3).
   - The chassis: the column gets room at its foot so the last subsection reaches the spy line,
     and the closed drawer drops its shadow (part of K61).
-  - SKILL.md: the watch list in the stage map, `_build/q-only/`, `_build/img/`, `_build/watch/`
-    and `_build/videos/` in the hub layout, and the question-only copies in hard rule 4.
+  - SKILL.md: the watch list in the stage map, `_build/solutions/`, `_build/img/`,
+    `_build/watch/` and `_build/videos/` in the hub layout, and the solutions files in hard
+    rules 4 and 6.
 - **Retired:** none.
 - **Backlog:** K26, K52, K70 and K75 `kept (round 2)`; K02, K67 and K68 `trying (round 3)` (no hub
   had them this round); K29 and K61 stay `open`, each partly covered (CHASSIS C3, the drawer's
