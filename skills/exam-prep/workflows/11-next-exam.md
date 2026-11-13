@@ -232,8 +232,10 @@ In this order, each item logged as it lands:
    sets this exam's on PLAN.md's line) and a `Figure shortlist:` line (the backbone keeps the shortlist, and a
    `10-polish` figure pass stays on offer). Item 1 moved the attempts and the `Mocks declined:`
    line. An `Unverified:` line stays: its material is still unchecked
-   ("A source added unverified"). Keep the notes page's URL line (same URL from here on), and add
-   the finished exam's sheet, mock page and watch list URLs to the `Earlier exams:` line (start it
+   ("A source added unverified"). A `Pending set dropped:` line stays too while its set's row is
+   still `pending`: its undo runs when the set arrives (`01-ingest` step 5). Keep the notes
+   page's URL line (same URL from here on), and add the finished exam's sheet, mock page and watch
+   list URLs to the `Earlier exams:` line (start it
    when there is none), as `<old exam>: <name> <URL>, ... (tag exam/<old-slug>)`. Set the
    next-step line to `11 step 6, launch the build for <exam> (_build/logs/reopen-<old-slug>.md)`.
 4. **The approval line, last**, as `00-intake` step 7 item 3 says. Commit, staging the archive's
