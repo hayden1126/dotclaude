@@ -22,8 +22,10 @@
   (`_build/pages/`, `_build/text/`, `_build/slices/`, `_build/media/`, `_build/img/`) are
   gitignored. The repo stays local: never push, and never add a remote without the student's go.
 - `reserved` files in `MANIFEST.md` belong to a later exam: never extract or open them now.
-- `Answers: yes` files in `MANIFEST.md` never reach a mock writer, and nothing published quotes
-  them before the student has attempted that set.
+- `Answers: yes` files in `MANIFEST.md`, and the official solutions extracted from them into
+  `_build/solutions/`, never reach a mock writer or another agent that must not see answers (those
+  read `_build/extract/`, which holds none), and nothing published quotes them before the student
+  has attempted that set.
 - Practice keys (`practice/*-key.md`, `mock-values-key.md` among them) and the script that computes
   the mocks', `_build/verify/mock_key.py`, are quarantined: the student attempts first, no page
   build or agent reads them (but the key recheck writer that `08-practice` step 8.1's key gate
