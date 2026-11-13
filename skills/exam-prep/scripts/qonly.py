@@ -130,7 +130,7 @@ BOLD = re.compile(r"^[-*>#\s]*\*\*" + WORD + r"(?P<qual>(?:" + QUAL + r"){1,3})?
 LOOSE = re.compile(r"^[-*>#\s]*(?:\*\*)?" + WORD + r"(?P<qual>(?:" + QUAL + r"){1,3})?(?:\*\*)?"
                    r"\s*(?::|\*\*|$)", re.I)
 # What may follow an `Answer` or `Key` marker on an answer blank: blanks, underscores, dots.
-FILL_IN = re.compile(r"[\s:*]*[_.…][\s_.…]*")
+FILL_IN = re.compile(r"[\s:*]*[_.\u2026][\s_.\u2026]*")
 # A part's Shape or Conventions field: a wide form above one is question text (the brief puts the
 # solution after them).
 FIELD_LINE = re.compile(r"^[-*+>\s]*\*\*(?:Shape|Conventions)(?::\*\*|\*\*:)")
