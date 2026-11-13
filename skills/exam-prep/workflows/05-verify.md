@@ -157,11 +157,13 @@ order (`08-practice`) get the same audit when they exist.
   and every other extract, the lectures the notes cite among them, is an allowed source. When a
   hit needs explaining, `python3 -I <skill>/scripts/extract_check.py --leak-files` prints that
   list, a `questions <path>` or `allow <path>` line per file. With no such set it prints
-  `QUESTIONS OK: no unattempted set` and exits 0: log `no unattempted set` in STATUS. An
-  unattempted set with no extract (a doc `11-next-exam`'s "A source added unverified" brought
-  in, rendered and never extracted) is checked against its rendered text, `_build/text/<doc>/`,
-  and the unverified material quoting that doc is checked like any other notes: a hit is a
-  blocker while that set is unattempted. It exits 2, with the reason on stderr, on five causes,
+  `QUESTIONS OK: no unattempted set` and exits 0: log `no unattempted set` in STATUS. It also
+  reads the rendered text of each unattempted set and of each answers file that solves one
+  (`_build/text/<doc>/`, or a deck's own source file), extracted or not, so an answers file
+  added late (`09-tutor` step 6, or `11-next-exam`'s "A source added unverified") is checked
+  before it is extracted, and so is a set that unverified path brought in, rendered and never
+  extracted; the unverified material quoting that doc is checked like any other notes: a hit is
+  a blocker while that set is unattempted. It exits 2, with the reason on stderr, on five causes,
   each fixed and then rerun: the hub has no MANIFEST.md or one it can't read (fix MANIFEST.md as
   the reason says); no page is found (`no page found`: no notes and no sheet yet; run it from
   `<root>` once the notes exist); a page isn't UTF-8 (a sheet saved in another encoding: save it

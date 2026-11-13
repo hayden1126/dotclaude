@@ -200,6 +200,13 @@ evidence ids.
     with neither extract nor rendered text exits 2, as does a missing or unreadable MANIFEST.md;
     `09-tutor` checks a held passage alone (`--pages _build/held-check.md`) before offering it
     back (round 18 review).
+  - FB-191 and FB-056: the questions check always reads the rendered text of every unattempted
+    set and of every answers file that solves one (`_build/text/<doc>/`, or a deck's own source
+    file), extracted or not, so an answers file added late and not yet extracted (`09-tutor` step
+    6, `11-next-exam`'s unverified path) is checked; a doc whose only source is thin rendered text
+    (a scanned PDF), or a deck or other source with no rendered text and nothing extracted, makes
+    it exit 2 until it is extracted. `05-verify` and `08-practice` list every exit 2 cause with its
+    fix, `no page found` and a page that isn't UTF-8 among them (round 19 review).
   - FB-056: an answers file solves only in-scope sets: a Key cell `for ...` naming a `pending`,
     `reserved` or `out` set fails `KEY NAMES A SET NOT IN SCOPE`, fixed by dropping the set from
     the cell and cutting its pages from the answers file's Scope, or by giving the answers file
