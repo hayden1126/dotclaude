@@ -127,11 +127,14 @@ ZOOM_PICK_JS = """((label) => [...document.querySelectorAll("#c-zoom button")]
 
 ZOOM_HAS_200_JS = """[...document.querySelectorAll("#c-zoom button")].some((b) => b.textContent.trim() === "200%")"""
 
-# Scrolls the frame to its far corner: how much of the render that reached.
+# Scrolls the frame to its far corner: how much of the render that reached, and how big the
+# render is painted (the scroll room alone can't show a render drawn at the wrong scale).
 ZOOM_REACH_JS = """(() => {
   const frame = document.getElementById("frame"), app = document.getElementById("app");
   frame.scrollTo(1e6, 1e6);
+  const paint = app.getBoundingClientRect();
   return { width: frame.clientWidth + frame.scrollLeft, height: frame.clientHeight + frame.scrollTop,
+           paintWidth: paint.width, paintHeight: paint.height,
            renderWidth: Number(app.width), renderHeight: Number(app.height) };
 })()"""
 
@@ -557,9 +560,10 @@ def check_zoom(report: Report, browser: Browser, url: str):
         check_settled(report, scope, tab.settle(*ZOOM_SIZE))
         reach = tab.evaluate(ZOOM_REACH_JS)
         report.check(scope, "zoom 200% reaches 2x",
-                     reach["width"] >= 2 * reach["renderWidth"] - TOLERANCE
-                     and reach["height"] >= 2 * reach["renderHeight"] - TOLERANCE,
-                     f"reaches {reach['width']:.0f} x {reach['height']:.0f} "
+                     min(reach["width"], reach["paintWidth"]) >= 2 * reach["renderWidth"] - TOLERANCE
+                     and min(reach["height"], reach["paintHeight"]) >= 2 * reach["renderHeight"] - TOLERANCE,
+                     f"reaches {reach['width']:.0f} x {reach['height']:.0f}, "
+                     f"painted {reach['paintWidth']:.0f} x {reach['paintHeight']:.0f}, "
                      f"of {2 * reach['renderWidth']} x {2 * reach['renderHeight']}")
     tab.close()
 

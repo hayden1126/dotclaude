@@ -212,10 +212,15 @@ th { color: var(--muted); font-size: 12px; font-weight: 600; }
 const WIDE = "(min-width: 1101px)";
 const FIT_STEPS = ["m-fit-1", "m-fit-2", "m-fit-3"];
 const ZOOMS = ["Fit", "100%", "200%", "300%"];
-// A drag on the render pans the frame once it moves this far, and never starts on the render's own
-// controls, so their clicks, focus and text selection still work.
+// A drag on the render pans the frame once it moves this far. It never starts on what the render made
+// clickable, so its clicks, focus and drags still work: a control by its tag or role, anything marked
+// data-no-pan, and anything whose own cursor says it reacts (pointer, grab, a resize handle).
 const PAN_START = 4;
-const NO_PAN = "a, button, input, select, textarea, label, summary, [contenteditable], [role=button], [role=link], [onclick]";
+const NO_PAN = ["a", "button", "input", "select", "textarea", "label", "summary", "[contenteditable]",
+  '[tabindex]:not([tabindex="-1"])', "[onclick]", "[data-no-pan]",
+  ...["button", "link", "tab", "switch", "checkbox", "radio", "slider", "option", "menuitem",
+    "menuitemcheckbox", "menuitemradio", "treeitem"].map((role) => `[role=${role}]`)].join(", ");
+const PLAIN_CURSORS = ["auto", "default", "text"];
 // Stacked and zoomed, the frame keeps this much of the window for the top row and a margin.
 const STACKED_ZOOM_MARGIN = 26;
 const RESERVED = ["frame", "mode", "zoom", "screen", "answers"];
@@ -246,22 +251,22 @@ function configProblems() {
   return problems;
 }
 
-const problems = configProblems();
-const screens = typeof SCREENS !== "undefined" && Array.isArray(SCREENS) ? SCREENS.filter((s) => typeof s === "string") : [];
-const controls = CONTROLS.filter((c) => typeof c?.label === "string" && c.label && !RESERVED.includes(c.label)
+const shellProblems = configProblems();
+const shellScreens = typeof SCREENS !== "undefined" && Array.isArray(SCREENS) ? SCREENS.filter((s) => typeof s === "string") : [];
+const shellControls = CONTROLS.filter((c) => typeof c?.label === "string" && c.label && !RESERVED.includes(c.label)
   && Array.isArray(c.options) && c.options.length);
-const where = (q) => (Array.isArray(q.screens) ? q.screens.filter((s) => screens.includes(s)) : []);
+const shellWhere = (q) => (Array.isArray(q.screens) ? q.screens.filter((s) => shellScreens.includes(s)) : []);
 
-const state = { frame: FRAMES[0], mode: MODES[0], screen: screens[0], zoom: "Fit", answers: QUESTIONS.map((q) => q.options?.[0]) };
-for (const c of controls) state[c.label] = c.options[0];
+const state = { frame: FRAMES[0], mode: MODES[0], screen: shellScreens[0], zoom: "Fit", answers: QUESTIONS.map((q) => q.options?.[0]) };
+for (const c of shellControls) state[c.label] = c.options[0];
 
 const topRow = document.querySelector(".m-top"), main = document.querySelector(".m-main");
 const frameEl = document.getElementById("frame"), scaler = document.getElementById("scaler");
-const app = document.getElementById("app"), corner = document.getElementById("corner");
+const app = document.getElementById("app"), cornerEl = document.getElementById("corner");
 
 // Every button group and what it shows: update() presses buttons from state, so a jump from a
 // question or a Shows on click moves the top row too.
-const groups = [];
+const shellGroups = [];
 
 // A group of buttons with aria-pressed; onPick changes state, then update() redraws and presses.
 function segment(options, current, onPick, className = "m-seg") {
@@ -278,12 +283,12 @@ function segment(options, current, onPick, className = "m-seg") {
     });
     seg.append(b);
   });
-  groups.push([seg, current]);
+  shellGroups.push([seg, current]);
   return seg;
 }
 
 function syncPressed() {
-  for (const [seg, current] of groups) {
+  for (const [seg, current] of shellGroups) {
     const now = current();
     for (const b of seg.querySelectorAll("button")) b.setAttribute("aria-pressed", String(b.mockOption === now));
   }
@@ -298,15 +303,35 @@ function controlGroup(label, seg) {
   return group;
 }
 
-// The render's scroll position, kept across re-renders of the same view (frame and screen). #frame
-// keeps its own scroll across a srcdoc swap; the render's document starts at the top on each load.
+// The render's scroll positions, kept across re-renders of the same view (frame and screen): the page's
+// and each scrolled element's, such as an app shell's <main>. #frame keeps its own scroll across a
+// srcdoc swap; the render's document and its elements start at the top on each load.
 let shownView = null, savedScroll = null;
 const viewKey = () => `${state.frame.label}\n${state.screen ?? ""}`;
+
+// Where an element sits, from its nearest id or the root, so a reload finds the same scroller.
+function scrollPath(el) {
+  const steps = [];
+  for (; el.parentElement && !el.id; el = el.parentElement) steps.unshift([...el.parentElement.children].indexOf(el));
+  return JSON.stringify([el.parentElement ? el.id : null, steps]);
+}
+
+function scrollTarget(doc, path) {
+  const [id, steps] = JSON.parse(path);
+  let el = id ? doc.getElementById(id) : doc.documentElement;
+  for (const i of steps) el = el?.children[i];
+  return el;
+}
 
 function update() {
   const view = viewKey();
   if (view !== shownView) {
     shownView = view;
+    const doc = app.contentDocument;
+    for (const path of Object.keys(savedScroll?.inner ?? {})) {
+      const el = doc && scrollTarget(doc, path);
+      if (el) el.scrollLeft = el.scrollTop = 0;
+    }
     savedScroll = null;
     frameEl.scrollTo(0, 0);
     app.contentWindow?.scrollTo(0, 0);
@@ -353,7 +378,7 @@ function buildPanel() {
     const detail = document.createElement("p");
     detail.textContent = q.detail;
     box.append(title, detail);
-    const shows = where(q);
+    const shows = shellWhere(q);
     if (shows.length) {
       const row = segment(shows, () => state.screen, (screen) => { state.screen = screen; }, "m-where");
       const label = document.createElement("span");
@@ -378,8 +403,8 @@ function buildPanel() {
 function buildControls() {
   document.getElementById("title").textContent = document.title;
   const bar = document.getElementById("bar");
-  if (screens.length > 1) {
-    const screen = segment(screens, () => state.screen, (s) => { state.screen = s; });
+  if (shellScreens.length > 1) {
+    const screen = segment(shellScreens, () => state.screen, (s) => { state.screen = s; });
     screen.id = "c-screen";
     bar.append(controlGroup("Screen", screen));
   }
@@ -391,10 +416,10 @@ function buildControls() {
   if (MODES.length > 1) bar.append(controlGroup("Mode", segment(MODES, () => state.mode, (mode) => { state.mode = mode; })));
   const zoom = segment(ZOOMS, () => state.zoom, (option) => { state.zoom = option; });
   zoom.id = "c-zoom";
-  corner.append(controlGroup("Zoom", zoom));
-  for (const c of controls) {
+  cornerEl.append(controlGroup("Zoom", zoom));
+  for (const c of shellControls) {
     const group = controlGroup(c.label, segment(c.options, () => state[c.label], (option) => { state[c.label] = option; }));
-    (c.corner ? corner : bar).append(group);
+    (c.corner ? cornerEl : bar).append(group);
   }
 }
 
@@ -430,8 +455,8 @@ function scale() {
   scaler.style.height = height + "px";
   frameEl.style.width = Math.min(width, widthLeft + 1) + "px";
   frameEl.style.height = Math.min(height, heightLeft + 1) + "px";
-  corner.style.top = frameEl.offsetTop + frameEl.clientHeight - 8 + "px";
-  corner.style.maxWidth = Math.max(0, frameEl.clientWidth - 16) + "px";
+  cornerEl.style.top = frameEl.offsetTop + frameEl.clientHeight - 8 + "px";
+  cornerEl.style.maxWidth = Math.max(0, frameEl.clientWidth - 16) + "px";
   document.getElementById("caption").textContent = `${f.label}, ${f.width} x ${f.height}, shown at ${Math.round(k * 100)}%.`;
   setGrab();
 }
@@ -444,7 +469,7 @@ function refit() {
 
 // Drag to pan, on the render's own document (srcdoc is same-origin). Screen coordinates, since the
 // render moves under the pointer as the frame scrolls.
-let pan = null, swallowClick = false;
+let shellPan = null, swallowClick = false;
 const panSheets = new WeakMap();
 const canPan = () => frameEl.scrollWidth > frameEl.clientWidth + 1 || frameEl.scrollHeight > frameEl.clientHeight + 1;
 
@@ -452,32 +477,43 @@ const canPan = () => frameEl.scrollWidth > frameEl.clientWidth + 1 || frameEl.sc
 function setGrab() {
   const sheet = app.contentDocument && panSheets.get(app.contentDocument);
   if (!sheet) return;
-  sheet.replaceSync(pan?.moving ? ":root, :root * { cursor: grabbing !important; user-select: none !important; }"
+  sheet.replaceSync(shellPan?.moving ? ":root, :root * { cursor: grabbing !important; user-select: none !important; }"
     : canPan() ? ":root { cursor: grab; }" : "");
 }
 
 function panMove(e) {
-  if (!pan) return;
+  if (!shellPan) return;
   if (!(e.buttons & 1)) return panEnd();
-  const dx = e.screenX - pan.x, dy = e.screenY - pan.y;
-  if (!pan.moving) {
+  const dx = e.screenX - shellPan.x, dy = e.screenY - shellPan.y;
+  if (!shellPan.moving) {
     if (Math.hypot(dx, dy) < PAN_START) return;
-    pan.moving = true;
+    shellPan.moving = true;
     app.contentWindow?.getSelection()?.removeAllRanges();
     setGrab();
   }
-  frameEl.scrollLeft = pan.left - dx;
-  frameEl.scrollTop = pan.top - dy;
+  frameEl.scrollLeft = shellPan.left - dx;
+  frameEl.scrollTop = shellPan.top - dy;
 }
 
 // A pan ends without a click on what it started over; the flag clears before any later click.
 function panEnd() {
-  if (pan?.moving) {
+  if (shellPan?.moving) {
     swallowClick = true;
     setTimeout(() => { swallowClick = false; });
   }
-  pan = null;
+  shellPan = null;
   setGrab();
+}
+
+// The shell's grab cursor sits on :root and every element inherits it, so it is switched off while
+// the author's own cursor is read.
+function startsPan(doc, target) {
+  if (!target?.closest || target.closest(NO_PAN)) return false;
+  const sheet = panSheets.get(doc);
+  sheet.disabled = true;
+  const cursor = doc.defaultView.getComputedStyle(target).cursor;
+  sheet.disabled = false;
+  return PLAIN_CURSORS.includes(cursor);
 }
 
 function attachPan(doc) {
@@ -485,13 +521,13 @@ function attachPan(doc) {
   doc.adoptedStyleSheets = [...doc.adoptedStyleSheets, sheet];
   panSheets.set(doc, sheet);
   doc.addEventListener("pointerdown", (e) => {
-    if (e.button !== 0 || !canPan() || e.target.closest?.(NO_PAN)) return;
-    pan = { x: e.screenX, y: e.screenY, left: frameEl.scrollLeft, top: frameEl.scrollTop, moving: false };
+    if (e.button !== 0 || !canPan() || !startsPan(doc, e.target)) return;
+    shellPan = { x: e.screenX, y: e.screenY, left: frameEl.scrollLeft, top: frameEl.scrollTop, moving: false };
   });
   doc.addEventListener("pointermove", panMove);
   doc.addEventListener("pointerup", panEnd);
   doc.addEventListener("pointercancel", panEnd);
-  doc.addEventListener("dragstart", (e) => { if (pan) e.preventDefault(); });
+  doc.addEventListener("dragstart", (e) => { if (shellPan) e.preventDefault(); });
   doc.addEventListener("click", (e) => {
     if (!swallowClick) return;
     swallowClick = false;
@@ -503,9 +539,22 @@ function attachPan(doc) {
 app.addEventListener("load", () => {
   const doc = app.contentDocument, win = app.contentWindow;
   if (!doc) return;
-  if (savedScroll?.view === viewKey()) win.scrollTo(savedScroll.left, savedScroll.top);
-  // The view is read at each scroll, not at load: a Size click that leaves the HTML alone keeps this page.
-  win.addEventListener("scroll", () => { savedScroll = { view: viewKey(), left: win.scrollX, top: win.scrollY }; }, { passive: true });
+  if (savedScroll?.view === viewKey()) {
+    const { left, top, inner } = savedScroll;
+    win.scrollTo(left, top);
+    for (const [path, [x, y]] of Object.entries(inner)) {
+      const el = scrollTarget(doc, path);
+      if (el) { el.scrollLeft = x; el.scrollTop = y; }
+    }
+  }
+  // Element scrolls don't bubble, so this listens in the capture phase. The view is read at each
+  // scroll, not at load: a Size click that leaves the HTML alone keeps this page.
+  doc.addEventListener("scroll", (e) => {
+    const view = viewKey();
+    if (savedScroll?.view !== view) savedScroll = { view, left: 0, top: 0, inner: {} };
+    if (e.target === doc) Object.assign(savedScroll, { left: win.scrollX, top: win.scrollY });
+    else if (e.target.nodeType === 1) savedScroll.inner[scrollPath(e.target)] = [e.target.scrollLeft, e.target.scrollTop];
+  }, { capture: true, passive: true });
   attachPan(doc);
   setGrab();
 });
@@ -518,7 +567,7 @@ update();
 addEventListener("resize", refit);
 new ResizeObserver(refit).observe(document.querySelector(".m-main"));
 document.fonts.ready.then(refit);
-if (problems.length) throw new Error(`Mock config: ${problems.join("; ")}`);
+if (shellProblems.length) throw new Error(`Mock config: ${shellProblems.join("; ")}`);
 </script>
 </body>
 </html>

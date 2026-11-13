@@ -164,6 +164,12 @@ MUTANTS = {
         "kind": "zoom 200% reaches 2x",
         "also": set(),
     },
+    # 200% whose scroll room is right but whose render still paints at 1x.
+    "zoom_200_paints_1x": {
+        "edits": [("app.style.transform = `scale(${k})`;", "app.style.transform = `scale(${Math.min(1, k)})`;")],
+        "kind": "zoom 200% reaches 2x",
+        "also": set(),
+    },
     # A question's screens names a screen SCREENS lacks: the shell throws once the page is built.
     "screens_typo": {
         "edits": [(CUSTOMERS_SCREENS, 'screens: ["Customer"] }')],
@@ -485,6 +491,9 @@ class Mutants(TemporaryPages):
 
     def test_zoom_200_stays_1x(self):
         self.assert_mutant_fails("zoom_200_stays_1x")
+
+    def test_zoom_200_paints_1x(self):
+        self.assert_mutant_fails("zoom_200_paints_1x")
 
     def test_screens_typo(self):
         self.assert_mutant_fails("screens_typo")

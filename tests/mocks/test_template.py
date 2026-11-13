@@ -353,6 +353,49 @@ class Template(unittest.TestCase):
         self.assertTrue(tab.evaluate(f'{doc}.getElementById("more").open'))
         self.assertEqual(tab.evaluate(f'{doc}.getElementById("d").textContent'), "pressed")
 
+    def test_a_press_on_a_widget_wired_by_script_never_pans(self):
+        # Clicks wired with addEventListener: a tab with tabindex, a div with its own pointer
+        # cursor, and a plain div its author marked data-no-pan.
+        extras = ('<div id="t" role="tab" tabindex="0">Tab</div>'
+                  '<div id="c" style="cursor: pointer">Card</div>'
+                  '<div id="n" data-no-pan>Knob</div>'
+                  '<script>for (const id of ["t", "c", "n"]) document.getElementById(id)'
+                  '.addEventListener("click", (e) => { e.currentTarget.textContent = "pressed"; });<\\/script>')
+        tab = self.open([(MAIN_OPEN, "<main>" + extras + "${page}")])
+        self.click(tab, "#c-zoom button", "200%")
+        doc = 'document.getElementById("app").contentDocument'
+        for target in ("t", "c", "n"):
+            with self.subTest(target):
+                p = tab.evaluate(f"""(() => {{
+                  const app = document.getElementById("app"), a = app.getBoundingClientRect(), k = a.width / app.width;
+                  const r = app.contentDocument.getElementById("{target}").getBoundingClientRect();
+                  return {{ x: a.left + (r.left + 4) * k, y: a.top + (r.top + r.height / 2) * k }};
+                }})()""")
+                self.mouse(tab, "mousePressed", p["x"], p["y"], 1)
+                self.mouse(tab, "mouseMoved", p["x"] + 6, p["y"], 1)
+                self.mouse(tab, "mouseReleased", p["x"] + 6, p["y"], 0)
+                tab.evaluate(FRAMES_JS)
+                self.assertEqual(tab.evaluate(SCROLLS_JS)["frameLeft"], 0)
+                self.assertEqual(tab.evaluate(f'{doc}.getElementById("{target}").textContent'), "pressed")
+
+    def test_a_render_that_scrolls_inside_keeps_and_resets_that_scroll(self):
+        # An app shell: the page is fixed and <main> scrolls.
+        shell = '<main style="height: 600px; overflow: auto">${page}<div style="height: 2400px"></div>'
+        tab = self.open([(MAIN_OPEN, shell)])
+        main = 'document.getElementById("app").contentDocument.querySelector("main")'
+        tab.evaluate(f"{main}.scrollTop = 400")
+        tab.evaluate(FRAMES_JS)
+        self.click(tab, question(2), "Drop it")
+        self.click(tab, "#bar button", "Dark")
+        self.assertEqual(tab.evaluate(f"{main}.scrollTop"), 400, "same view: the inner scroll holds")
+        self.click(tab, "#c-frame button", "iPad")
+        self.assertEqual(tab.evaluate(f"{main}.scrollTop"), 0, "a new frame starts at the top")
+        tab.evaluate(f"{main}.scrollTop = 300")
+        tab.evaluate(FRAMES_JS)
+        self.click(tab, question(2), "Keep it")
+        self.assertEqual(tab.evaluate(f"{main}.scrollTop"), 300)
+        self.assertEqual(self.errors(tab), [])
+
     def test_a_press_on_the_render_s_own_scrollbar_never_pans(self):
         tab = self.open([(MAIN_OPEN, MAIN_OPEN + '<div style="height: 2400px"></div>')])
         self.click(tab, "#c-zoom button", "200%")
@@ -390,6 +433,13 @@ class Template(unittest.TestCase):
                 self.assertTrue(any(needle in e for e in errors), errors)
                 self.assertTrue(tab.evaluate('!!document.querySelector("#c-frame button")'),
                                 "the page still builds, so the check can measure it")
+
+    def test_a_config_may_use_plain_names_the_shell_avoids(self):
+        names = "const screens = {}, controls = [], where = 0, groups = 0, pan = 0, corner = 0, problems = 0;\n"
+        tab = self.open([(SCREENS_LINE, SCREENS_LINE + names)])
+        self.assertEqual(self.errors(tab), [])
+        self.click(tab, question(3), "Leave it out")
+        self.assertEqual(self.pressed(tab, "#c-screen button"), ["Customers"])
 
     def test_no_screens_is_today_s_page(self):
         edits = [(SCREENS_LINE, ""), (", " + CUSTOMERS_SCREENS, " }"), (ORDERS_SCREENS, " }")]
