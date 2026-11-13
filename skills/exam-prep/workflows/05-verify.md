@@ -71,7 +71,8 @@ Spawn one `reviewer` per section file, all at once (FB-102), each from
 4. **STYLE:** the rest of `_build/STYLE.md`, each subsection's depth label (S33) among it.
 
 Each brief names the sets the student hasn't attempted (each one whose own MANIFEST.md row lacks
-`attempted`): the notes quote none of their official solutions, and a quote is a blocker. Its `{{SOLUTIONS FILES}}` slot names the solutions files that hold the
+`attempted`): the notes quote none of their official solutions, and a quote is a blocker. Its
+`{{SOLUTIONS FILES}}` slot names the solutions files that hold the
 blocks of the question parts and answers docs the section's extract blocks cite: for each part
 the coverage matrix maps into the section (`[HW1 Q2a]`) and each answers doc page its blocks cite
 (`[HW1S p.2]`), the file under `_build/solutions/` holding its `### [<id>]` block, found by block

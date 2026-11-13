@@ -34,6 +34,14 @@ skill's sources-to-file use): the extract, and for a doc with official solutions
 file beside it (hard rule 6). One per deck or deck part, or per homework with its solutions. Keep
 the bracketed slots that apply and delete the rest.
 
+An answers file that solves several sets (`solutions to HW1, HW2 and HW3`, `02-extract` step 1)
+gets an agent of its own, from this brief with every SOLUTIONS slot kept: {{DOC}} names those
+sets, whose question pages it reads only for their part ids; {{SOLDOC}} is the answers file
+and {{OUT}} its name. Its End state, Artifact path and Format drop every line about the extract:
+it writes only {{ROOT}}/_build/solutions/{{OUT}}, one block per question part of each set plus
+the answers file's page blocks. Each set's own agent gets this brief with no SOLUTIONS slot and writes only
+its extract.
+
 ```text
 # Brief: transcribe {{DOC}} {{RANGE}}{{SOLUTIONS: plus {{SOLDOC}} {{SOLRANGE}}}} into {{OUT}}
 

@@ -139,7 +139,8 @@ evidence ids.
   - FB-123: citation codes now match their MANIFEST.md row in any case, silently, the source key
     keeping the row's spelling (I3.C8).
   - FB-056: official solutions move out of the extracts into `_build/solutions/<name>.md`,
-    written by the same extract agent as its extract (hard rule 6), one block per question part
+    written by the same extract agent as its extract, or for an answers file that solves several
+    sets by that file's own agent (hard rule 6), one block per question part
     of a solved doc plus an answers doc's page blocks (`02-extract`, "The solutions file"). A
     past exam with its key names its key pages in its MANIFEST row's Notes (`key pp. N-M`, or
     `key inline`), which `01-ingest` writes after looking at the PDF: only those pages go to the

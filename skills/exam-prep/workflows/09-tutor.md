@@ -405,8 +405,10 @@ change itself waits for Step 5.5.7.
 
 During a build (Step 1) this waits for the build's end, as a line under the log's `##
 Waiting checks`. Run `01-ingest` for the file (its MANIFEST.md row `Answers: yes`, `solutions to
-<doc>` in Notes) and `02-extract` for the set again with its solutions, one agent, which writes
-the pair: the extract, and the solutions file with each solution under its part's block id.
+<doc>` in Notes) and `02-extract` for the set again with its solutions, as its step 1 says: an
+answers file that solves this set alone shares its agent, which writes the pair (the extract,
+and the solutions file with each solution under its part's block id); one that solves several
+sets gets its own agent, which writes only the answers file's solutions file.
 Then `05-verify`, "Official solutions that arrive late", which adds them to the self-test and
 diffs every answer against the notes and any `practice/tutor/` values file. That
 check shows answers: the self-test's new lines show in the edit, a failing line prints both values,

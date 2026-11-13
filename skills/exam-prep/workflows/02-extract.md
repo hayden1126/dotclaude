@@ -12,10 +12,15 @@ transcribes and never summarizes.
 - **One whole deck per agent** (FB-053). A deck of more than about 45 pages splits at section
   dividers into parts of at most about 45 pages; each later part's agent also reads the previous
   part's last three pages, as context only. A slide is never split between agents (FB-041).
-- **Small documents share an agent:** a homework or recitation with its official solutions (the
-  brief's SOLUTIONS slots). That agent writes both files of the pair, the extract and the
-  solutions file, each solution keyed by its question part's block id (below, "The solutions
-  file").
+- **Small documents share an agent:** a homework or recitation with an answers file that solves
+  it alone (the brief's SOLUTIONS slots). That agent writes both files of the pair, the extract
+  and the solutions file, each solution keyed by its question part's block id (below, "The
+  solutions file").
+- **An answers file that solves several sets gets its own agent** (`solutions to HW1, HW2 and
+  HW3`). It reads those sets' question pages for their part ids, and the answers file, and writes
+  only `_build/solutions/<answers file name>.md`: every part block of those sets, plus the answers
+  file's page blocks. Each set's own agent then writes only its extract (the brief without the
+  SOLUTIONS slots), with the same part ids.
 - **By source type:** a PDF agent reads `_build/text/` and `_build/pages/`; a Word document's agent
   reads `_build/text/<doc>.md` and `_build/media/<doc>/`. A reveal deck agent reads a slice that
   the main session cuts before spawning:
@@ -43,8 +48,10 @@ them), and it must reproduce them before anything uses it (FB-100).
 ## The solutions file
 
 An extract holds no answer (FB-056). The extract agent of a doc with official solutions writes a
-second file, `_build/solutions/<name>.md`, under its extract's `<name>`; no other agent writes
-either (hard rule 6). Both are tracked in the hub. The solutions file opens with
+second file, `_build/solutions/<name>.md`, under its extract's `<name>`, except when its answers
+file solves several sets: that file's own agent writes `_build/solutions/<answers file
+name>.md`, holding every part block of those sets (step 1). No other agent writes either file
+(hard rule 6). Both are tracked in the hub. The solutions file opens with
 `# <DOC> solutions (extract)` and the extract's `Sources:` line, and ends with the same
 `Coverage:` closing line as an extract, covering the answers pages. Between them:
 
