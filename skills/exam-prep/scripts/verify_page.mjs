@@ -72,7 +72,8 @@
 // across the width at most 46% of the height, above it under half the width); another figure link
 // swaps it, Escape closes it with focus back on the link, its close button closes it (at 900 px and
 // below, with the drawer opened over the pinned sheet, one Escape closes the drawer alone, and the
-// foot's --tail is the same before the pin and after two resizes and the unpin), and a
+// foot's --tail is the same before the pin and after two resizes and the unpin; a tail of 0px
+// before the pin can't show a misfit, so that check says it skipped), and a
 // Ctrl+click goes to the browser (not prevented, no panel); at 1280 px a mouse resting on the link
 // shows an aria-hidden preview after 300 ms (none at 150 ms), holding no repeated id, gone once the
 // mouse leaves; at 390 px a hover shows none, and at both a touch pointer never does. Shot:
@@ -782,7 +783,10 @@ async function figPanel(page, tag, width) {
       await page.waitForTimeout(250);
       const tail1 = await tail();
       if ((await state(0)).open) fail(`${tag}: a second Escape left the pinned figure open (C5)`);
-      if (tail1 !== tail0) fail(`${tag}: the page's foot tail (--tail) was ${tail0} before a pin and ${tail1} after two resizes and the unpin: it holds whatever the sheet's padding (C1)`);
+      // A tail of 0px can't tell: a fit that misreads the sheet's padding also gives 0 here.
+      if (tail0 === '0px') console.log(`  skip ${tag}: the foot tail check: --tail is 0px before a pin (the last section is long enough), so a misfit would not show`);
+      else if (tail1 !== tail0) fail(`${tag}: the page's foot tail (--tail) was ${tail0} before a pin and ${tail1} after two resizes and the unpin: it holds whatever the sheet's padding (C1)`);
+      else console.log(`  foot tail: ${tag}: --tail holds at ${tail0} through a pin, two resizes and the unpin`);
     }
   }
   // A Ctrl+click is the browser's (a new tab; in the Review view, to a hidden figure, the view's own

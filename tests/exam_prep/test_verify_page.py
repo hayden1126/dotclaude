@@ -496,6 +496,44 @@ class BrowserCatchesTest(unittest.TestCase):
         self.fails("rvbox", "the Review view hides div.concise", page=self.edit(
             "k.classList.contains('rv')||k.classList.contains('concise')", "k.classList.contains('rv')"))
 
+    # The drawer over a pinned sheet at 900 px and below (C5) and the foot's tail (C1).
+    ESC_RAIL = ("document.addEventListener('keydown',function(e){if(e.key==='Escape'&&!e.defaultPrevented&&"
+                "rail.classList.contains('open')){e.preventDefault();closeNav();}});")
+    ESC_PANEL = "if(e.key==='Escape'&&!e.defaultPrevented&&!panel.hidden&&!rail.classList.contains('open')) unpin();"
+    FIT = ("var natural=se.scrollHeight-window.innerHeight-((parseFloat(getComputedStyle(main).paddingBottom)||0)"
+           "-8*rem);")
+    MUST_KNOW = re.compile(r'(<h3 id="sec-2-must-know">[^<]*</h3>\s*)<ul>.*?</ul>', re.S)
+
+    def short_tail(self):
+        """The sample page with its last subsection cut to one line (its list, which holds the
+        figure links, moved up into the subsection before), so its foot needs a tail at 390 px."""
+        self.assertEqual(len(self.MUST_KNOW.findall(self.page)), 1)
+        return self.MUST_KNOW.sub(lambda m: m.group(0)[len(m.group(1)):] + "\n" + m.group(1) + "<p>One line.</p>",
+                                  self.page)
+
+    def test_an_escape_that_closes_the_drawer_and_the_pinned_figure_both(self):
+        page = self.edit(self.ESC_RAIL, "document.addEventListener('keydown',function(e){if(e.key==='Escape'&&"
+                                        "rail.classList.contains('open'))closeNav();});")
+        self.assertEqual(page.count(self.ESC_PANEL), 1)
+        page = page.replace(self.ESC_PANEL, "if(e.key==='Escape'&&!panel.hidden&&!rail.classList.contains('open')) unpin();")
+        self.fails("escboth", "390-light: one Escape with the drawer open over a pinned figure closed the pinned "
+                              "figure too: it closes the drawer alone (C5)", page=page)
+
+    def test_the_foot_tail_holds_through_a_pin_or_says_it_skipped(self):
+        r = self.verify("tailok", page=self.short_tail())
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertRegex(r.stdout, r"  foot tail: 390-light: --tail holds at [1-9]\d*px through a pin")
+        self.assertNotIn("skip 390-light: the foot tail check", r.stdout)
+        # The whole sample's last subsection is long enough for no tail at 390 px: it can't tell.
+        r = self.verify("tailzero")
+        self.assertIn("skip 390-light: the foot tail check: --tail is 0px before a pin", r.stdout)
+
+    def test_a_tail_fit_that_misreads_the_pinned_sheet(self):
+        page = self.short_tail()
+        self.assertEqual(page.count(self.FIT), 1)
+        page = page.replace(self.FIT, "var natural=se.scrollHeight-window.innerHeight-cur;")
+        self.fails("tailbad", "390-light: the page's foot tail (--tail) was ", page=page)
+
     def test_the_theme_chrome_passes(self):
         r = self.verify("chrome")
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
