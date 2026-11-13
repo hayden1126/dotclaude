@@ -195,10 +195,14 @@ class Privacy(unittest.TestCase):
 
     def test_code_cites_a_decision_by_its_id(self):
         # Round 8: a script's comment recorded a decision as "(the student's call, <date>)", a
-        # personal record in a public repo; a decision is cited by its feedback-log id.
-        dated = re.compile(r"the student's call,\s*\d{4}-\d{2}-\d{2}", re.I)
-        hits = [rel for rel, text in files(SKILL)
-                if rel.endswith((".py", ".mjs", ".sh")) and dated.search(text)]
+        # personal record in a public repo; a decision is cited by its feedback-log id. Round 9:
+        # an undated one in a test's comment slipped past, so the check reads the tests too and
+        # any wording of it (this file names it, so it is left out).
+        call = re.compile(r"the\s+student's\s+call", re.I)
+        hits = [os.path.join(top, rel) for top in (SKILL, TESTS)
+                for rel, text in files(top)
+                if rel.endswith((".py", ".mjs", ".sh")) and call.search(text)
+                and os.path.join(top, rel) != os.path.abspath(__file__)]
         self.assertEqual(hits, [])
 
 

@@ -609,7 +609,7 @@ class AssembleTest(unittest.TestCase):
 
     def test_a_bare_s_l_k_or_c_id_warns_and_builds(self):
         # A course writes a state (S1), an inductor (L1), a lecture (L3), a capacitor or a case
-        # (C1) so, and "by the product rule (C3)" is course text (the student's call): one WARN
+        # (C1) so, and "by the product rule (C3)" is course text (FB-095): one WARN
         # per hit, naming fragment and line, and the page is written.
         for extra, needle in (("<p>Know it cold (S33).</p>", "(S33)"),
                               ("<p>One idea per block (L07).</p>", "(L07)"),
