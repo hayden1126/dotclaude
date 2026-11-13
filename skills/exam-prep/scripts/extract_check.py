@@ -42,17 +42,18 @@ Key says where an Answers `yes` doc's answers are, read whole (trimmed, any case
   (KEY NAMES ITS OWN DOC: a doc holding its own key says where; meanwhile every block and cite of
   it reads as answers, failing closed).
 - `p.N` or `pp. 7-9, 11` (items N or N-M, hyphen or en dash, ascending, joined as above; a joined
-  item may restate `p.`): the doc holds its own key on those pages. A row whose File doesn't end
-  in .pdf and whose Pages isn't a number (a Word file, a reveal deck) has no pages for its
-  locators to name, so it fails PAGES KEY ON AN UNPAGED DOC.
+  item may restate `p.`): the doc holds its own key on those pages. Only a PDF is paged: a row
+  whose File doesn't end in .pdf (a Word file, a reveal deck, whatever its Pages column holds,
+  such as a deck's slide count) has no pages for its locators to name, so it fails PAGES KEY ON
+  AN UNPAGED DOC.
 - `inline`: the doc holds its own key, each solution under its question; no key pages.
 - `sections: Marking scheme, Answers` (names joined by `,`): a source without pages holds its own
   key in the sections whose block locator is one of the names (any case, runs of whitespace as
   one), or one of them followed by a space and `Q` (`Marking scheme Q1`) or by a comma (`Marking
   scheme, part 2`); `Key formulas` under `sections: Key` is no key section. A deck's solution
-  slides are named by fragment (`sections: #/5, #/6`). A row whose File ends in .pdf or whose
-  Pages is a number fails SECTIONS KEY ON A PAGED DOC, and a named section with no block in any
-  solutions file fails KEY SECTION NOT FOUND.
+  slides are named by fragment (`sections: #/5, #/6`). A row whose File ends in .pdf fails
+  SECTIONS KEY ON A PAGED DOC, and a named section with no block in any solutions file fails KEY
+  SECTION NOT FOUND.
 - anything else fails UNREAD KEY, and the row's other key checks are left out.
 Solved docs: the docs a `for` key names, and every doc whose own key is pages, `inline` or
 `sections:`. Answers pages (answers_cite()): every block and page of a `for` answers file; the
@@ -101,7 +102,9 @@ own, or no part of it has a question block.
 A doc that STATUS.md names on a line starting `Unverified: <doc>,` (material added at the
 student's request without an extract, FB-013) is reported as unverified while the files count
 no block for it (its own headers, or a page-less cite of it as an answers file): it doesn't fail,
-gets no Key check and solves nothing; once they count one, its row is checked like any other. A STATUS.md it can't read exempts nothing.
+gets no Key check and solves nothing (no doc needs solutions blocks for it), yet its pages and
+blocks are still answers (a cite of one in an extract fails CITES AN ANSWERS PAGE); once they
+count one, its row is checked like any other. A STATUS.md it can't read exempts nothing.
 
 It prints one line per doc: what is in scope, what has a block, `(image only` entries, and
 `UNREADABLE:` flags in either directory (the brief's closing `Coverage:` line, closing(), doesn't
@@ -150,7 +153,7 @@ SCOPE_SLIDES = re.compile(r"slides\s+#/(\d+)\s*-\s*(?:#/)?(\d+)")
 #   Every id must be a doc id in MANIFEST (KEY NAMES NO DOC), and none the row's own (KEY NAMES
 #   ITS OWN DOC).
 # - `p.N`, `pp. <list>` (items N or N-M, hyphen or en dash, ascending, joined as above; a joined
-#   item may restate `p.`, as in `p.3 and p.4`): the doc's own key pages, on a paged doc only
+#   item may restate `p.`, as in `p.3 and p.4`): the doc's own key pages, on a PDF only
 #   (PAGES KEY ON AN UNPAGED DOC).
 # - `inline`: the doc's own key, each solution under its question; no key page.
 # - `sections: <name>(, <name>)*`: a source without pages; its key is the blocks whose locator is
@@ -331,14 +334,15 @@ def own_key(row):
     return key_of(row) in ("pages", "inline", "sections")
 
 
-def solved(rows):
+def solved(rows, idle=frozenset()):
     """The docs with official solutions: each doc an in-scope Answers `yes` row's `for` key names,
     and each such row's own doc when its Key is pages, `inline` or `sections:`. A row that is
-    reserved, pending or out, or whose key is missing or unread, solves nothing (main() also takes
-    the answers off a row an `Unverified:` line skips)."""
+    reserved, pending or out, or whose key is missing or unread, solves nothing, nor does a row in
+    `idle` (an `Unverified:` line skips it, main()); every other check reads that row as written,
+    so a cite of its pages is still an answers cite."""
     out = set()
     for doc, row in rows.items():
-        if row.get("kind") not in ("in", "concepts"):
+        if row.get("kind") not in ("in", "concepts") or doc in idle:
             continue
         if key_of(row) == "for":
             out |= row["key"]["docs"]
@@ -727,13 +731,13 @@ def preamble(lines):
     return [i for i in range(heads[0][0] if heads else len(lines)) if i not in ends]
 
 
-def solutions_check(root, rows):
+def solutions_check(root, rows, idle=frozenset()):
     """(lines, failed): the extracts hold no answer and the solutions files hold one block per
-    question part of a solved doc."""
+    question part of a solved doc (solved(), `idle` the rows an `Unverified:` line skips)."""
     out, bad = [], False
     extracts = files(root, "extract")
     sols = files(root, "solutions")
-    named = solved(rows)
+    named = solved(rows, idle)
 
     def cites_answers(line):
         return next((c for c in CITE.finditer(line)
@@ -933,7 +937,8 @@ def key_check(doc, row, rows, qdocs, keyed):
                        "\"sections: <name>\"")
         return out
     out = []
-    paged = row["file"].lower().endswith(".pdf") or row["pages"].isdigit()
+    # Only a PDF has pages a locator names; a deck's Pages column holds its slide count.
+    paged = row["file"].lower().endswith(".pdf")
     if form == "pages" and not paged:
         out.append(f"{doc}: PAGES KEY ON AN UNPAGED DOC: use \"sections: <name>, <name>\" or "
                    "\"inline\"")
@@ -989,9 +994,9 @@ def main(argv=None):
     skip = unverified(args.root)
     idle = {doc for doc, row in rows.items() if doc in skip and row["kind"] in ("in", "concepts")
             and not (found.get(doc) or empty)["blocks"]}
-    # A row an `Unverified:` line skips solves nothing: its answers come off for every check.
-    rows = {doc: dict(row, answers=False) if doc in idle else row for doc, row in rows.items()}
-    lines, bad = solutions_check(args.root, rows)
+    # A row an `Unverified:` line skips solves nothing and gets no Key check; every other check
+    # reads it as written, so its pages are still answers pages.
+    lines, bad = solutions_check(args.root, rows, idle)
     qdocs = question_docs(files(args.root, "extract"))
     keyed = {(m.group("doc"), norm(locator(m))) for _, sol in files(args.root, "solutions")
              for _, _, m in sections(sol)}

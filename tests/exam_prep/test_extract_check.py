@@ -36,12 +36,12 @@ part's solutions block sits beside its extract (WRONG SOLUTIONS FILE), and an ex
 another doc's page covers nothing.
 
 Review round 14: a `for` key naming its own doc fails KEY NAMES ITS OWN DOC and reads all of that
-doc as answers meanwhile; a page key on a doc without pages fails PAGES KEY ON AN UNPAGED DOC, and
-a deck names its solution slides as sections (`sections: #/5`); a multi-set answers file's page
-blocks hold no text (SHARED ANSWERS PAGE HOLDS TEXT); a stem's solutions block warns only while a
-part lacks its own; a key section's `<name> Q1` and `<name>, ...` are key material; an idle
-unverified answers file reads as no answers doc; a part in two extracts takes either extract's
-solutions file."""
+doc as answers meanwhile; only a PDF is paged, so a page key on any other row fails PAGES KEY ON
+AN UNPAGED DOC, and a deck (its Pages a slide count) names its solution slides as sections
+(`sections: #/5`); a multi-set answers file's page blocks hold no text (SHARED ANSWERS PAGE HOLDS
+TEXT); a stem's solutions block warns only while a part lacks its own; a key section's `<name> Q1`
+and `<name>, ...` are key material; an idle unverified answers file solves nothing, yet a cite of
+its page still fails; a part in two extracts takes either extract's solutions file."""
 import contextlib
 import importlib.util
 import io
@@ -1256,9 +1256,9 @@ class SolutionsFiles(unittest.TestCase):
         self.assertEqual(code, 0, out)
 
     def test_a_sections_key_on_a_paged_doc_fails(self):
-        # A PDF, or any row whose Pages is a number, has key pages, not sections.
+        # A PDF has key pages, not sections, whatever its Pages column holds.
         for row in ("| PE3 | `sources/pe3.pdf` | n/a | in | yes | sections: Key | n/a | |\n",
-                    "| PE3 | `sources/pe3.docx` | 4 | in | yes | sections: Key | n/a | |\n",
+                    "| PE3 | `sources/pe3.pdf` | 4 | in | yes | sections: Key | n/a | |\n",
                     "| PE3 | `sources/pe3.PDF` | n/a | in | yes | sections: Key | n/a | |\n"):
             with self.subTest(row):
                 self.write("MANIFEST.md", SOL_MANIFEST + row)
@@ -1269,11 +1269,13 @@ class SolutionsFiles(unittest.TestCase):
                 self.assertEqual(code, 1, out)
                 self.assertIn("PE3: SECTIONS KEY ON A PAGED DOC: use \"pp. N-M\" or \"inline\"",
                               out)
-        # Its twin, a Word file with no page count, passes.
-        self.write("MANIFEST.md", SOL_MANIFEST + "| PE3 | `sources/pe3.docx` | n/a | in | yes | "
-                                                 "sections: Key | n/a | |\n")
-        code, out = self.check()
-        self.assertEqual(code, 0, out)
+        # Its twins, a Word file with no page count or with one, pass: only a PDF is paged.
+        for pages in ("n/a", "4"):
+            with self.subTest(pages):
+                self.write("MANIFEST.md", SOL_MANIFEST + f"| PE3 | `sources/pe3.docx` | {pages} | "
+                                                         "in | yes | sections: Key | n/a | |\n")
+                code, out = self.check()
+                self.assertEqual(code, 0, out)
 
     def test_a_key_on_a_row_without_answers_fails(self):
         self.write("MANIFEST.md", SOL_MANIFEST.replace("| in | no | | yes | Homework 1 |",
@@ -1466,6 +1468,7 @@ class SolutionsFiles(unittest.TestCase):
         # locators carry no page.
         for row in ("| PE3 | `sources/pe3.docx` | n/a | in | yes | p.3 | n/a | |\n",
                     "| PE3 | `sources/pe3.docx` | | in | yes | pp. 2-3 | n/a | |\n",
+                    "| PE3 | `sources/pe3.docx` | 4 | in | yes | p.4 | n/a | |\n",
                     "| PE3 | `sources/pe3.html` | n/a | in | yes | p.5 | n/a | |\n"):
             with self.subTest(row):
                 self.write("MANIFEST.md", SOL_MANIFEST + row)
@@ -1484,17 +1487,18 @@ class SolutionsFiles(unittest.TestCase):
                                               "### [PE3 Key] Key\n\"Q1: s\"\n")
         code, out = self.check()
         self.assertEqual(code, 0, out)
-        # A PDF, or a row whose Pages is a number, takes a page key.
-        self.write("MANIFEST.md", SOL_MANIFEST + "| PE3 | `sources/pe3.docx` | 4 | in | yes | "
+        # A PDF takes a page key.
+        self.write("MANIFEST.md", SOL_MANIFEST + "| PE3 | `sources/pe3.pdf` | 4 | in | yes | "
                                                  "p.4 | n/a | |\n")
         self.assertNotIn("PAGES KEY ON AN UNPAGED DOC", self.check()[1])
 
     def test_a_decks_solution_slides_are_named_as_sections(self):
-        # A reveal deck's key is its solution slides, named by fragment: `sections: #/5`.
+        # A reveal deck's key is its solution slides, named by fragment: `sections: #/5`. Its
+        # Pages column holds its slide count, as the fixture's deck row does; it is still unpaged.
         deck = ("<div class=\"reveal\"><div class=\"slides\">"
                 + "".join(f"<section>S{i}</section>" for i in range(6)) + "</div></div>")
         self.write("sources/r3.html", deck)
-        self.write("MANIFEST.md", SOL_MANIFEST + "| R3 | `sources/r3.html` | n/a | in | yes | "
+        self.write("MANIFEST.md", SOL_MANIFEST + "| R3 | `sources/r3.html` | 6 | in | yes | "
                                                  "sections: #/5 | n/a | recitation |\n")
         slides = "".join(f"### [R3 #/{i}] S{i}\n" for i in range(5))
         question = "### [R3 Q1] Trace\nPages: [R3 #/3]\n\"Trace a BFS.\"\n"
@@ -1514,7 +1518,7 @@ class SolutionsFiles(unittest.TestCase):
                       "section of R3, as its MANIFEST.md Key cell names it; move it to "
                       "_build/solutions/r3.md", out)
         # A page key on the deck protects nothing, so it fails.
-        self.write("MANIFEST.md", SOL_MANIFEST + "| R3 | `sources/r3.html` | n/a | in | yes | "
+        self.write("MANIFEST.md", SOL_MANIFEST + "| R3 | `sources/r3.html` | 6 | in | yes | "
                                                  "p.5 | n/a | recitation |\n")
         self.assertIn("R3: PAGES KEY ON AN UNPAGED DOC", self.check()[1])
 
@@ -1556,22 +1560,28 @@ class SolutionsFiles(unittest.TestCase):
         code, out = self.check()
         self.assertEqual(code, 0, out)
 
-    def test_an_idle_unverified_answers_file_is_no_answers_doc(self):
-        # r14-1 #3: an `Unverified:` answers row with no block solves nothing, and nothing of it
-        # reads as answers either: an extract citing its page passes.
+    def test_an_idle_unverified_answers_file_solves_nothing_yet_is_still_answers(self):
+        # r14-1 #3: an `Unverified:` answers row with no block was dropped from every check, so an
+        # extract line citing its page passed. It solves nothing (no part of HW1 needs a block),
+        # but its pages are still answers pages.
         self.write("STATUS.md", "# STATUS\n\n- Unverified: HW1S, s3, 2026-11-13\n")
         self.remove("_build/solutions/hw1.md")
         self.write("_build/extract/hw1.md", CLEAN.replace(
             "**Shape:** compute\n", "**Shape:** compute\nSee [HW1S p.1].\n"))
         code, out = self.check()
-        self.assertEqual(code, 0, out)
+        self.assertEqual(code, 1, out)
         self.assertIn("HW1S: unverified, added without an extract", out)
-        self.assertNotIn("CITES AN ANSWERS PAGE", out)
-        # Its twin, with the STATUS line gone, is an answers file again.
+        self.assertIn("_build/extract/hw1.md:9: CITES AN ANSWERS PAGE: [HW1S p.1]", out)
+        self.assertNotIn("NO SOLUTION BLOCK", out)
+        # Without the cite line it passes.
+        self.write("_build/extract/hw1.md", CLEAN)
+        code, out = self.check()
+        self.assertEqual(code, 0, out)
+        # Its twin, with the STATUS line gone: HW1S solves HW1, so its part needs a block.
         self.write("STATUS.md", "# STATUS\n")
         code, out = self.check()
         self.assertEqual(code, 1, out)
-        self.assertIn("_build/extract/hw1.md:9: CITES AN ANSWERS PAGE: [HW1S p.1]", out)
+        self.assertIn("_build/extract/hw1.md:5: NO SOLUTION BLOCK", out)
 
     def test_a_key_sections_part_or_continuation_is_key_material(self):
         # r14-1 #4: `[PE3 Marking scheme Q1]` and `[PE3 Marking scheme, part 2]` are the key too.
