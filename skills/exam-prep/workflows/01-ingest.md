@@ -53,20 +53,25 @@ sections), in exactly one of these forms (the template's legend gives them too):
 
 - empty or `-`, for a doc that isn't an answers doc;
 - `for HW1, HW2 and HW3`, for a separate answers file: the sets it solves, each a doc id of this
-  table;
-- `pp. 7-9, 11` or `p.N`, for a doc holding its own key (a past exam) on those pages;
+  table, never its own row's;
+- `pp. 7-9, 11` or `p.N`, for a doc holding its own key (a past exam) on those pages, a PDF or a
+  row whose Pages is a number;
 - `inline`, when each solution sits under its question on the same page, so no page is a key
   page;
-- `sections: Marking scheme, Answers`, for a source without pages, such as a Word exam: its key
-  is the sections with exactly those locators, each extracted as a block of that name
-  (`### [PE3 Marking scheme] ...`).
+- `sections: Marking scheme, Answers`, for a source without pages, such as a Word exam or a
+  slide deck (`sections: #/5, #/6`): its key is the sections or slides with exactly those
+  locators, each extracted as a block of that name (`### [PE3 Marking scheme] ...`).
 
 Notes stay free text: nothing reads them for answers, so a Key form written there does nothing.
 Only the key pages or sections the Key cell names go to `_build/solutions/`; the cover, the rules
 and a formula sheet stay in the extract (`02-extract`). `extract_check.py` fails an in-scope
 Answers `yes` row with no Key form (`NO KEY`), a cell in any other wording (`UNREAD KEY`), a set
-name that is no doc id (`KEY NAMES NO DOC`), a filled cell on a row whose Answers isn't `yes`
-(`KEY WITHOUT ANSWERS`) and `sections: ...` on a doc with pages (`SECTIONS KEY ON A PAGED DOC`).
+name that is no doc id (`KEY NAMES NO DOC`), a `for ...` cell naming its own row
+(`KEY NAMES ITS OWN DOC`), a filled cell on a row whose Answers isn't `yes`
+(`KEY WITHOUT ANSWERS`), `sections: ...` on a doc with pages (`SECTIONS KEY ON A PAGED DOC`) and
+`p.` or `pp.` on a doc without them (`PAGES KEY ON AN UNPAGED DOC`). Once extracted, a multi-set
+answers file's own page blocks hold only a pointer line (`SHARED ANSWERS PAGE HOLDS TEXT`
+otherwise, `02-extract` step 3).
 
 ## Step 4: Originals
 

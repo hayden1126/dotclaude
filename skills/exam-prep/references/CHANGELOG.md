@@ -142,9 +142,10 @@ evidence ids.
     set, `_build/solutions/<name>.md` beside its extract `_build/extract/<name>.md`, holding one
     block per question part of the set plus an answers doc's page blocks (`02-extract`, "The
     solutions file"). The set's extract agent writes it, or, for an answers file that solves
-    several sets, that file's own agent writes each set's file plus
-    `_build/solutions/<answers file name>.md` for its own pages (hard rule 6: an agent may write
-    several files, and no file is written by two agents). MANIFEST.md gets a Key column, which
+    several sets, that file's own agent writes each set's file, official text a question's parts
+    share under a stem block there, plus `_build/solutions/<answers file name>.md` for its own
+    pages, each holding only `(transcribed under the sets' blocks)` (hard rule 6: an agent may
+    write several files, and no file is written by two agents). MANIFEST.md gets a Key column, which
     `01-ingest` writes after looking at the file and `extract_check.py` reads whole: `for HW1,
     HW2` for a separate answers file, `pp. 7-9, 11` or `p.N`, `inline`, or `sections: Marking
     scheme, Answers` for a source without pages, whose key sections are the blocks with exactly
@@ -152,15 +153,18 @@ evidence ids.
     cover, rules and formula sheet stay in the extract. Notes are free text that nothing parses.
     `extract_check.py` checks the pairing and fails a solution or answers page left in an
     extract, a part block outside its set's solutions file (`WRONG SOLUTIONS FILE`), and a Key
-    cell that is missing, unread, names no doc, sits on a row without answers, names sections on
-    a paged doc or names a section with no block (`NO KEY`, `UNREAD KEY`, `KEY NAMES NO DOC`,
-    `KEY WITHOUT ANSWERS`, `SECTIONS KEY ON A PAGED DOC`, `KEY SECTION NOT FOUND`), warns on an
+    cell that is missing, unread, names no doc, names its own row, sits on a row without
+    answers, names sections on a paged doc, pages on an unpaged one or a section with no block
+    (`NO KEY`, `UNREAD KEY`, `KEY NAMES NO DOC`, `KEY NAMES ITS OWN DOC`, `KEY WITHOUT ANSWERS`,
+    `SECTIONS KEY ON A PAGED DOC`, `PAGES KEY ON AN UNPAGED DOC`, `KEY SECTION NOT FOUND`), and a
+    multi-set answers file's page block holding text (`SHARED ANSWERS PAGE HOLDS TEXT`), warns on an
     `Answer:` line in a solved doc's extract, and `extract_check.py --parts` feeds `05-verify`'s
     PARTS (FB-100). A set's attempt is recorded in that set's own row only, `no, attempted
     YYYY-MM-DD` (no key of its own) or `yes, attempted YYYY-MM-DD` (a doc holding its own key);
     a separate answers file's row stays `yes`, since it may solve several sets, and the notes
     quote a set's official solution only once its own row says `attempted`. `05-verify` step
-    5's questions check reads each unattempted set's extract and own solutions file, and every
+    5's questions check reads each unattempted set's extract and its solutions file when it has
+    one, and every
     hit is a blocker. An erratum's corrected value sits in its part's solutions block, and the
     backbone names its doc and part only. Answer-blind briefs read the extracts and never open
     `_build/solutions/`; the writers, section reviewers, checker and tutor read both. An older
