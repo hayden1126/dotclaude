@@ -43,6 +43,9 @@
   hasn't attempted (`05-verify` step 5). It is quarantined like a key: no page build or agent
   reads it, and STATUS, `_build/logs/`, commits and replies name an entry's section and set, never
   its text, until `09-tutor` offers it back once every set the entry names is attempted.
+  `_build/held-check.md`, the one entry's text `09-tutor` writes for the questions check before
+  offering it back, is quarantined the same way: no agent reads it, the check's run deletes it,
+  and a session that finds one left behind (a run cut short) deletes it before anything else.
 - A finished exam's archive, `practice/<exam-slug>/` and `cheatsheet/<exam-slug>/`
   (`11-next-exam`), is frozen: nothing edits it, and no session or agent opens a key,
   `mock-values-key.md`, `mock_key.py` or `mock-plan.md` in it, or searches `practice/<exam-slug>/`

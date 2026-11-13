@@ -12,6 +12,8 @@ picks it up.
 
 ## Step 1: Where things are
 
+- First, a `_build/held-check.md` left behind (Step 7's check of a held passage, cut short) is
+  deleted unread, before anything else: it holds held text (hub CLAUDE.md).
 - STATUS: the notes page's URL and every other artifact's (FB-008), its `Tutor:` line, and
   `_build/logs/tutor.md` for where the last walk-through or quiz stopped (the log wins over a
   Tutor line it has moved past). When the student says where they are ("we finished Q1 and Q2,
@@ -462,7 +464,9 @@ answers file's row, which may solve several sets.
   offered, the main session runs the questions check on the passage alone, since it is not under
   `notes/` yet and may overlap a set the entry doesn't name: it writes the original text to
   `_build/held-check.md` and runs `python3 -I <skill>/scripts/mock_leak.py --hub . --pages
-  _build/held-check.md` from `<root>`, then deletes that file (it holds held text). The passage
+  _build/held-check.md` from `<root>`, then deletes that file (it holds held text, quarantined
+  like `_build/held.md`: no agent reads it, and a session that finds one left behind by a run cut
+  short deletes it before anything else, hub CLAUDE.md). The passage
   is offered only once this prints QUESTIONS OK, so every set it overlaps is attempted; a hit
   names a set still unattempted, which the entry then names too and waits for. Then show the
   student its section and its original text, and on their yes dispatch it as Step 5 says.
