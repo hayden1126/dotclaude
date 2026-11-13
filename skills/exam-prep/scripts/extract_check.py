@@ -1,7 +1,8 @@
 #!/usr/bin/python3 -I
-"""Check stage 02's extracts against MANIFEST.md's scope, from the hub root.
+"""Check stage 02's extracts and solutions files against MANIFEST.md, from the hub root.
 
-  extract_check.py [--root DIR]
+  extract_check.py [--root DIR]           check; exit 0 or 1
+  extract_check.py --parts [--root DIR]   print the self-test's PARTS and exit 0
 
 MANIFEST's table is read by its header names (Doc id, File, Pages, Scope, Answers, Notes; any
 other column, such as the optional By, is ignored); with no Doc id, File or Scope column it
@@ -21,62 +22,59 @@ UNDERSTOOD. Each in-scope row is checked by its source's kind:
 - the Ed digest (a file under sources/ed/): skipped, since it is read as it is.
 - anything else (a Word file, code, an ebook): at least one block, and when it has page blocks
   and a Pages count, every in-scope page.
-Blocks are the `### [<doc> <locator>] title` headers in _build/extract/*.md: `p.N` (`p.N-M` for a
-run of build frames), `#/h` or `#/h/v`, a question part (`Q3a`, `Q3 stem`) or any other name (a
-source without pages). Inside a question block, a `[<doc> p.N]` cite covers that page when <doc>
-is the block's own or an answers file (Answers `yes`) whose `solutions to <doc>` note names the
-block's doc (with no such note, any doc's; a warning says so).
+Blocks are the `### [<doc> <locator>] title` headers in _build/extract/*.md and
+_build/solutions/*.md: `p.N` (`p.N-M` for a run of build frames), `#/h` or `#/h/v`, a question
+part (`Q3a`), a stem (`Q3 stem`) or any other name (a source without pages). Inside a question
+block, a `[<doc> p.N]` cite covers that page when <doc> is the block's own or an answers file
+(Answers `yes`) whose `solutions to <doc>` note names the block's doc. A question block in a
+solutions file covers pages that way but counts as no block of its doc.
+
+Solved docs: an in-scope Answers `yes` doc with a `solutions to <doc>` note solves the docs it
+names; one with no note solves itself (a past exam with its key). An answers doc is any Answers
+`yes` doc. Extract agents keep every answer out of _build/extract/<name>.md and write it to
+_build/solutions/<name>.md, one `### [<doc> Q1a]` block per question part of a solved doc holding
+a `Solution [<doc> <loc>]: ...` line or the line `No official solution.`. It fails, naming the
+file and line:
+- NO SOLUTION BLOCK: a question part of a solved doc with a block in an extract and none in any
+  solutions file.
+- in a solutions file: a part block naming a part no extract has (NO SUCH PART), a part with two
+  blocks (TWO SOLUTIONS BLOCKS), a part block holding neither form (EMPTY SOLUTIONS BLOCK).
+- in an extract: SOLUTION IN AN EXTRACT, a bracketed `Solution [<doc> <loc>]` or bold
+  `**Solution:**` line in a block of a solved doc, fenced or not; CITES AN ANSWERS PAGE, a line
+  citing an answers page (answers_cite(): any page of an answers file paired with other docs, any
+  of an answers doc with no question part in any extract, or a key page, one no question part's
+  `Pages:` line names), a `Pages:` line holding only cites and the closing `Coverage:` line
+  aside; AN ANSWERS PAGE IN AN EXTRACT, a page or section block of an answers doc on no question
+  part's page.
+- ANSWERS WITH NO PAIRING: an in-scope Answers `yes` doc with no question block in any extract
+  and no `solutions to <doc>` note.
+It warns, by file and line, on a solutions block for a stem (each part still needs its own) and
+on a loose `Solution:` line (a `#### Solution` heading, `Solutions:`) outside a code fence in a
+solved doc's extract block, for a person to read. Question pages are read across every extract
+(question_pages()), so a cite of one from another extract isn't a key page.
 
 A doc that STATUS.md names on a line starting `Unverified: <doc>,` (material added at the
-student's request without an extract, FB-013) is reported as unverified while the extracts count
+student's request without an extract, FB-013) is reported as unverified while the files count
 no block for it (its own headers, or a page-less cite of it as an answers file), and doesn't fail;
 once they count one, its row is checked like any other. A STATUS.md it can't read exempts nothing.
 
 It prints one line per doc: what is in scope, what has a block, `(image only` entries, and
-`UNREADABLE:` flags (the brief's closing `Coverage:` line, qonly.closing(), doesn't count; a
-block's own line starting `Coverage:` does), each open flag then named by file and line with
-its fix (a re-read at 300 dpi on a crop: stage 02 runs unattended, so it never asks), and the
-values marked `(illegible at 300 dpi: <what>)`, still unreadable after that re-read: counted on
-the doc's line, never a failure. Exit 1
-on a page or slide with no block, an in-scope page not rendered, a doc with no blocks, an open
-`UNREADABLE:` flag, a Scope it can't read, any block for a `reserved` doc (FB-023) or for a
-`pending` one (its file has arrived: give it a real Scope); 0 otherwise. Blocks for a doc id
-MANIFEST lacks, or for an `out` row, are warnings.
+`UNREADABLE:` flags in either directory (the brief's closing `Coverage:` line, closing(), doesn't
+count; a block's own line starting `Coverage:` does), each open flag then named by file and line
+with its fix (a re-read at 300 dpi on a crop: stage 02 runs unattended, so it never asks), and
+the values marked `(illegible at 300 dpi: <what>)`, still unreadable after that re-read: counted
+on the doc's line and each listed by file and line, never a failure. Exit 1 on a page or slide
+with no block, an in-scope page not rendered, a doc with no blocks, an open `UNREADABLE:` flag, a
+Scope it can't read, any block for a `reserved` doc (FB-023) or for a `pending` one (its file has
+arrived: give it a real Scope), or any failure above; 2 with no MANIFEST.md; 0 otherwise. Blocks
+for a doc id MANIFEST lacks, or for an `out` row, are warnings.
 
-The question-only copies (qonly.py, hard rule 4, FB-056): a copy of an extract that holds
-answers must be exactly what qonly.py writes from that extract now (its first line, then
-qonly.due()'s text); the check compares the two and never strips the copy again. It fails, naming
-the file and line, on an extract that holds answers with no copy; on a copy whose first line
-names another SHA-256 than the extract's (stale: the extract changed after qonly.py ran); on a
-line in a copy that is one qonly.py takes out of the extract (an answer); and on any other
-difference (edited by hand). It fails, by file and line, an extract's line that cites answers (an
-answers file paired with other docs, an Answers `yes` doc with no question part, or a key page or
-page-less section of a same-file Answers `yes` doc, its question pages read across every
-extract) and that no solution marker cuts, so the copy keeps it (qonly.leaks()): a solution whose
-marker is worded off the format; a copy holding such a line fails too. A solution that cites
-nothing, or only its own question page, has no such cite and doesn't fail: each question part of
-a doc with solutions in which no marker cuts anything is a warning by file and line
-(qonly.unmarked()), for a person to read, since an official solution may skip a part. Each
-official part's marker that cuts but isn't the brief's `Solution [<doc> <loc>]:` form
-(`**Solution:**`, `Solution to Q1a [...]:`, `**Answer:**`) is a warning by file and line too
-(qonly.off_form()): it passes, so older extracts still do, but a rewording away from it is a
-leak. One only a question part's wide forms read may be question text, so its warning asks
-which it is: a solution is rewritten in the brief's form, question text left or quoted. A
-lecture's or a stem's marker is no official part and gets none. A copy with no extract holding
-answers is read as an extract would be and fails on anything qonly.py would take out. It also
-fails on an extract's code fence that never closes before the next block header, the `Coverage:`
-line or the end of the file. Fences are qonly.fences()'s, read as CommonMark reads them (a line
-with an info string or 4+ spaces of indent closes nothing), so this check and qonly.py pair them
-the same way: a closed fence hides a loose solution marker (a `# solution` comment, a `####
-Solution` heading) from qonly.py, never the bracketed `Solution [<doc> <loc>]` or the bold
-`**Solution:**` marker; an open one hides nothing, but it is a broken extract all the same. A
-loose marker a closed fence hides is a warning naming its file and line (qonly.loose_in_fences()):
-the solution's start in a starter fence whose closer was forgotten reads the same as a comment.
-A copy whose extract is gone or holds no answer now is a warning. Stdlib only, plus
-reveal_slice.py and qonly.py from this directory."""
+`--parts` prints the number of question-part blocks in the solutions files holding a `Solution
+[<doc> <loc>]` line (the self-test's PARTS, verify-selftest.py); an answers file's page blocks and
+a `No official solution.` block never count. Stdlib only, plus reveal_slice.py from this
+directory."""
 import argparse
 import contextlib
-import difflib
 import importlib.util
 import io
 import os
@@ -89,8 +87,9 @@ CITE = re.compile(r"\[(?P<doc>[A-Za-z0-9_.-]+)\s+(?P<loc>[^\]]+)\]")
 CITE_PAGES = re.compile(r"pp?\.\s*(?P<page>\d+)(?:\s*-\s*(?P<end>\d+))?")
 IMAGE_ONLY = re.compile(r"\(image only\b", re.I)
 UNREADABLE = re.compile(r"\bUNREADABLE:")
-# A value still illegible after the re-read at 300 dpi, marked so (02-extract): counted per doc,
-# never a failure, since stage 02 runs unattended and no further read can recover it.
+# A value still illegible after the re-read at 300 dpi, marked so (02-extract): counted per doc
+# and listed by file and line, never a failure, since stage 02 runs unattended and no further
+# read can recover it.
 ILLEGIBLE = re.compile(r"\(illegible at 300 dpi:\s*[^)\s][^)]*\)", re.I)
 PAGE_FILE = re.compile(r"p-(\d+)\.png$")
 # The Scope cell of an in-scope row, after its parenthetical notes are dropped: `in` or `concepts
@@ -106,6 +105,48 @@ EN_DASH = chr(0x2013)
 # STATUS.md's `Unverified: <doc>, <section ids>, <date>` line (11-next-exam, FB-013), as a list
 # item or bare; a mention mid-line names nothing.
 UNVERIFIED = re.compile(r"^[-*\s]*Unverified:\s*([A-Za-z0-9_.-]*[A-Za-z0-9_-])(?=[,\s]|$)", re.M)
+# The extract brief's closing line, whole: `Coverage: <range>; N blocks; K image only (...); U
+# flagged unreadable.` Older extracts end it `0 UNREADABLE.` or, with `1 (image only: p.1)`,
+# `UNREADABLE: none.`. The flagged count may carry its detail, in parentheses or after a colon
+# (`1 flagged UNREADABLE: p.3 weight.`). A `Coverage:` start, even with `; N blocks;` after it,
+# is a solution's or a tool's line as often as not (`Coverage: 4/5 statements; 3 blocks; 2 of 3
+# branches` lacks the image-only and unreadable parts). mock_leak.py's NOTE_LINE mirrors this.
+COVERAGE = re.compile(r"^Coverage:\s.*;\s*\d+\s+blocks?\s*;\s*\d+\s*\(?image\s+only\b.*;\s*"
+                      r"(?:\d+\s+(?:flagged\s+)?unreadable(?:\s*\(.*\)|\s*:.*)?"
+                      r"|unreadable:\s*none)\.?\s*$", re.I)
+# A part's `Pages:` line, and each page list in a cite's locator: `p.2`, `pp. 2-3`, `P.3`, a range
+# with an en dash, `pp.2, 5`; `p.2, p.3` is two lists.
+PAGES_LINE = re.compile(r"^[-*\s]*Pages:(.*)")
+LOC_PAGES = re.compile(r"\bpp?\.\s*(?P<list>\d+(?:\s*[-–]\s*\d+)?"
+                       r"(?:\s*,\s*\d+(?:\s*[-–]\s*\d+)?)*)", re.I)
+QUESTION_LOC = re.compile(r"Q\d", re.I)
+SEPARATORS = re.compile(r"(?:[\s,;&]|and\b)*")
+PART = re.compile(r"Q[\w.]+")
+# A solution in an extract, either form the extract format has written: the bracketed
+# `Solution [<doc> <loc>]` (bold around the word or the whole marker, `Official` before it, a list,
+# quote or heading mark first, more cites after it) then a colon or the line's end, so starter code
+# such as `solution[i + 1] = best(i)` isn't one; or the bold `**Solution:**`, `**Solution**`,
+# `**Official solution:**`. Neither is ever code, so both count inside a fence too.
+CITED = r"\[[A-Za-z0-9_.-]+\s+[^\]\s][^\]]*\]"
+BRACKETED = re.compile(r"^[-*>#\s]*(?:\*\*)?(?:official\s+)?solutions?(?:\*\*)?\s*" + CITED
+                       + r"(?:\s*" + CITED + r")*(?:\*\*)?\s*(?::|$)", re.I)
+BOLD = re.compile(r"^[-*>#\s]*\*\*(?:official\s+)?solutions?\s*:?\s*\*\*", re.I)
+# A loose `Solution:` line (`Solutions:`, a `#### Solution` heading): question text as often as an
+# answer, so a warning, read outside a code fence only.
+LOOSE = re.compile(r"^[-*>#\s]*(?:\*\*)?(?:official\s+)?solutions?\b(?:\*\*)?\s*(?:\[|:|\*\*|$)",
+                   re.I)
+# A solutions block's two forms (the extract brief): `Solution [<doc> <loc>]: ...` (a list mark
+# before it, more cites after it, then a colon or the line's end), or the line `No official
+# solution.` alone.
+SOLVED = re.compile(r"^[-*\s]*Solution \[[A-Za-z0-9_.-]+\s+[^\]\s][^\]]*\](?:\s*" + CITED
+                    + r")*\s*(?::|$)")
+NO_SOLUTION = "No official solution."
+# CommonMark: an opener is at most 3 spaces in, a run of 3+ backticks or tildes, then an info
+# string (a backtick opener's holds no backtick). A closer is at most 3 spaces in, a run of the
+# opener's character at least as long, then nothing but blanks. Anything else is fence content.
+OPENER = re.compile(r"^ {0,3}(?P<mark>`{3,}(?=[^`]*$)|~{3,})")
+CLOSER = re.compile(r"^ {0,3}(?P<mark>`{3,}|~{3,})[ \t]*$")
+DIRS = ("extract", "solutions")
 
 
 def numbers(text):
@@ -120,7 +161,7 @@ def manifest_rows(path):
     """{doc id: {"file", "pages", "scope", "kind", "answers", "answers_for"}} for every row of
     the table. Columns are found by their header names, so an older MANIFEST with fewer columns
     reads right; `answers_for` is the docs a `solutions to <doc>` note pairs an answers file
-    with (empty: any doc)."""
+    with (empty: it solves itself, solved())."""
     rows, cols = {}, None
     with open(path, encoding="utf-8") as f:
         for line in f:
@@ -152,6 +193,17 @@ def manifest_rows(path):
     return rows
 
 
+def solved(rows):
+    """The docs with official solutions: each doc an in-scope Answers `yes` row's `solutions to
+    <doc>` note names, or the row's own doc when it has no such note (a past exam with its key).
+    An answers row that is reserved, pending or out solves nothing: no agent reads it."""
+    out = set()
+    for doc, row in rows.items():
+        if row.get("answers") and row.get("kind") in ("in", "concepts"):
+            out |= row.get("answers_for") or {doc}
+    return out
+
+
 def rendered(root, doc):
     d = os.path.join(root, "_build", "pages", doc)
     if not os.path.isdir(d):
@@ -164,73 +216,181 @@ def span(m):
     return range(lo, max(lo, int(m.group("end") or lo)) + 1)
 
 
-def load_qonly():
-    here = os.path.dirname(os.path.abspath(__file__))
-    spec = importlib.util.spec_from_file_location("qonly", os.path.join(here, "qonly.py"))
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
+def closing(lines):
+    """The indices of the file's closing `Coverage:` lines: a line of the brief's form (COVERAGE)
+    with nothing but blank lines after it up to the next block header or the end of the file. Any
+    other line starting `Coverage:` is the block's own text."""
+    out, tail = set(), True
+    for i in range(len(lines) - 1, -1, -1):
+        if HEADER.match(lines[i]):
+            tail = True
+        elif COVERAGE.match(lines[i]):
+            if tail:
+                out.add(i)
+            tail = False
+        elif lines[i].strip():
+            tail = False
+    return out
+
+
+def fenced(lines):
+    """The indices of the lines in a closed code fence, its fence lines included, paired as
+    CommonMark pairs them (OPENER, CLOSER: a line with an info string or 4+ spaces of indent closes
+    nothing). A fence still open at the next block header or closing line ends there unclosed.
+    With any fence unclosed, or a closed one holding a line that could open a fence (a forgotten
+    closer, nested markdown), the pairing can't be trusted: no line counts as fenced there, so
+    the loose-marker warning reads every line (fail closed)."""
+    spans, unclosed, start, mark = [], False, None, None
+    ends = closing(lines)
+    for i, line in enumerate(lines):
+        line = line.rstrip("\r\n")
+        if start is not None and (HEADER.match(line) or i in ends):
+            unclosed, start = True, None
+        if start is None:
+            f = OPENER.match(line)
+            if f:
+                start, mark = i, f.group("mark")
+            continue
+        f = CLOSER.match(line)
+        if f and f.group("mark")[0] == mark[0] and len(f.group("mark")) >= len(mark):
+            spans.append((start, i))
+            start = None
+    if unclosed or start is not None:
+        return set()
+    return {i for a, b in spans
+            if not any(OPENER.match(line.rstrip("\r\n")) for line in lines[a + 1:b])
+            for i in range(a, b + 1)}
+
+
+def loc_pages(loc):
+    """The page numbers a cite's locator names (LOC_PAGES), every list and range in it."""
+    out = set()
+    for m in LOC_PAGES.finditer(loc):
+        for a, b in re.findall(r"(\d+)(?:\s*[-–]\s*(\d+))?", m.group("list")):
+            out.update(range(int(a), max(int(a), int(b or a)) + 1))
+    return out
+
+
+def files(root, kind):
+    """[(path relative to root, its lines)] for each .md file under _build/<kind>/, sorted."""
+    d = os.path.join(root, "_build", kind)
+    out = []
+    for name in sorted(os.listdir(d)) if os.path.isdir(d) else []:
+        if name.endswith(".md"):
+            with open(os.path.join(d, name), encoding="utf-8") as f:
+                out.append((f"_build/{kind}/{name}", f.read().splitlines(keepends=True)))
+    return out
+
+
+def sections(lines):
+    """[(header index, end index, header match)] for each block in the file."""
+    heads = [(i, m) for i, m in enumerate(map(HEADER.match, lines)) if m]
+    return [(i, heads[k + 1][0] if k + 1 < len(heads) else len(lines), m)
+            for k, (i, m) in enumerate(heads)]
+
+
+def locator(m):
+    """A block header's locator, the text after its doc id inside the brackets."""
+    return m.group(0).split("[", 1)[1][len(m.group("doc")):].rstrip("]").strip()
+
+
+def question_pages(extracts):
+    """{doc: the pages its question blocks name on their `Pages:` lines}, read across every
+    extract, with a key (an empty set at least) for every doc with a question block (a part's or a
+    stem's) in any of them."""
+    out = {}
+    for _, lines in extracts:
+        for start, end, m in sections(lines):
+            if not m.group("q"):
+                continue
+            doc = m.group("doc")
+            pages = out.setdefault(doc, set())
+            for line in lines[start + 1:end]:
+                p = PAGES_LINE.match(line)
+                if not p:
+                    continue
+                for c in CITE.finditer(p.group(1)):
+                    if c.group("doc") == doc:
+                        pages |= loc_pages(c.group("loc"))
+    return out
+
+
+def answers_cite(doc, loc, rows, qpages):
+    """Whether a `[<doc> <loc>]` cite points into answers: any cite of an answers file whose
+    `solutions to <doc>` note names other docs only; any cite of another Answers `yes` doc with no
+    question block in any extract; and a cite of one with question blocks that names a page no
+    question part's `Pages:` line names (a key page), or names no page and no question (`[PE1
+    Key]`). `qpages` is question_pages()."""
+    row = rows.get(doc) or {}
+    if not row.get("answers"):
+        return False
+    pair = row.get("answers_for") or set()
+    if pair and doc not in pair:
+        return True
+    if doc not in qpages:
+        return True
+    pages = loc_pages(loc)
+    if pages:
+        return not pages <= qpages[doc]
+    return not QUESTION_LOC.match(loc.strip())
 
 
 def blocks(root, rows):
     """{doc: {"pages", "frags", "blocks", "questions", "image_only", "unreadable",
-    "unreadable_at", "illegible"}}, `unreadable_at` a list of (extract name, line number) for
-    each open flag, `illegible` the count of values marked illegible at 300 dpi (ILLEGIBLE)."""
+    "unreadable_at", "illegible", "illegible_at"}} across _build/extract/ and _build/solutions/,
+    `unreadable_at` a list of (file, line number) for each open flag, `illegible_at` one of (file,
+    line number, the marked value) for each value marked illegible at 300 dpi (ILLEGIBLE). A
+    question block in a solutions file counts as no block of its doc; its cites cover pages."""
     out = {}
-    closing = load_qonly().closing
 
     def entry(doc):
         return out.setdefault(doc, {"pages": set(), "frags": set(), "blocks": 0, "questions": 0,
                                     "image_only": 0, "unreadable": 0, "unreadable_at": [],
-                                    "illegible": 0})
+                                    "illegible": 0, "illegible_at": []})
 
     def answers(cited, own):
         """Whether a question block of `own` may cover pages of `cited`: its own doc, or an
-        answers file that is paired with it (or with nothing in particular)."""
+        answers file whose `solutions to <doc>` note names it."""
         row = rows.get(cited)
-        return cited == own or bool(row and row["answers"]
-                                    and (not row["answers_for"] or own in row["answers_for"]))
-    d = os.path.join(root, "_build", "extract")
-    for name in sorted(os.listdir(d)) if os.path.isdir(d) else []:
-        if not name.endswith(".md"):
-            continue
-        current, own, question = None, None, False
-        with open(os.path.join(d, name), encoding="utf-8") as f:
-            lines = f.readlines()
-        ends = closing(lines)
-        for i, line in enumerate(lines):
-            m = HEADER.match(line)
-            if m:
+        return cited == own or bool(row and row["answers"] and own in row["answers_for"])
+    for kind in DIRS:
+        for rel, lines in files(root, kind):
+            ends = closing(lines)
+            for start, end, m in sections(lines):
                 own = m.group("doc")
                 current = entry(own)
-                current["blocks"] += 1
-                if m.group("q"):
-                    current["questions"] += 1
-                elif m.group("frag"):
-                    current["frags"].add(m.group("frag"))
-                elif m.group("page"):
-                    current["pages"].update(span(m))
                 question = bool(m.group("q"))
-                continue
-            if current is None or i in ends:
-                continue
-            current["image_only"] += bool(IMAGE_ONLY.search(line))
-            flags = len(UNREADABLE.findall(line))
-            current["unreadable"] += flags
-            current["illegible"] += len(ILLEGIBLE.findall(line))
-            if flags:
-                current["unreadable_at"].append((name, i + 1))
-            if not question:
-                continue
-            for c in CITE.finditer(line):
-                cited = c.group("doc")
-                if not answers(cited, own):
-                    continue
-                p = CITE_PAGES.fullmatch(c.group("loc").strip())
-                if p:
-                    entry(cited)["pages"].update(span(p))
-                elif cited != own:
-                    entry(cited)["blocks"] += 1  # an answers file without pages
+                if not (question and kind == "solutions"):
+                    current["blocks"] += 1
+                    if question:
+                        current["questions"] += 1
+                    elif m.group("frag"):
+                        current["frags"].add(m.group("frag"))
+                    elif m.group("page"):
+                        current["pages"].update(span(m))
+                for i in range(start + 1, end):
+                    if i in ends:
+                        continue
+                    line = lines[i]
+                    current["image_only"] += bool(IMAGE_ONLY.search(line))
+                    flags = len(UNREADABLE.findall(line))
+                    current["unreadable"] += flags
+                    if flags:
+                        current["unreadable_at"].append((rel, i + 1))
+                    for v in ILLEGIBLE.finditer(line):
+                        current["illegible"] += 1
+                        current["illegible_at"].append((rel, i + 1, v.group(0)))
+                    if not question:
+                        continue
+                    for c in CITE.finditer(line):
+                        cited = c.group("doc")
+                        if not answers(cited, own):
+                            continue
+                        p = CITE_PAGES.fullmatch(c.group("loc").strip())
+                        if p:
+                            entry(cited)["pages"].update(span(p))
+                        elif cited != own:
+                            entry(cited)["blocks"] += 1  # an answers file without pages
     return out
 
 
@@ -372,114 +532,115 @@ def check(root, doc, row, b):
     return f"{doc}: {b['blocks']} blocks, {flags}", open_flags
 
 
-def qonly_check(root, rows):
-    """(lines, failed) for the question-only copies against the extracts."""
-    qonly = load_qonly()
-    out, bad, due = [], False, {}
-    qpages = qonly.hub_question_pages(root)
-    for name in qonly.extracts(root):
-        src = os.path.join(root, "_build", "extract", name)
-        with open(src, encoding="utf-8") as f:
-            text = f.read()
-        for i in qonly.fences(text.splitlines(keepends=True))[1]:
-            out.append(f"_build/extract/{name}:{i + 1}: UNCLOSED FENCE: a code fence that never "
-                       "closes before the next block or the end of the file; close it with the "
-                       "same mark (as many backticks or tildes) and rerun qonly.py")
-            bad = True
-        for i, cite in qonly.leaks(text, rows, qpages):
-            out.append(f"_build/extract/{name}:{i + 1}: CITES AN ANSWERS PAGE: {cite}, on a line "
-                       "no solution marker cuts, so the question-only copy keeps it; if it gives "
-                       "an answer, start it `Solution [<doc> <loc>]:`, if it is the question's "
-                       "text, cite the question's own page instead, and rerun qonly.py")
-            bad = True
-        for i in qonly.loose_in_fences(text, rows, qpages):
-            out.append(f"warning: _build/extract/{name}:{i + 1}: a loose solution marker inside a "
-                       "code fence, left in as code; if it starts a solution (a starter fence "
-                       "whose closer was forgotten), close the fence above it or write it "
-                       "`Solution [<doc> <loc>]:` and rerun qonly.py")
-        for i, wide in qonly.off_form(text, rows, qpages):
-            if wide:
-                out.append(f"warning: _build/extract/{name}:{i + 1}: a solution marker not in "
-                           "the `Solution [<doc> <loc>]:` form, read only in a question part; "
-                           "qonly.py cuts from it to the end of the part: if it starts a "
-                           "solution, rewrite it as `Solution [<doc> <loc>]: ...`; if it is "
-                           "question text, leave it or quote it; then rerun qonly.py")
-            else:
-                out.append(f"warning: _build/extract/{name}:{i + 1}: a solution marker not in "
-                           "the `Solution [<doc> <loc>]:` form; qonly.py cuts it, but rewrite "
-                           "it as `Solution [<doc> <loc>]: ...` and rerun qonly.py")
-        lines = text.splitlines()
-        for i in qonly.unmarked(text, rows, qpages):
-            head = qonly.BLOCK.match(lines[i])
-            out.append(f"warning: _build/extract/{name}:{i + 1}: [{head.group('doc')} "
-                       f"{head.group('loc').strip()}] is a question part of a doc with solutions, "
-                       "yet no solution marker cuts anything in it; if its block holds a "
-                       "solution, start it `Solution [<doc> <loc>]:` and rerun qonly.py (an "
-                       "official solution that skips the part needs nothing)")
-        needed, body = qonly.due(text, rows, qpages)
-        if needed:
-            due[name] = (qonly.first_line(name, src) + qonly.TAIL + body,
-                         qonly.answer_lines(text, rows, qpages))
-    for name in qonly.copies(root):
-        rel = f"_build/q-only/{name}"
-        with open(os.path.join(root, rel), encoding="utf-8") as f:
-            text = f.read()
-        head = text.partition("\n")[0]
-        if name not in due:
-            # Nothing to compare it with: read it as an extract (a copy qonly.py wrote is
-            # well-formed, so this finds what is left in it, not a pairing it broke).
-            body, offset = text.partition("\n")[2], 1
-            if not qonly.FIRST_LINE.match(head):
-                body, offset = text, 0
-            for line, why in qonly.strip(body, rows, qpages)[1]:
-                out.append(f"{rel}:{line + offset}: ANSWER IN A QUESTION-ONLY COPY: {why}; "
-                           "rerun qonly.py")
-                bad = True
-            for i, cite in qonly.leaks(body, rows, qpages):
-                out.append(f"{rel}:{i + 1 + offset}: ANSWER IN A QUESTION-ONLY COPY: a line "
-                           f"citing {cite}; rerun qonly.py")
-                bad = True
-            out.append(f"warning: {rel} has no extract holding answers now; qonly.py removes a "
-                       "copy it wrote, any other file is yours to delete")
-            continue
-        want, answers = due[name]
-        if text == want:
-            continue
-        bad = True
-        stale = not head.startswith(want.partition("\n")[0])
-        if stale:
-            out.append(f"{rel}:1: STALE: _build/extract/{name} changed after its copy was "
-                       "written; rerun qonly.py")
-        have = text.splitlines()
-        ops = [op for op in difflib.SequenceMatcher(None, want.splitlines(), have,
-                                                    autojunk=False).get_opcodes()
-               if op[0] != "equal"]
-        # A line the copy has and qonly.py's text lacks is an answer when it is one qonly.py
-        # takes out of the extract, reads as a solution marker, or cites answers.
-        cites = dict(qonly.leaks(text, rows, qpages))
-        leaked = []
-        for tag, _, _, j1, j2 in ops:
-            if tag == "delete":
+def solution_blocks(sols):
+    """{(doc, part): [(file, line number, holds a `Solution [` line, holds either form)]} for each
+    question part's block in the solutions files, and [(file, line number, header)] for each
+    stem's block."""
+    parts, stems = {}, []
+    for rel, lines in sols:
+        for start, end, m in sections(lines):
+            q = m.group("q")
+            if not q:
                 continue
-            for j in range(j1, j2):
-                why = answers.get(qonly.bare(have[j]))
-                if why is None and qonly.marker(have[j], set(), j, rows, True, qpages):
-                    why = "a solution marker"
-                if why is None and j in cites:
-                    why = f"a line citing {cites[j]}"
-                if why:
-                    leaked.append(j)
-                    out.append(f"{rel}:{j + 1}: ANSWER IN A QUESTION-ONLY COPY: {why}; "
-                               "rerun qonly.py")
-        if not stale and not leaked:
-            at = min(ops[0][3], len(have) - 1) + 1 if ops else 1
-            out.append(f"{rel}:{at}: DIFFERS from what qonly.py writes from "
-                       f"_build/extract/{name} now (edited by hand?); rerun qonly.py")
-    for name in sorted(set(due) - set(qonly.copies(root))):
-        out.append(f"_build/extract/{name}: holds answers, NO QUESTION-ONLY COPY "
-                   f"_build/q-only/{name}; run qonly.py")
-        bad = True
-    return out, bad
+            if not PART.fullmatch(q):
+                stems.append((rel, start + 1, f"[{m.group('doc')} {q}]"))
+                continue
+            body = lines[start + 1:end]
+            has = any(SOLVED.match(line) for line in body)
+            none = any(line.strip() == NO_SOLUTION for line in body)
+            parts.setdefault((m.group("doc"), q), []).append((rel, start + 1, has, has or none))
+    return parts, stems
+
+
+def parts_count(root):
+    """The self-test's PARTS: the question parts' blocks in the solutions files that hold a
+    `Solution [<doc> <loc>]` line."""
+    parts, _ = solution_blocks(files(root, "solutions"))
+    return sum(has for found in parts.values() for _, _, has, _ in found)
+
+
+def solutions_check(root, rows):
+    """(lines, failed): the extracts hold no answer and the solutions files hold one block per
+    question part of a solved doc."""
+    out, bad = [], False
+    extracts = files(root, "extract")
+    sols = files(root, "solutions")
+    qpages = question_pages(extracts)
+    named = solved(rows)
+    have, at = set(), {}
+    for rel, lines in extracts:
+        name = rel.rsplit("/", 1)[1]
+        target = f"_build/solutions/{name}"
+        ends = closing(lines)
+        code = fenced(lines)
+        for start, end, m in sections(lines):
+            doc, loc = m.group("doc"), locator(m)
+            q = m.group("q")
+            if q and PART.fullmatch(q):
+                have.add((doc, q))
+                at.setdefault((doc, q), (rel, start + 1, name))
+            row = rows.get(doc) or {}
+            if row.get("answers") and answers_cite(doc, loc, rows, qpages):
+                out.append(f"{rel}:{start + 1}: AN ANSWERS PAGE IN AN EXTRACT: [{doc} {loc}] is "
+                           f"a block of {doc}, an answers doc, on no question part's page; move "
+                           f"it to {target}")
+                bad = True
+                continue
+            mine = doc in named
+            for i in range(start + 1, end):
+                line = lines[i]
+                if i in ends:
+                    continue
+                if mine and (BRACKETED.match(line) or BOLD.match(line)):
+                    out.append(f"{rel}:{i + 1}: SOLUTION IN AN EXTRACT: [{doc} {loc}] is a block "
+                               f"of {doc}, a doc with official solutions; move the solution to "
+                               f"its part's block in {target}")
+                    bad = True
+                    continue
+                p = PAGES_LINE.match(line)
+                if p and SEPARATORS.fullmatch(CITE.sub("", p.group(1))):
+                    continue
+                hit = next((c for c in CITE.finditer(line)
+                            if answers_cite(c.group("doc"), c.group("loc"), rows, qpages)), None)
+                if hit:
+                    out.append(f"{rel}:{i + 1}: CITES AN ANSWERS PAGE: {hit.group(0)}; an answer "
+                               f"goes under its part's block in {target}; if this line is the "
+                               "question's text, cite the question's own page")
+                    bad = True
+                    continue
+                if mine and i not in code and LOOSE.match(line):
+                    out.append(f"warning: {rel}:{i + 1}: a loose `Solution:` line in a block of "
+                               f"{doc}, a doc with official solutions; if it gives an answer, "
+                               f"move it to {target}; question text stays")
+    parts, stems = solution_blocks(sols)
+    for key, found in sorted(parts.items()):
+        doc, q = key
+        rel, n = found[0][:2]
+        if key not in have:
+            out.append(f"{rel}:{n}: NO SUCH PART: [{doc} {q}] has no block in any extract; name "
+                       "the extract's part in the header, or delete the block")
+            bad = True
+        if len(found) > 1:
+            others = ", ".join(f"{r}:{k}" for r, k, _, _ in found[1:])
+            out.append(f"{rel}:{n}: TWO SOLUTIONS BLOCKS for [{doc} {q}] (also {others}): keep "
+                       "one")
+            bad = True
+        for r, k, _, ok in found:
+            if not ok:
+                out.append(f"{r}:{k}: EMPTY SOLUTIONS BLOCK: [{doc} {q}] holds neither a "
+                           f"`Solution [<doc> <loc>]: ...` line nor the line `{NO_SOLUTION}`")
+                bad = True
+    for rel, n, head in stems:
+        out.append(f"warning: {rel}:{n}: a solutions block for the stem {head}: each part still "
+                   "needs its own block")
+    for key in sorted(have):
+        doc, q = key
+        if doc in named and key not in parts:
+            rel, n, name = at[key]
+            out.append(f"{rel}:{n}: NO SOLUTION BLOCK: write its solution or "
+                       f"\"{NO_SOLUTION}\" under ### [{doc} {q}] in _build/solutions/{name}")
+            bad = True
+    return out, bad, qpages
 
 
 def unverified(root):
@@ -492,9 +653,16 @@ def unverified(root):
 
 
 def main(argv=None):
-    p = argparse.ArgumentParser(description="Check the extracts against MANIFEST.md's scope.")
+    p = argparse.ArgumentParser(description="Check the extracts and solutions files against "
+                                            "MANIFEST.md.")
     p.add_argument("--root", default=".", help="the exam-prep root (default: the cwd)")
+    p.add_argument("--parts", action="store_true",
+                   help="print the number of question parts whose solutions block holds a "
+                        "`Solution [` line (the self-test's PARTS) and exit")
     args = p.parse_args(argv)
+    if args.parts:
+        print(parts_count(args.root))
+        return 0
     manifest = os.path.join(args.root, "MANIFEST.md")
     if not os.path.exists(manifest):
         print(f"extract_check: no MANIFEST.md in {os.path.abspath(args.root)}", file=sys.stderr)
@@ -508,31 +676,35 @@ def main(argv=None):
         print("extract_check: MANIFEST.md has no rows under a `| Doc id | File | ... |` header")
         return 1
     found = blocks(args.root, rows)
+    lines, bad, qpages = solutions_check(args.root, rows)
     empty = {"pages": set(), "frags": set(), "blocks": 0, "questions": 0, "image_only": 0,
-             "unreadable": 0, "unreadable_at": [], "illegible": 0}
+             "unreadable": 0, "unreadable_at": [], "illegible": 0, "illegible_at": []}
     skip = unverified(args.root)
-    bad = False
     for doc, row in rows.items():
         if row["kind"] not in KINDS:
             print(f"{doc}: SCOPE NOT UNDERSTOOD: {row['scope']!r}; it starts with one of "
                   "in, concepts only, reserved, pending, out")
             bad = True
             continue
-        if row["answers"] and not row["answers_for"]:
-            print(f"warning: {doc} holds answers but no `solutions to <doc>` note: its cites "
-                  "count for any question block")
         if row["kind"] not in ("in", "concepts"):
             continue
         if doc in skip and not (found.get(doc) or empty)["blocks"]:
             print(f"{doc}: unverified, added without an extract (STATUS `Unverified:` line, "
                   "FB-013): not checked until it has a block")
             continue
+        if row["answers"] and not row["answers_for"] and doc not in qpages:
+            print(f"{doc}: ANSWERS WITH NO PAIRING: an Answers `yes` doc with no question block "
+                  "in any extract and no `solutions to <doc>` note; add the note to its "
+                  "MANIFEST.md row's Notes")
+            bad = True
         b = found.get(doc) or empty
         line, failed = check(args.root, doc, row, b)
         print(line)
-        for name, at in b["unreadable_at"]:
-            print(f"_build/extract/{name}:{at}: UNREADABLE flag still open; re-read it at 300 dpi "
-                  "on a crop (02-extract step 3.2) and replace the flag with the value")
+        for rel, at in b["unreadable_at"]:
+            print(f"{rel}:{at}: UNREADABLE flag still open; re-read it at 300 dpi on a crop "
+                  "(02-extract step 3.2) and replace the flag with the value")
+        for rel, at, value in b["illegible_at"]:
+            print(f"{rel}:{at}: {value}, counted, not a failure")
         bad |= failed
     for doc in sorted(found):
         kind = rows[doc]["kind"] if doc in rows else None
@@ -549,10 +721,9 @@ def main(argv=None):
             print(f"warning: blocks for {doc}, a doc id MANIFEST.md lacks (a typo in a header?)")
         elif kind not in ("in", "concepts"):
             print(f"warning: blocks for {doc}, whose MANIFEST.md scope is {rows[doc]['scope']!r}")
-    lines, failed = qonly_check(args.root, rows)
     for line in lines:
         print(line)
-    return 1 if bad or failed else 0
+    return 1 if bad else 0
 
 
 if __name__ == "__main__":
