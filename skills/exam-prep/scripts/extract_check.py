@@ -49,11 +49,12 @@ Key says where an Answers `yes` doc's answers are, read whole (trimmed, any case
 - `inline`: the doc holds its own key, each solution under its question; no key pages.
 - `sections: Marking scheme, Answers` (names joined by `,`): a source without pages holds its own
   key in the sections whose block locator is one of the names (any case, runs of whitespace as
-  one), or one of them followed by a space and `Q` (`Marking scheme Q1`) or by a comma (`Marking
-  scheme, part 2`); `Key formulas` under `sections: Key` is no key section. A deck's solution
-  slides are named by fragment (`sections: #/5, #/6`). A row whose File ends in .pdf fails
-  SECTIONS KEY ON A PAGED DOC, and a named section with no block in any solutions file fails KEY
-  SECTION NOT FOUND.
+  one), then, past any spaces, nothing, a character that is no letter or digit (`Marking scheme
+  (continued)`, `Marking scheme: Q2`, `Marking scheme, part 2`) or `Q` and a digit (`Marking
+  scheme Q1`); `Key formulas` under `sections: Key` is no key section (key_section()). A deck's
+  solution slides are named by fragment (`sections: #/5, #/6`; `#/5/0` is part of `#/5`). A row
+  whose File ends in .pdf fails SECTIONS KEY ON A PAGED DOC, and a named section with no block in
+  any solutions file (its name or a block of it) fails KEY SECTION NOT FOUND.
 - anything else fails UNREAD KEY, and the row's other key checks are left out.
 Solved docs: the docs a `for` key names, and every doc whose own key is pages, `inline` or
 `sections:`. Answers pages (answers_cite()): every block and page of a `for` answers file; the
@@ -449,12 +450,19 @@ def question_docs(extracts):
 
 def key_section(loc, names):
     """Whether a page-less locator is key material under a `sections:` key's names (read_key()):
-    one of the names whole (norm()), or a name followed by a space and `Q` (`Marking scheme Q1`,
-    a part of the key) or by a comma (`Marking scheme, part 2`). Another name that starts with a
-    key name (`Key formulas` under `sections: Key`) is not."""
+    a name (any case, runs of whitespace as one), then, past any spaces, nothing, a character that
+    is no letter or digit (`Marking scheme (continued)`, `: Q2`, `- Q2`, `, part 2`, a deck's
+    child slide `#/5/0` under `#/5`), or `Q` and a digit (`Marking scheme Q1`). Another name that
+    starts with a key name (`Key formulas` under `sections: Key`, `Marking scheme 2`) is not."""
     loc = " ".join(loc.split())
-    return norm(loc) in names or any(
-        re.match(r"(?i:" + re.escape(written) + r")(?: Q|\s*,)", loc) for written in names.values())
+    for written in names.values():
+        m = re.match(re.escape(written), loc, re.I)
+        if not m:
+            continue
+        rest = loc[m.end():].lstrip(" ")
+        if not rest or not rest[0].isalnum() or re.match(r"Q\d", rest):
+            return True
+    return False
 
 
 def answers_cite(doc, loc, rows):
@@ -917,7 +925,9 @@ def solutions_check(root, rows, idle=frozenset()):
 
 def key_check(doc, row, rows, qdocs, keyed):
     """The failures of an in-scope row's Key cell (read_key()). `qdocs` is question_docs(), and
-    `keyed` the (doc, norm(locator)) of every block in the solutions files."""
+    `keyed` {doc: the locators of its blocks in the solutions files}: a key section is found by
+    its name or a block of it (key_section(), `Marking scheme Q1`, a deck's `#/5/0` under
+    `#/5`)."""
     key = row["key"]
     form = key["form"]
     if not row["answers"]:
@@ -948,7 +958,9 @@ def key_check(doc, row, rows, qdocs, keyed):
         else:
             out += [f"{doc}: KEY SECTION NOT FOUND: no block [{doc} {written}] in "
                     "_build/solutions/"
-                    for name, written in sorted(key["names"].items()) if (doc, name) not in keyed]
+                    for _, written in sorted(key["names"].items())
+                    if not any(key_section(loc, {norm(written): written})
+                               for loc in keyed.get(doc, ()))]
     if doc not in qdocs:
         out.append(f"{doc}: ANSWERS WITH NO PAIRING: a doc with its own key (its Key cell) with no "
                    "question block in any extract; its question parts need blocks in an extract, "
@@ -998,8 +1010,10 @@ def main(argv=None):
     # reads it as written, so its pages are still answers pages.
     lines, bad = solutions_check(args.root, rows, idle)
     qdocs = question_docs(files(args.root, "extract"))
-    keyed = {(m.group("doc"), norm(locator(m))) for _, sol in files(args.root, "solutions")
-             for _, _, m in sections(sol)}
+    keyed = {}
+    for _, sol in files(args.root, "solutions"):
+        for _, _, m in sections(sol):
+            keyed.setdefault(m.group("doc"), []).append(locator(m))
     for doc, row in rows.items():
         if row["kind"] not in KINDS:
             print(f"{doc}: SCOPE NOT UNDERSTOOD: {row['scope']!r}; it starts with one of "

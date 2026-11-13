@@ -1612,6 +1612,50 @@ class SolutionsFiles(unittest.TestCase):
         self.assertIn("_build/extract/pe3.md:6: AN ANSWERS PAGE IN AN EXTRACT: [PE3 Key Q1] is a "
                       "key section of PE3", out)
 
+    def test_a_key_sections_name_then_no_letter_or_digit_is_key_material(self):
+        # r15-1 #3: `Marking scheme (continued)`, `Marking scheme: Q2` and a deck's child slide
+        # `#/5/0` under `sections: #/5` read as question material.
+        key = extract_check.read_key
+        rows = {"PE3": {"answers": True, "key": key("sections: Marking scheme")}}
+        for loc in ("Marking scheme", "Marking scheme (continued)", "Marking scheme: Q2",
+                    "Marking scheme - Q2", "Marking scheme, part 2", "Marking scheme Q1",
+                    "Marking schemeQ1", "Marking scheme  (cont.)"):
+            self.assertTrue(extract_check.answers_cite("PE3", loc, rows), loc)
+        for loc in ("Marking schemes", "Marking scheme 2", "Marking scheme Questions",
+                    "Marking scheme q1", "Marking scheme (continued) p.3", "Marking", "Rules"):
+            self.assertFalse(extract_check.answers_cite("PE3", loc, rows), loc)
+        rows = {"R3": {"answers": True, "key": key("sections: #/5")}}
+        for loc in ("#/5", "#/5/0", "#/5/1"):
+            self.assertTrue(extract_check.answers_cite("R3", loc, rows), loc)
+        for loc in ("#/50", "#/51/0", "#/4/5"):
+            self.assertFalse(extract_check.answers_cite("R3", loc, rows), loc)
+        # A deck whose key is a vertical stack, #/5/0 and #/5/1: its child slides are its key.
+        deck = ("<div class=\"reveal\"><div class=\"slides\">"
+                + "".join(f"<section>S{i}</section>" for i in range(5))
+                + "<section><section>K0</section><section>K1</section></section></div></div>")
+        self.write("sources/r3.html", deck)
+        self.write("MANIFEST.md", SOL_MANIFEST + "| R3 | `sources/r3.html` | 7 | in | yes | "
+                                                 "sections: #/5 | n/a | recitation |\n")
+        slides = "".join(f"### [R3 #/{i}] S{i}\n" for i in range(5))
+        question = "### [R3 Q1] Trace\nPages: [R3 #/3]\n\"Trace a BFS.\"\n"
+        key_slides = "### [R3 #/5/0] Solutions\n\"Q1: s, a\"\n### [R3 #/5/1] More\n\"then b\"\n"
+        self.write("_build/extract/r3.md", slides + question)
+        self.write("_build/solutions/r3.md", "### [R3 Q1] Trace\nSolution [R3 #/5/1]: s, a, b\n"
+                   + key_slides)
+        code, out = self.check()
+        self.assertEqual(code, 0, out)
+        self.assertIn("R3: 7 slides in scope, 7 with a block", out)
+        # The must-fail: #/5/1 left in the extract, and an extract line citing #/5/0.
+        self.write("_build/extract/r3.md", slides + question + "As on [R3 #/5/0].\n"
+                   + "### [R3 #/5/1] More\n\"then b\"\n")
+        self.write("_build/solutions/r3.md", "### [R3 Q1] Trace\nSolution [R3 #/5/1]: s, a, b\n"
+                   "### [R3 #/5/0] Solutions\n\"Q1: s, a\"\n")
+        code, out = self.check()
+        self.assertEqual(code, 1, out)
+        self.assertIn("_build/extract/r3.md:9: CITES AN ANSWERS PAGE: [R3 #/5/0]", out)
+        self.assertIn("_build/extract/r3.md:10: AN ANSWERS PAGE IN AN EXTRACT: [R3 #/5/1] is a key "
+                      "section of R3", out)
+
     def test_a_part_in_two_extracts_takes_either_extracts_solutions_file(self):
         # r14-1 #5: a part whose question block sits in two extracts may have its solutions block
         # beside either; any other solutions file is wrong.
