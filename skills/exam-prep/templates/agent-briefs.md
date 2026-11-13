@@ -38,19 +38,16 @@ An answers file that solves several sets (its MANIFEST.md Key cell `for HW1, HW2
 `02-extract` step 1) gets an agent of its own, from this brief with every SOLUTIONS slot kept:
 {{DOC}} names those sets, whose question pages it reads only for their part ids, and it uses
 those ids as the extracts do, `### [<set> <part>]`; {{SOLDOC}} is the answers file. Its End
-state, Artifact path and Format drop every line about the extract, and its SHARED ANSWERS slots
-are kept: it writes one solutions file per set, {{ROOT}}/_build/solutions/<name>.md under that
-set's extract `<name>`, holding that set's part blocks and, before a question's parts, a stem
-block `### [<set> Q3 stem]` for official text those parts share (a common setup, a table they
-all use), plus {{ROOT}}/_build/solutions/<answers file name>.md holding the answers file's page
-or section blocks, each holding only the line `(transcribed under the sets' blocks)` (or
-`(blank)`, `(image only: ...)` or an `UNREADABLE:` flag): every word of official text sits under
-its set's stem or part block, in that set's own file, since the questions check reads the sets'
-files alone. Each of those files gets its own first lines, `# <its one doc> solutions
-(extract)` (a header never names several docs) and a `Sources:` line, and its own closing
-`Coverage:` line. Each set's own agent gets this brief with no SOLUTIONS slot and writes only its
-extract. An agent may write several files; no file is written by two agents. An answers file
-that solves one set keeps the brief as it stands, its SHARED ANSWERS slots deleted.
+state, Artifact path and Format drop every line about the extract, and it writes one solutions
+file per set, {{ROOT}}/_build/solutions/<name>.md under that set's extract `<name>`, holding that
+set's part blocks, plus its own file, {{ROOT}}/_build/solutions/<doc id in lower case>.md
+(`hws.md` for `HWS`), holding the answers file's page or section blocks in full, as any answers
+page's block is written (its shared setups and tables included). Each of those files gets its
+own first lines, `# <its one doc> solutions (extract)` (a header never names several docs) and a
+`Sources:` line, and its own closing `Coverage:` line. Each set's own agent gets this brief with
+no SOLUTIONS slot and writes only its extract. An agent may write several files; no file is
+written by two agents. An answers file that solves one set keeps the brief as it stands: its page
+blocks go in that set's file.
 
 ```text
 # Brief: transcribe {{DOC}} {{RANGE}}{{SOLUTIONS: plus {{SOLDOC}} {{SOLRANGE}}}} into {{OUT}}
@@ -143,8 +140,10 @@ that must not see answers read the extract, so it holds none.}}
   without pages, such as a Word exam or a slide deck) "its key sections or slides, by their exact
   locators: Marking scheme, Answers (a deck's are its slides, `#/5, #/6`). Each one's block takes
   that locator, `### [PE3 Marking scheme] ...`, and goes to the solutions file, as does a block
-  whose locator is one of those names followed by ` Q...` or a comma (`### [PE3 Marking scheme
-  Q2] ...`); every other section (the instructions, a formula sheet) stays in the
+  whose locator is one of those names followed, after any spaces, by a character that is no
+  letter or digit (`### [PE3 Marking scheme (continued)]`, `[PE3 Marking scheme: Q2]`, `[PE3
+  #/5/0]`) or by `Q` and a digit (`### [PE3 Marking scheme Q2] ...`); every other section (the
+  instructions, a formula sheet, `Key formulas` under a key section `Key`) stays in the
   extract"}}. Every other page or section of {{SOLDOC}} (the cover, the rules, a formula sheet,
   an appendix table) gets its block in the extract, as any page does: the agents that must not
   see answers read those pages there.
@@ -157,11 +156,7 @@ that must not see answers read the extract, so it holds none.}}
   - First lines: `# {{DOC}} solutions (extract)`, then the extract's `Sources:` line.
   - One block per question part of {{DOC}}, in the extract's order, its header the part's own
     block id from the extract, `### [{{DOC}} Q3a]` (a title after it is optional). A stem gets
-    no block: each of its parts gets its own.{{SHARED ANSWERS: Here {{SOLDOC}} solves several
-    sets, so official text a question's parts share (a common setup, a table they all use) goes
-    under a stem block in that set's own solutions file, `### [<set> Q3 stem]`, before its
-    parts' blocks; each part still gets its own block, holding its own solution.}} The block
-    holds one of two things:
+    no block: each of its parts gets its own. The block holds one of two things:
     - the official solution on a line of its own, cited to its pages:
       `Solution [{{SOLDOC}} p.N]: ...`, or `Solution [{{SOLDOC}} <its section>]: ...` for a file
       without pages ({{SOLDOC}} is {{DOC}} when the solutions sit in the same file). It starts
@@ -172,12 +167,10 @@ that must not see answers read the extract, so it holds none.}}
   - Each answers page of {{SOLDOC}} (above) gets its own block here, never in the extract, as
     the extract's page blocks are written: `### [{{SOLDOC}} p.N] <title>`. A part's solution on
     a key page still goes under its part's block, and the key page's block holds what else is on
-    that page.{{SHARED ANSWERS: Not here: {{SOLDOC}}'s page or section blocks go in
-    {{ROOT}}/_build/solutions/<answers file name>.md, and each holds only the line
-    `(transcribed under the sets' blocks)`, or `(blank)`, `(image only: ...)` or an `UNREADABLE:`
-    flag. Every word of official text on that page goes under its set's stem or part block in the
-    set's own solutions file; the check fails any other text there (`SHARED ANSWERS PAGE HOLDS
-    TEXT`).}}
+    that page. When {{SOLDOC}} solves several sets, its page or section blocks go in its own
+    file instead, {{ROOT}}/_build/solutions/<doc id in lower case>.md, written in full the same
+    way, and each set's part blocks in that set's file, beside its extract; the check fails a
+    block in any other file (`WRONG SOLUTIONS FILE`).
   - `UNREADABLE:` flags as in the extract.
   - Last line: the extract's `Coverage:` line, for the answers pages of {{SOLDOC}}.}}
 ```
@@ -211,7 +204,11 @@ alone, so it must be correct, cover what the exam tests, and make the ideas easy
 - Sources: {{EXTRACT BLOCKS: the coverage-matrix rows that map into §{{N}}, as files and block
   ranges}} in {{ROOT}}/_build/extract/, {{SOLUTIONS FILES: the solutions files holding the
   blocks of the question parts and answers docs among them, in {{ROOT}}/_build/solutions/, each
-  part's solution under its `### [<doc> <part>]` block; or "none": drop this item}}, and {{EXAMPLES: the
+  block in its home file: a part's solution under its `### [<doc> <part>]` block in its set's
+  file, `<name>.md` beside the set's extract, read with the `### [<doc> Q3 stem]` block before
+  its parts when there is one; an answers page's block in its answers file's home, the one set's
+  file when that file solves one set, `<doc id in lower case>.md` when it solves several, the
+  file beside its own extract for a doc holding its own key; or "none": drop this item}}, and {{EXAMPLES: the
   parts of {{ROOT}}/_build/verify/examples.out.md your worked examples use}}.
 - {{PATTERNS, on a hub `11-next-exam` reopened, when the tutor log has them: Where this student
   stalled before, from the tutor log's ## Patterns, quoted: {{LINES}}. This is evidence from one
@@ -264,7 +261,8 @@ These are the Markdown forms the page's converter reads (06-site); use them exac
   can check it against the source.}}
 - Worked examples use {{the checker's data | an instance you build from the sources}}, never a
   homework's or a recitation's numbers. Quote a set's official solution only once that set's own
-  MANIFEST.md row says `attempted` (an answers file's row stays `yes`); {{UNATTEMPTED: the sets
+  MANIFEST.md row says `attempted` (an answers file's row stays `yes`) and, when its answers file
+  solves several sets, every set that file solves is attempted too; {{UNATTEMPTED: the sets
   the student hasn't attempted yet}} are read for their conventions only, never quoted. No mock key appears in the notes.
 - Depth: {{concise | full}}, as the backbone marks it. A slide-only derivation that no practice
   question asks for goes in a Background quote (Format).
@@ -347,7 +345,12 @@ main session checks each finding and applies the fixes.
 - Work in: {{ROOT}}, read only.
 - Review {{ROOT}}/notes/{{FILE}} against its extract blocks ({{EXTRACT BLOCKS}} in
   {{ROOT}}/_build/extract/) and the solutions files holding the blocks of the question parts and
-  answers docs those blocks cite ({{SOLUTIONS FILES}} in {{ROOT}}/_build/solutions/, or none), {{ROOT}}/_build/backbone.md (§{{N}} and the Conventions block) and
+  answers docs those blocks cite ({{SOLUTIONS FILES}} in {{ROOT}}/_build/solutions/, or none:
+  each part's block in its set's file, `<name>.md` beside the set's extract, read with its stem
+  block `### [<doc> Q3 stem]` when there is one, and each answers page's block in its answers
+  file's home, the one set's file when that file solves one set, `<doc id in lower case>.md`
+  when it solves several, the file beside its own extract for a doc holding its own key),
+  {{ROOT}}/_build/backbone.md (§{{N}} and the Conventions block) and
   {{ROOT}}/_build/STYLE.md. {{CHECKER: Every worked example's numbers come from
   {{ROOT}}/_build/verify/examples.out.md. | NO CHECKER: Nothing in this course is computable, so
   there is no checker output: redo every step of each worked example from its cited sources, and
@@ -370,13 +373,16 @@ main session checks each finding and applies the fixes.
   5. Wording against the official solutions: compare the section's wording with the official
      solutions of the question parts its extract blocks cover ({{ANSWER FILES: each file
      MANIFEST.md marks `Answers: yes` that solves a question part the coverage matrix maps into
-     §{{N}}, or "none": drop this item}}): each part's `### [<doc> <part>]` block, and an answers
-     doc's page blocks, in the solutions files above. Wording that tracks an official
+     §{{N}}, or "none": drop this item}}): each part's `### [<doc> <part>]` block in its set's
+     file, with its stem block when there is one, and an answers doc's page blocks in their home
+     file, as the solutions files above give them. Wording that tracks an official
      solution (its phrasing, its sentence order, its steps as it writes them) is a finding, major:
      the fix
      rewords from the slide or derives the step plainly, never paraphrases the solution (FB-071).
 - Answers: the notes quote a set's official solution only once that set's own MANIFEST.md row
-  says `attempted` (an answers file's row stays `yes`).
+  says `attempted` (an answers file's row stays `yes`) and, when its answers file solves several
+  sets, every set that file solves is attempted too; until then a quote of that file's text is a
+  blocker like any other.
   {{UNATTEMPTED: The student hasn't attempted <those sets>: their official answers sit in
   {{ROOT}}/_build/solutions/ for their conventions only, a quote from one in the notes is a blocker, and no finding
   may propose adding one. | ALL ATTEMPTED: drop this sentence.}}

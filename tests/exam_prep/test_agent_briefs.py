@@ -4,13 +4,15 @@ Hard rule 4 and FB-191 keep the answers of a set the student hasn't attempted ou
 read. Official solutions live only in `_build/solutions/`, one file per set,
 `_build/solutions/<name>.md` beside the set's extract `_build/extract/<name>.md`, which the
 set's extract agent writes, or, for an answers file that solves several sets, that file's own
-agent, which writes each set's file plus one for its own pages (FB-056, hard rule 6: no file is
-written by two agents). Pinned: the Extract brief names the solutions file, and its paragraph on
+agent, which writes each set's part blocks in that set's file plus its own pages in full in
+`_build/solutions/<doc id in lower case>.md` (FB-056, hard rule 6: no file is written by two
+agents). Pinned: the Extract brief names the solutions file, and its paragraph on
 the answers-file agent gives that layout; each answer-blind brief that reads course sources (the
 sheet gap scan, the mock writer, the audit variant behind the Must-know, sheet and cram audits)
 reads the extracts and names `_build/solutions/` only as something it never opens, keeping it
 out of its scope and its searches; no answer-blind brief reads a solutions file; the briefs that
-need a set's conventions (the writer, the section reviewer) read the solutions files; the two
+need a set's conventions (the writer, the section reviewer) read the solutions files, each block
+in its home file, never by a search across them, a part with its stem block; the two
 cold briefs open nothing under `_build/` at all. Every brief keeps the standing blocks' shape: a
 fenced text block under its heading. The backbone template and 03-backbone give the same
 no-value forms for a solutions-file correction and an erratum, since answer-blind agents read
@@ -105,21 +107,52 @@ class AnswerBlindBriefs(unittest.TestCase):
 
     def test_the_answers_file_agent_writes_one_solutions_file_per_set(self):
         """The paragraph before the Extract brief: a multi-set answers file's agent uses the sets'
-        part ids, writes one solutions file per set beside its extract plus one for its own
-        pages, each with its own Sources and Coverage lines and a header naming one doc, and
-        each set's own agent writes only its extract."""
+        part ids, writes each set's part blocks in that set's file beside its extract and its
+        own pages in full in its own file, each with its own Sources and Coverage lines and a
+        header naming one doc, and each set's own agent writes only its extract. Round 15
+        dropped the pointer-only page blocks and the SHARED ANSWERS slots."""
         text = self.briefs["## Extract (stage 02)"]
         para = text.split("```text", 1)[0].split("An answers file that solves several", 1)[1]
         para = " ".join(para.split())
         for phrase in ("`for HW1, HW2 and HW3`", "`### [<set> <part>]`",
                        "one solutions file per set",
-                       "{{ROOT}}/_build/solutions/<name>.md under that set's extract `<name>`",
-                       "{{ROOT}}/_build/solutions/<answers file name>.md",
+                       "{{ROOT}}/_build/solutions/<name>.md under that set's extract `<name>`, "
+                       "holding that set's part blocks",
+                       "its own file, {{ROOT}}/_build/solutions/<doc id in lower case>.md",
+                       "holding the answers file's page or section blocks in full",
                        "a header never names several docs", "`Sources:` line",
                        "closing `Coverage:` line", "writes only its extract",
-                       "no file is written by two agents"):
+                       "no file is written by two agents",
+                       "its page blocks go in that set's file"):
             self.assertIn(phrase, para)
         self.assertNotIn("solutions to", para)
+
+    def test_no_brief_keeps_the_pointer_layout(self):
+        """Round 15: a multi-set answers file's pages are held in full in its own file, so no
+        brief keeps the SHARED ANSWERS slots or the pointer line."""
+        with open(BRIEFS, encoding="utf-8") as f:
+            text = f.read()
+        for old in ("SHARED ANSWERS", "(transcribed under the sets' blocks)",
+                    "<answers file name>"):
+            self.assertNotIn(old, text)
+        extract = " ".join(self.briefs["## Extract (stage 02)"].split())
+        self.assertIn("its page or section blocks go in its own file instead, "
+                      "{{ROOT}}/_build/solutions/<doc id in lower case>.md", extract)
+        self.assertIn("(`WRONG SOLUTIONS FILE`)", extract)
+
+    def test_the_readers_find_each_block_in_its_home_file(self):
+        """The Write and Review briefs find a part's solution in its set's file, with its stem
+        block, and an answers page's block in its answers file's home, by the rule, never by a
+        search across the solutions files (r15-2 #1)."""
+        for name in ("## Write (stage 04)", "## Review (stage 05)"):
+            flat = " ".join(self.briefs[name].split())
+            for phrase in ("`<name>.md` beside the set's extract",
+                           "`### [<doc> Q3 stem]`",
+                           "the one set's file when that file solves one set",
+                           "`<doc id in lower case>.md` when it solves several",
+                           "the file beside its own extract for a doc holding its own key"):
+                self.assertIn(phrase, flat, (name, phrase))
+            self.assertNotIn("_build/solutions/*.md", flat, name)
 
     def test_the_extract_brief_writes_the_solutions_file(self):
         text = self.briefs["## Extract (stage 02)"]

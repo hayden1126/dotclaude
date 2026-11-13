@@ -45,9 +45,8 @@ Topic cuts: {{none | one line each:}}
     `_build/solutions/`, one file per set, `_build/solutions/<name>.md` beside each set's extract
     `_build/extract/<name>.md` (each part's solution under its part; a separate answers file's
     pages, or a past exam's key pages or sections), never into an extract. An answers file that
-    solves several sets keeps its own pages in `_build/solutions/<answers file name>.md`, each
-    holding only the line `(transcribed under the sets' blocks)`: its text sits in each set's own
-    file. A past exam's other pages (the cover, the rules, a formula sheet) stay in its extract
+    solves several sets keeps each set's part solutions in that set's file and its own pages, in
+    full, in `_build/solutions/<doc id in lower case>.md`. A past exam's other pages (the cover, the rules, a formula sheet) stay in its extract
     (`02-extract`). Mock writers never read `_build/solutions/`.
   - Nothing published quotes a set's official solution until the student has attempted every part
     of that set, which the set's own row then records in its Answers cell: `no, attempted
@@ -55,7 +54,8 @@ Topic cuts: {{none | one line each:}}
     doc holding its own key (a past exam). A separate answers file's row (Key `for ...`) stays
     `yes` and never records an attempt, since it may solve several sets. Until the
     set's own row says `attempted`, `05-verify` step 5's questions check treats it as
-    unattempted.
+    unattempted, and it reads a multi-set answers file's own file while any set that file solves
+    is unattempted.
 - **Key:** what an Answers `yes` row answers and where its answers sit. `01-ingest` writes it after
   looking at the file, in exactly one of these forms, and `extract_check.py` reads the whole cell:
   - empty or `-`: not an answers doc (and a `pending` row until its file arrives);
@@ -69,7 +69,9 @@ Topic cuts: {{none | one line each:}}
   - `sections: Marking scheme, Answers`: a source without pages, a Word file or a slide deck,
     whose key is the sections or slides with exactly those locators (`### [PE3 Marking scheme]
     ...`; a deck's slides as `sections: #/5, #/6`); a block whose locator is such a name
-    followed by ` Q...` or a comma is key material too. A paged doc fails it (`SECTIONS KEY ON A
+    followed by a character that is no letter or digit (`Marking scheme (continued)`, `Marking
+    scheme: Q2`, `#/5/0`) or by `Q` and a digit (`Marking scheme Q2`) is key material too, and
+    `Key formulas` under `sections: Key` is not. A paged doc fails it (`SECTIONS KEY ON A
     PAGED DOC`).
   - `extract_check.py` fails an in-scope Answers `yes` row with an empty Key cell (`NO KEY`),
     any other wording (`UNREAD KEY`), and a filled Key cell on a row whose Answers isn't `yes`

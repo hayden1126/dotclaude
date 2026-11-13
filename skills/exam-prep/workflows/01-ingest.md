@@ -69,9 +69,10 @@ Answers `yes` row with no Key form (`NO KEY`), a cell in any other wording (`UNR
 name that is no doc id (`KEY NAMES NO DOC`), a `for ...` cell naming its own row
 (`KEY NAMES ITS OWN DOC`), a filled cell on a row whose Answers isn't `yes`
 (`KEY WITHOUT ANSWERS`), `sections: ...` on a doc with pages (`SECTIONS KEY ON A PAGED DOC`) and
-`p.` or `pp.` on a doc without them (`PAGES KEY ON AN UNPAGED DOC`). Once extracted, a multi-set
-answers file's own page blocks hold only a pointer line (`SHARED ANSWERS PAGE HOLDS TEXT`
-otherwise, `02-extract` step 3).
+`p.` or `pp.` on a doc without them (`PAGES KEY ON AN UNPAGED DOC`). The Key cell also sets
+each answers block's home file: a multi-set answers file's own pages go in
+`_build/solutions/<doc id in lower case>.md` (`WRONG SOLUTIONS FILE` otherwise, `02-extract`
+step 3).
 
 ## Step 4: Originals
 

@@ -110,11 +110,11 @@ Settle it before the first part:
   `inline` or `sections: ...`, a past exam with its key): the part's block, `### [<doc> <part>]`,
   in `_build/solutions/<name>.md`, `<name>` being the set's extract name (find the line with
   `grep -n -F '### [<doc> <part>]' _build/solutions/<name>.md`), its `Solution [` line and the
-  working under it. When the set's answers file solves several sets, the official text the
-  question's parts share sits in the same file under the stem block, `### [<doc> Q3 stem]`
-  before the parts' blocks: read it with the part's block. The answers file's own file,
-  `_build/solutions/<answers file name>.md`, holds only pointer lines and is never the source. A
-  block reading `No official solution.` sends the part to the next source.
+  working under it, read with the stem block `### [<doc> Q3 stem]` before the parts when there
+  is one, plus the answers file's page blocks the `Solution [` line cites, in their home file:
+  the set's own file when the answers file solves that set alone or the set holds its own key,
+  `_build/solutions/<doc id in lower case>.md` when it solves several sets (`02-extract`, "The
+  solutions file"). A block reading `No official solution.` sends the part to the next source.
 - Any other set, with a checker: its values from the reference, before the first part (hard rule 3),
   once `selftest.py` prints `ALL PASS` (`05-verify` step 1) and no build runs (Step 1). Copy
   `<skill>/templates/verify-set-key.py` to `_build/verify/set_key.py` once, add the set's doc id to
@@ -449,7 +449,8 @@ answers file's row, which may solve several sets.
   holds its own key (Answers `yes`, a past exam) becomes `yes, attempted YYYY-MM-DD`. A separate
   answers file's row (Key `for ...`) stays `yes` and never records an attempt,
   since it may solve several sets. The notes and sheets may quote the set's official solution from
-  then on (`04-write`), and `05-verify` step 5's questions check reads these cells. A check
+  then on (`04-write`), or, when its answers file solves several sets, once every set that file
+  solves is attempted (until then the questions check still reads that file's own file), and `05-verify` step 5's questions check reads these cells. A check
   waiting on the set (Step 6) runs then. During a build the cell waits under `## Waiting checks`
   for the build's end (Step 1).
 - Once a set is attempted (its own row's Answers cell reads `no, attempted YYYY-MM-DD` or `yes,
