@@ -198,11 +198,14 @@ STATUS).
      `its own file, since it solves several sets`, `beside its own extract`): any page of a
      separate answers file, or a key page or key section its Key cell names (a locator that is a
      key section's name followed, after any spaces, by nothing, a character that is no letter or
-     digit, or `Q` and a digit, included). When the block has no home (its set has no block in
-     any extract), the line names this extract's own solutions file, `_build/solutions/<name>.md`,
-     with no `<why>`, and the moved block then fails `NO HOME FILE`: its fix applies, extracting
-     the set when it is in scope, else the `KEY NAMES A SET NOT IN SCOPE` fix (drop the set from
-     the answers file's Key cell, or give the answers file the set's Scope);
+     digit, or `Q` and a digit, included). When the block has no home, the line names this
+     extract's own solutions file, `_build/solutions/<name>.md`, with no `<why>`. When its set
+     is in scope but has no block in any extract, the moved block then fails `NO HOME FILE`:
+     extract the set. When its set is `pending`, `reserved` or `out`, no home rule applies, so
+     the moved block fails no `NO HOME FILE`; the answers file's MANIFEST row fails `KEY NAMES A
+     SET NOT IN SCOPE` instead, and that fix applies (drop the set from the Key cell and cut its
+     pages from the answers file's Scope, or give the answers file the set's Scope; an answers
+     file that solves that set alone has only the second);
 
    `SOLUTION IN AN EXTRACT` holds for any extract block, a lecture's too, when its `Solution [`
    or `**Solution...**` line cites a solved or answers doc; and the lines above a file's first
@@ -225,7 +228,9 @@ STATUS).
    - `<doc>: KEY NAMES A SET NOT IN SCOPE: <SET> is <pending|reserved|out>: drop it from the Key cell and cut its pages from <doc>'s Scope, or give <doc> the same Scope`:
      a `for ...` cell names a set whose row is `pending`, `reserved` or `out`. An answers file
      solves only in-scope sets: drop the set from the cell and cut its pages from the answers
-     file's Scope (`in, PDF pp.A-B`), or give the answers file the set's Scope. A `pending` set's
+     file's Scope (`in, PDF pp.A-B`), or give the answers file the set's Scope. When the Key
+     cell names that set alone, the line ends `...: give <doc> the same Scope`, its only fix,
+     since dropping the set would leave the answers file solving nothing. A `pending` set's
      answers file then waits with it and is extracted once the set arrives (`01-ingest` step 5).
    - `<doc>: KEY WITHOUT ANSWERS: its Key cell is filled but Answers isn't yes`: either the file
      holds answers (set Answers to `yes`) or it doesn't (empty the Key cell, or write `-`).
