@@ -206,6 +206,11 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     later (one in the second the previous holder released). A long wait can starve to its
     timeout. Fix shape: a ticket queue (a waiter writes a ticket, and only the oldest live ticket
     may take the lock; a fresh caller queues behind it). Not picked yet; a lane after Nov 16.
+  - **The 5-hour usage limit is gone for Hayden's account** (Hayden, 2026-11-12: no longer on
+    claude.ai Settings > Usage; Claude Code 2.1.323's changelog announces no change; the weekly
+    limit stays). Drop the `5h:` widget from `statusline/ccstatusline-settings.json` (keep the
+    weekly one), and fix "5h/7d quota" in `README.md` and `hooks/session-summary.sh` to the
+    weekly quota. Small; rides the first PR after Nov 16.
   - **Links in tmux panes don't open** (Hayden, 2026-11-11): tmux 3.7c drops OSC 8 hyperlinks
     unless the outer terminal has the `hyperlinks` feature, and Windows Terminal isn't
     auto-detected (`tmux list-clients -F '#{client_termfeatures}'` showed none). The lead set
