@@ -70,7 +70,9 @@ in the extract's form, for the blocks it holds. Between them:
   and in `_build/solutions/<answers file name>.md` when it solves several, and each key page or
   key section of a doc holding its own key that its Key cell names (below).
 
-`UNREADABLE:` flags and `(illegible at 300 dpi: ...)` work in it as in an extract.
+`UNREADABLE:` flags and `(illegible at 300 dpi: ...)` work in it as in an extract. An erratum
+(an official answer that is wrong) is the main session's alone: an `Erratum: ...` line under the
+part's `Solution [` line, the official line kept (`05-verify` step 1).
 
 The solved docs come from MANIFEST's Key column (`01-ingest` step 3 writes it; Notes are free
 text and nothing reads them for this), on in-scope rows (Scope `in` or `concepts only`) whose
