@@ -13,8 +13,10 @@ What counts as an answer, by the extract format (02-extract, "Solutions in an ex
   `#### Solution` heading, either with a list or quote mark before it), through the end of its
   block: the next `### [<doc> <locator>]` header, the closing `Coverage:` line, or the end of the
   file. A closed fence's lines don't end it. Fences are read as CommonMark reads them (fences()).
-  The bracketed marker, `Solution [<doc> <locator>]`, cuts wherever it sits, in a fence or not:
-  starter code never writes it. A looser marker (`**Solution:**`, a `# solution` comment) inside
+  The bracketed marker, `Solution [<doc> <locator>]` then a colon or the line's end, cuts
+  wherever it sits, in a fence or not: starter code never writes it (`solution[i + 1] = x` isn't
+  one). A cut that starts inside a closed fence keeps the fence's closing line, so the copy's
+  fences pair as the extract's do. A looser marker (`**Solution:**`, a `# solution` comment) inside
   a closed fence is code and cuts nothing, unless a fence anywhere in the file is still open at
   the next header, the `Coverage:` line or the end of the file: then the pairing can't be
   trusted, no fence exempts anything, and extract_check.py fails the extract.
@@ -39,9 +41,12 @@ import sys
 SOLUTION = re.compile(r"^[-*>#\s]*(?:\*\*)?(?:official\s+)?solutions?\b(?:\*\*)?\s*(?:\[|:|\*\*|$)",
                       re.I)
 # The extract format's own marker (02-extract, the extract brief): `Solution [<doc> <locator>]`,
-# with a list or quote mark before it. It cuts even inside a fence.
+# with a list or quote mark before it, bold around the word or the whole marker, and then a colon
+# or the end of the line (more cites may come first). It cuts even inside a fence. The tail keeps
+# starter code such as `solution[i + 1] = best(i)` from reading as one.
+CITED = r"\[[A-Za-z0-9_.-]+\s+[^\]\s][^\]]*\]"
 BRACKETED = re.compile(r"^[-*>#\s]*(?:\*\*)?(?:official\s+)?solutions?(?:\*\*)?\s*"
-                       r"\[[A-Za-z0-9_.-]+\s+[^\]\s][^\]]*\]", re.I)
+                       + CITED + r"(?:\s*" + CITED + r")*(?:\*\*)?\s*(?::|$)", re.I)
 BLOCK = re.compile(r"^###\s+\[(?P<doc>[A-Za-z0-9_.-]+)\s+(?P<loc>[^\]]+)\]")
 QUESTION = re.compile(r"Q[\w.]+(?: stem)?")
 PAGE_LOC = re.compile(r"p\.(\d+)(?:-(\d+))?")
@@ -68,14 +73,13 @@ def load(name):
     return module
 
 
-def fences(lines):
-    """(the indices of the lines in a closed code fence, its fence lines included; the index of
-    each fence opener that never closes). Fences follow CommonMark (OPENER, CLOSER): a line with
-    an info string or 4+ spaces of indent never closes one. A fence still open at the next block
-    header or `Coverage:` line ends there, and one open there or at the end of the file (a
-    forgotten closing fence, four backticks opened and three closed) is unclosed: strip() then
-    exempts nothing anywhere in the file (fail closed)."""
-    out, unclosed, start, mark = set(), [], None, None
+def fence_spans(lines):
+    """([(opener index, closer index)] for each closed code fence; the index of each fence opener
+    that never closes). Fences follow CommonMark (OPENER, CLOSER): a line with an info string or
+    4+ spaces of indent never closes one. A fence still open at the next block header or
+    `Coverage:` line ends there, and one open there or at the end of the file (a forgotten closing
+    fence, four backticks opened and three closed) is unclosed."""
+    spans, unclosed, start, mark = [], [], None, None
     for i, line in enumerate(lines):
         line = line.rstrip("\r\n")
         if start is not None and (BLOCK.match(line) or COVERAGE.match(line)):
@@ -88,11 +92,19 @@ def fences(lines):
             continue
         f = CLOSER.match(line)
         if f and f.group("mark")[0] == mark[0] and len(f.group("mark")) >= len(mark):
-            out.update(range(start, i + 1))
+            spans.append((start, i))
             start = None
     if start is not None:
         unclosed.append(start)
-    return out, unclosed
+    return spans, unclosed
+
+
+def fences(lines):
+    """(the indices of the lines in a closed code fence, its fence lines included; the index of
+    each fence opener that never closes), as fence_spans() pairs them. An unclosed fence anywhere
+    makes strip() exempt nothing anywhere in the file (fail closed)."""
+    spans, unclosed = fence_spans(lines)
+    return {i for start, end in spans for i in range(start, end + 1)}, unclosed
 
 
 def fenced(lines):
@@ -146,21 +158,30 @@ def question_pages(lines, segs):
     return out
 
 
-def strip(text, rows):
-    """(the text with every answer taken out, [(line number, why)] for each run removed, whether
-    it holds a block of an Answers `yes` doc). `rows` is extract_check.manifest_rows()."""
+def cuts(text, rows):
+    """(the text's lines, whether each is kept, [(first line, end, why)] for each run taken out,
+    whether it holds a block of an Answers `yes` doc). A run that starts inside a closed fence
+    keeps that fence's closing line, so the copy pairs its fences as the extract does."""
     lines = text.splitlines(keepends=True)
+    spans = fence_spans(lines)[0]
     code = fenced(lines)
     segs = segments(lines, code)
     qpages = question_pages(lines, segs)
-    keep, removed, answers_doc = [True] * len(lines), [], False
+    keep, runs, answers_doc = [True] * len(lines), [], False
+
+    def drop(cut, end, why):
+        keep[cut:end] = [False] * (end - cut)
+        for opener, closer in spans:
+            if opener < cut < closer < end:
+                keep[closer] = True
+        runs.append((cut, end, why))
+
     for kind, start, end, m in segs:
         if kind != "block":
             if kind == "pre":
                 cut = next((i for i in range(start, end) if marker(lines[i], code, i)), None)
                 if cut is not None:
-                    keep[cut:end] = [False] * (end - cut)
-                    removed.append((cut + 1, "a solution before the first block"))
+                    drop(cut, end, "a solution before the first block")
             continue
         doc, loc = m.group("doc"), m.group("loc").strip()
         row = rows.get(doc) or {}
@@ -176,14 +197,40 @@ def strip(text, rows):
                 if not pages or not pages <= qpages.get(doc, set()):
                     why = f"a block of {doc} (answers yes) on no question part's page"
             if why:
-                keep[start:end] = [False] * (end - start)
-                removed.append((start + 1, why))
+                drop(start, end, why)
                 continue
         cut = next((i for i in range(start + 1, end) if marker(lines[i], code, i)), None)
         if cut is not None:
-            keep[cut:end] = [False] * (end - cut)
-            removed.append((cut + 1, f"the solution in [{doc} {loc}]"))
-    return "".join(line for line, k in zip(lines, keep) if k), removed, answers_doc
+            drop(cut, end, f"the solution in [{doc} {loc}]")
+    return lines, keep, runs, answers_doc
+
+
+def strip(text, rows):
+    """(the text with every answer taken out, [(line number, why)] for each run removed, whether
+    it holds a block of an Answers `yes` doc). `rows` is extract_check.manifest_rows()."""
+    lines, keep, runs, answers_doc = cuts(text, rows)
+    body = "".join(line for line, k in zip(lines, keep) if k)
+    return body, [(cut + 1, why) for cut, _, why in runs], answers_doc
+
+
+def bare(line):
+    """A line without its blanks and leading list or quote marks, for answer_lines()."""
+    return re.sub(r"^[-*+>\s]+", "", line).strip()
+
+
+def answer_lines(text, rows):
+    """{bare() of a line strip() takes out: why}, leaving out blank lines and any line the copy
+    keeps elsewhere (a closing fence, a repeated phrase): extract_check.py names an answer the
+    copy holds by these."""
+    lines, keep, runs, _ = cuts(text, rows)
+    kept = {bare(line) for line, k in zip(lines, keep) if k}
+    out = {}
+    for cut, end, why in runs:
+        for i in range(cut, end):
+            line = bare(lines[i])
+            if not keep[i] and line and line not in kept:
+                out.setdefault(line, why)
+    return out
 
 
 def due(text, rows):

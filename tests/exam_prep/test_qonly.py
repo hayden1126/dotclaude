@@ -7,9 +7,12 @@ holds no solution line or answers-file block; a past exam with its key in the sa
 its question pages and drops its key page; a rerun is a no-op and a copy whose extract no longer
 holds answers is removed; a code fence that never closes hides no solution marker after it;
 fences pair as CommonMark pairs them (a line with an info string or 4+ spaces of indent closes
-nothing) and the bracketed `Solution [<doc> <loc>]` marker cuts even inside a fence;
-extract_check.py fails a copy with a solution line (naming file and line), a missing copy, a stale
-one and an extract's unclosed fence (naming file and line), and passes the copy qonly.py wrote."""
+nothing) and the bracketed `Solution [<doc> <loc>]` marker, in every form the extract brief
+writes, cuts even inside a fence, keeping that fence's closing line, while starter code such as
+`solution[i + 1] = x` cuts nothing; extract_check.py compares a copy with what qonly.py writes
+now and fails a copy with a solution line (naming file and line), a hand-edited one, a missing
+copy, a stale one and an extract's unclosed fence (naming file and line), and passes the copy
+qonly.py wrote."""
 import contextlib
 import importlib.util
 import io
@@ -267,12 +270,82 @@ class QOnly(unittest.TestCase):
             text = "### [HW1 Q1] x\nWrite f.\n```\n" + mark + "\n```\nafter\n"
             due, body = qonly.due(text, {})
             self.assertTrue(due, mark)
-            self.assertEqual(body, "### [HW1 Q1] x\nWrite f.\n```\n", mark)
+            # The fence's closing line stays, so the copy's fences pair as the extract's do.
+            self.assertEqual(body, "### [HW1 Q1] x\nWrite f.\n```\n```\n", mark)
         # A looser marker in the same fence is code (round 1), and so is a bracket that isn't
         # the format's `[<doc> <locator>]`.
         for mark in ("**Solution:** 42", "# solution", "solutions [i] = 3"):
             text = "### [HW1 Q1] x\n```\n" + mark + "\n```\n"
             self.assertEqual(qonly.due(text, {}), (False, text), mark)
+
+    def test_a_cut_inside_a_fence_keeps_its_closer(self):
+        # The cut used to take the fence's closing line with it: the copy then held an unclosed
+        # opener, so stripping it again exempted no fence and read a later block's `# solution`
+        # comment as an answer, which no rerun of qonly.py could clear.
+        qonly = load("qonly")
+        f = "```"
+        text = "\n".join(["### [HW1 Q1] x", "Write f.", f, "Solution [HW1S Q1]: 42", f,
+                          "### [HW1 Q2] y", f + "python", "# solution", f]) + "\n"
+        due, body = qonly.due(text, {})
+        self.assertTrue(due)
+        self.assertEqual(body, "\n".join(["### [HW1 Q1] x", "Write f.", f, f, "### [HW1 Q2] y",
+                                          f + "python", "# solution", f]) + "\n")
+        self.assertEqual(qonly.fences(body.splitlines(keepends=True))[1], [])
+        self.assertEqual(qonly.strip(body, {})[1], [])
+        # End to end: the copy qonly.py writes passes the check.
+        self.write("_build/extract/d1.md", text)
+        self.qonly()
+        code, out = self.check()
+        self.assertEqual(code, 0, out)
+        self.assertNotIn("ANSWER IN A QUESTION-ONLY COPY", out)
+
+    def test_extract_check_fails_a_copy_qonly_did_not_write(self):
+        # The check compares a copy with what qonly.py writes now: a hand edit fails though it
+        # holds no answer, and so does a question line gone missing.
+        self.qonly()
+        copy = self.read("_build/q-only/hw1.md")
+        edited = copy.replace('"Show your work."', '"Show your working."')
+        self.write("_build/q-only/hw1.md", edited)
+        line = edited.splitlines().index('"Show your working."') + 1
+        code, out = self.check()
+        self.assertEqual(code, 1, out)
+        self.assertIn(f"_build/q-only/hw1.md:{line}: DIFFERS from what qonly.py writes", out)
+        self.assertNotIn("STALE", out)
+        self.write("_build/q-only/hw1.md", copy.replace("**Conventions:** none\n", ""))
+        code, out = self.check()
+        self.assertEqual(code, 1, out)
+        self.assertIn("_build/q-only/hw1.md:", out)
+        self.assertIn("DIFFERS from what qonly.py writes", out)
+        self.qonly()
+        self.assertEqual(self.check()[0], 0)
+
+    def test_starter_code_indexing_a_solution_array_cuts_nothing(self):
+        # `solution[i + 1]` has the bracketed marker's shape up to its `]`, but no colon or line
+        # end follows: it used to cut the rest of the block, part (b) with it.
+        qonly = load("qonly")
+        f = "```"
+        text = "\n".join(["### [HW1 Q2] Fill the table", "(a) Complete the code.", f + "python",
+                          "for i in range(n):", "    solution[i + 1] = best(i)", f,
+                          "(b) Give its running time."]) + "\n"
+        self.assertEqual(qonly.due(text, {}), (False, text))
+
+    def test_every_documented_marker_form_cuts_inside_a_fence(self):
+        # The extract brief's `Solution [<soldoc> p.N]: ...` and `Solution [<soldoc> <section>]:
+        # ...`, with a list, quote or heading mark before it, bold, more than one cite, or alone.
+        qonly = load("qonly")
+        for mark in ("Solution [HW1S p.1]: 42", "Solution [HW1S sec 2]: 42",
+                     "Solution [HW1S p.1-2]: 42", "- Solution [HW1S Q1]: 42",
+                     "* Solution [HW1S p.1]: 42", "> Solution [HW1S p.1]: 42",
+                     "#### Solution [HW1S sec 2]: 42", "**Solution [HW1S p.1]:** 42",
+                     "**Solution [HW1S p.1]**: 42", "**Solution** [HW1S p.1]: 42",
+                     "Official solution [HW1S p.1]: 42", "Solution [HW1S p.1] [HW1S p.2]: 42",
+                     "Solution [HW1S p.1]:", "Solution [HW1S p.1]", "solutions [HW1S p.1]: 42"):
+            text = "### [HW1 Q1] x\nWrite f.\n```\n" + mark + "\nmore\n```\nafter\n"
+            due, body = qonly.due(text, {})
+            self.assertTrue(due, mark)
+            self.assertEqual(body, "### [HW1 Q1] x\nWrite f.\n```\n```\n", mark)
+        for line in ("solution[i + 1] = best(i)", "solution [i + 1] = 2", "Solution [a b] + 1"):
+            self.assertFalse(qonly.BRACKETED.match(line), line)
 
     def test_extract_check_fails_an_extract_with_a_fence_that_never_closes(self):
         self.write("_build/extract/d1.md", '### [HW1 p.2] a page\n"no answer here"\n````\ncode\n```\n')

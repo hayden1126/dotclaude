@@ -39,11 +39,14 @@ flag, a Scope it can't read, any block for a `reserved` doc (FB-023) or for a `p
 file has arrived: give it a real Scope); 0 otherwise. Blocks for a doc id MANIFEST lacks, or for
 an `out` row, are warnings.
 
-The question-only copies (qonly.py, hard rule 4, FB-056): it also fails, naming the file and line, on a
-`_build/q-only/` file that still holds a solution or an answers file's block (anything qonly.py
-would take out), and on an extract that holds answers with no copy, or with a copy whose first
-line names another SHA-256 than the extract's (stale: the extract changed after qonly.py ran),
-and on an extract's code fence that never closes before the next block header, the `Coverage:`
+The question-only copies (qonly.py, hard rule 4, FB-056): a copy of an extract that holds
+answers must be exactly what qonly.py writes from that extract now (its first line, then
+qonly.due()'s text); the check compares the two and never strips the copy again. It fails, naming
+the file and line, on an extract that holds answers with no copy; on a copy whose first line
+names another SHA-256 than the extract's (stale: the extract changed after qonly.py ran); on a
+line in a copy that is one qonly.py takes out of the extract (an answer); and on any other
+difference (edited by hand). A copy with no extract holding answers is read as an extract
+would be and fails on anything qonly.py would take out. It also fails on an extract's code fence that never closes before the next block header, the `Coverage:`
 line or the end of the file. Fences are qonly.fences()'s, read as CommonMark reads them (a line
 with an info string or 4+ spaces of indent closes nothing), so this check and qonly.py pair them
 the same way: a closed fence hides a loose solution comment from qonly.py, never the bracketed
@@ -53,6 +56,7 @@ A copy whose extract is gone or holds no answer now is a warning. Stdlib only, p
 reveal_slice.py and qonly.py from this directory."""
 import argparse
 import contextlib
+import difflib
 import importlib.util
 import io
 import os
@@ -341,27 +345,59 @@ def qonly_check(root, rows):
                        "closes before the next block or the end of the file; close it with the "
                        "same mark (as many backticks or tildes) and rerun qonly.py")
             bad = True
-        if qonly.due(text, rows)[0]:
-            due[name] = qonly.first_line(name, src)
+        needed, body = qonly.due(text, rows)
+        if needed:
+            due[name] = (qonly.first_line(name, src) + qonly.TAIL + body,
+                         qonly.answer_lines(text, rows))
     for name in qonly.copies(root):
         rel = f"_build/q-only/{name}"
         with open(os.path.join(root, rel), encoding="utf-8") as f:
             text = f.read()
-        head, _, body = text.partition("\n")
-        offset = 1
-        if not qonly.FIRST_LINE.match(head):
-            body, offset = text, 0
-        for line, why in qonly.strip(body, rows)[1]:
-            out.append(f"{rel}:{line + offset}: ANSWER IN A QUESTION-ONLY COPY: {why}; rerun "
-                       "qonly.py")
-            bad = True
+        head = text.partition("\n")[0]
         if name not in due:
+            # Nothing to compare it with: read it as an extract (a copy qonly.py wrote is
+            # well-formed, so this finds what is left in it, not a pairing it broke).
+            body, offset = text.partition("\n")[2], 1
+            if not qonly.FIRST_LINE.match(head):
+                body, offset = text, 0
+            for line, why in qonly.strip(body, rows)[1]:
+                out.append(f"{rel}:{line + offset}: ANSWER IN A QUESTION-ONLY COPY: {why}; "
+                           "rerun qonly.py")
+                bad = True
             out.append(f"warning: {rel} has no extract holding answers now; qonly.py removes a "
                        "copy it wrote, any other file is yours to delete")
-        elif not head.startswith(due[name]):
+            continue
+        want, answers = due[name]
+        if text == want:
+            continue
+        bad = True
+        stale = not head.startswith(want.partition("\n")[0])
+        if stale:
             out.append(f"{rel}:1: STALE: _build/extract/{name} changed after its copy was "
                        "written; rerun qonly.py")
-            bad = True
+        have = text.splitlines()
+        ops = [op for op in difflib.SequenceMatcher(None, want.splitlines(), have,
+                                                    autojunk=False).get_opcodes()
+               if op[0] != "equal"]
+        # A line the copy has and qonly.py's text lacks is an answer when it is one qonly.py
+        # takes out of the extract, or reads as a solution marker.
+        leaked = []
+        for tag, _, _, j1, j2 in ops:
+            if tag == "delete":
+                continue
+            for j in range(j1, j2):
+                why = answers.get(qonly.bare(have[j]))
+                if why is None and (qonly.BRACKETED.match(have[j])
+                                    or qonly.SOLUTION.match(have[j])):
+                    why = "a solution marker"
+                if why:
+                    leaked.append(j)
+                    out.append(f"{rel}:{j + 1}: ANSWER IN A QUESTION-ONLY COPY: {why}; "
+                               "rerun qonly.py")
+        if not stale and not leaked:
+            at = min(ops[0][3], len(have) - 1) + 1 if ops else 1
+            out.append(f"{rel}:{at}: DIFFERS from what qonly.py writes from "
+                       f"_build/extract/{name} now (edited by hand?); rerun qonly.py")
     for name in sorted(set(due) - set(qonly.copies(root))):
         out.append(f"_build/extract/{name}: holds answers, NO QUESTION-ONLY COPY "
                    f"_build/q-only/{name}; run qonly.py")
