@@ -220,13 +220,13 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     - A PreToolUse(ExitPlanMode) check in `practices_check.py` refuses a plan with no
       `## Research` section: an artifact path that exists, or `none needed: <why>`. The check
       is hard, not deny-once, since one line satisfies it. A `none needed` plan that names a
-      scope trigger is denied once to confirm the skip. **Undecided (Hayden, 2026-11-13: "we
-      dont need research for every plan though for everything we build, what do you think"):**
-      a Research line on every plan, with `none needed` as the one-line default (the lead's and
-      that lane's pick: a gate keyed to wording skips silently on any plan that avoids the
-      trigger words), or only plans whose wording looks architectural. Hayden picked the plan
-      check (A) and the bar and template (C); the other repo's decision-record check (B) was
-      not picked.
+      scope trigger is denied once to confirm the skip. **Decided (Hayden, 2026-11-13, "Every plan, one line"):**
+      every plan carries a Research section, a research file or `none needed: <why>`, and a
+      skip naming a trigger is refused once. Hayden picked the plan check (A) and the bar and
+      template (C); the other repo's decision-record check (B) was not picked. Worked example
+      for the skill: the security research run copied to the private
+      `~/scratch/product-research/mcp-security-2026-11-13/`. Write a generic example from it,
+      never naming its source.
     - No hook runs before ExitPlanMode today. Unmeasured: whether a deny lands before Hayden's
       plan dialog, as it does for AskUserQuestion. Test that first.
     - The other repo's own decision-record check is theirs to file.
