@@ -263,7 +263,9 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     default, named as a third home for a setting besides the top row and QUESTIONS; drag to pan
     the zoomed render; screenshots in a mock go lossless (lossy WebP smeared small UI text);
     an "in place" type comparison that ships rendered pictures, never font files; the test
-    harness anchors on `/* ==== MOCK CONFIG`, and layout_check's WARN names per-screen controls.
+    harness anchors on `/* ==== MOCK CONFIG`, and layout_check's WARN names per-screen controls;
+    a question may declare the screens it shows on, so the shell jumps to one when it changes and
+    draws a "Shows on:" row of screen buttons in its box.
     Detail and source paths: `~/scratch/mocks-upgrade/ideas-2026-11-13.md` (private). A lane
     after Nov 16, no owner yet.
   - **The skill-copy check calls `~/.claude/skills` a copy of itself when the cwd is home**
