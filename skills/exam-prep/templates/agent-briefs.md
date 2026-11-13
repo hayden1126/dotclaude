@@ -40,8 +40,9 @@ An answers file that solves several sets (its MANIFEST.md Key cell `for HW1, HW2
 those ids as the extracts do, `### [<set> <part>]`, never with the answers file's id;
 {{SOLDOC}} is the answers file. Its End
 state, Artifact path and Format drop every line about the extract, and it writes one solutions
-file per set, {{ROOT}}/_build/solutions/<name>.md under that set's extract `<name>`, holding that
-set's part blocks, plus its own file, {{ROOT}}/_build/solutions/<doc id in lower case>.md
+file beside each extract that holds a set's blocks, {{ROOT}}/_build/solutions/<name>.md under
+that extract's `<name>`, holding the part blocks of that extract (a deck split over two
+extracts may need two for one set), plus its own file, {{ROOT}}/_build/solutions/<doc id in lower case>.md
 (`hws.md` for `HWS`), holding the answers file's page or section blocks in full, as any answers
 page's block is written (its shared setups and tables included). Each of those files gets its
 own first lines, `# <its one doc> solutions (extract)` (a header never names several docs) and a

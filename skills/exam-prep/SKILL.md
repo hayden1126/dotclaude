@@ -151,8 +151,9 @@ names (00 runs 01's Ed pull; 02 starts 05's checker).
    across; merges are single-threaded (FB-003). An extract agent writes its pair,
    `_build/extract/<name>.md` and `_build/solutions/<name>.md`, when the set's answers file
    solves that set alone (or the set holds its own key). An answers file that solves several sets
-   gets its own agent, which writes one solutions file per set, `_build/solutions/<name>.md`
-   under each set's extract name, holding that set's part blocks, plus its own file,
+   gets its own agent, which writes, for each set, one solutions file beside each extract that
+   holds the set's blocks, `_build/solutions/<name>.md` under that extract's name, holding the
+   part blocks of that extract (a deck split over two extracts may need two), plus its own file,
    `_build/solutions/<doc id in lower case>.md`, holding the answers file's page blocks in full,
    and each set's own agent, in the same wave or an earlier one, writes only its extract. No
    other agent writes any of them, and every solutions block has one home file (`02-extract`,
