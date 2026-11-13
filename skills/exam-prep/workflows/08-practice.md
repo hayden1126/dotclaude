@@ -654,8 +654,9 @@ The products, each one the hub has:
    `<root>` by the main session; it reads every page under `notes/` and `cheatsheet/` (a LaTeX
    sheet as its `.tex`), and builds its file list from MANIFEST.md's attempt marks
    (`extract_check.py --leak-files` prints it, for when a hit needs explaining) and prints
-   `QUESTIONS OK: no unattempted set` when there is none. A hit is
-   reworded with fresh numbers and setup (S7) and repeats from item 2. While a mock is untaken, also
+   `QUESTIONS OK: no unattempted set` when there is none. An exit 2 checked nothing: fix what
+   it names as `05-verify` step 5 says (MANIFEST.md, or a set to render or extract) and rerun.
+   A hit is reworded with fresh numbers and setup (S7) and repeats from item 2. While a mock is untaken, also
    the leak compare: run item 1 again and compare the hit lines with the baseline's (count them,
    since every hit on the notes reads "(the page)" and a second copy of an answer adds one). A new
    hit on a number, order or table answer is a leak: reword the change and repeat from item 2.

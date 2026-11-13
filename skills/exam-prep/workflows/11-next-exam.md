@@ -547,7 +547,8 @@ fresh session answers from STATUS, then runs step 7.5.
    value reworded by leaving the value out, its citation kept. Then that section's questions check
    prints QUESTIONS OK (FB-191), `python3 -I <skill>/scripts/mock_leak.py --hub .`
    run by the main session (the script builds its file list from MANIFEST.md's attempt
-   marks), a hit reworded the same way, before item 5's commit and republish.
+   marks; `<doc>`, rendered and never extracted, is checked against its rendered text while it
+   is an unattempted set), a hit reworded the same way, before item 5's commit and republish.
 5. **Commit**, once: the material (its notes, fragment and page), its backbone headings, its
    MANIFEST.md row and, in STATUS, `Unverified: <doc>, <section ids>, <date>` in place of the `Skip
    asked` line, with any rewording logged by its part, never a value, as "Changing the notes or a

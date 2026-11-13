@@ -141,7 +141,8 @@ says: check each claim first, and fix every copy of a fact. Then step 4 again.
 - The questions check first (FB-191), before a sheet is published or printed: `05-verify` step
   5's command, `python3 -I <skill>/scripts/mock_leak.py --hub .`, run from `<root>` by the main
   session, reads every page under `notes/` and `cheatsheet/` (a LaTeX sheet as its `.tex`) and
-  prints QUESTIONS OK, or `QUESTIONS OK: no unattempted set`. A sheet copies only the notes, yet
+  prints QUESTIONS OK, or `QUESTIONS OK: no unattempted set` (an exit 2 is fixed and rerun as
+  that step says). A sheet copies only the notes, yet
   it can still rebuild a question the student hasn't attempted: step 2's question-type scan
   drafts a worked pattern per question type from the sets' extracts, and the final sheet's
   mock-derived lines (FB-133) come from the attempts, not from the notes. A hit is a
