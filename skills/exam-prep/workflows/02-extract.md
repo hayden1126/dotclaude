@@ -13,8 +13,9 @@ transcribes and never summarizes.
   dividers into parts of at most about 45 pages; each later part's agent also reads the previous
   part's last three pages, as context only. A slide is never split between agents (FB-041).
 - **Small documents share an agent:** a homework or recitation with its official solutions (the
-  brief's SOLUTIONS slots), so each solution lands under its question (below, "Solutions in an
-  extract").
+  brief's SOLUTIONS slots). That agent writes both files of the pair, the extract and the
+  solutions file, each solution keyed by its question part's block id (below, "The solutions
+  file").
 - **By source type:** a PDF agent reads `_build/text/` and `_build/pages/`; a Word document's agent
   reads `_build/text/<doc>.md` and `_build/media/<doc>/`. A reveal deck agent reads a slice that
   the main session cuts before spawning:
@@ -35,75 +36,80 @@ cross-references. Stages that do (the writers' links) work from the backbone's f
 (FB-054).
 
 While the wave runs, the main session starts the checker (`05-verify`, step 1) from the first
-extract that holds official solutions, once its agent reports done and that extract's
-`UNREADABLE:` flags are resolved (step 3.2 for that file): the checker needs only those (a course's
-instances arrive with them), and it must reproduce them before anything uses it (FB-100).
+solutions file, once its agent reports done and the `UNREADABLE:` flags of its pair are resolved
+(step 3.2 for those files): the checker needs only those (a course's instances arrive with
+them), and it must reproduce them before anything uses it (FB-100).
 
-## Solutions in an extract
+## The solutions file
 
-A question part's official solution is the last thing in its block: its marker line, `Solution
-[<soldoc> p.N]: ...` (the extract brief's form), then whatever the solution goes on with (a
-table, a fenced trace) up to the next `### [<doc> <locator>]` header or the closing `Coverage:`
-line. Nothing of the question follows a marker inside its block, since the question-only copy
-drops everything from the marker to the block's end.
+An extract holds no answer (FB-056). The extract agent of a doc with official solutions writes a
+second file, `_build/solutions/<name>.md`, under its extract's `<name>`; no other agent writes
+either (hard rule 6). Both are tracked in the hub. The solutions file opens with
+`# <DOC> solutions (extract)` and the extract's `Sources:` line, and ends with the same
+`Coverage:` closing line as an extract, covering the answers pages. Between them:
 
-`qonly.py` cuts at a strict marker in every block: the brief's form, `**Solution:**`,
-`**Solution**`, a `#### Solution` heading, a bare `Solution:`. Wider forms cut only in a question
-part's block (never a stem's or a page's) of a doc with solutions, and only when no `**Shape:**`
-or `**Conventions:**` line follows the marker in that block, since the brief puts the solution
-last: `Worked solution`, a bold `**Answer:**` or `**Key:**`, a qualifier that names a part
-(`Solution to Q1a [<soldoc> p.N]:`, `Solution, part (a) [<soldoc> p.N]:`, `**Solution (Q1):**`),
-and an `Answer [...]:` whose cite points into answers. A qualifier that names no part
-(`**Solutions to recurrences**`, `**Solution set:**`) never cuts. Nor does a plain `Key:`,
-`Keys:` or `Answer:` (no bold, no qualifier, no cite), or an `Answer:` followed by blanks or
-underscores: such a line in question text stays, and a solution written that way is caught only
-by the unmarked-part warning below.
+- one block per question part of a solved doc, `### [HW1 Q1a]` (a title is optional), the part's
+  own block id from the extract, holding either `Solution [HW1S p.2]: ...` and its working
+  (tables, fenced traces) or the exact line `No official solution.`;
+- every page or section block of an answers doc: each block of a separate answers file
+  (`### [HW1S p.1] ...`), and each key page of a past exam (a page of an Answers `yes` doc that
+  no question part's `Pages:` line names).
 
-A doc with solutions is one MANIFEST marks Answers `yes`, one a `solutions to <doc>` note names,
-or, while an Answers `yes` row has no `solutions to` note, any doc: `extract_check.py` warns
-about that missing note, and adding it keeps the wider forms to the doc it names.
-`qonly.py --parts` counts the official parts for `05-verify`'s self-test: one per question
-part's block of a doc with solutions whose marker cuts, plus each `Solution [` line in an
-answers-file block, and never a lecture's worked example. `extract_check.py` warns (exit 0) on
-a cutting marker in those blocks (a question part's of a doc with solutions, an answers file's)
-that isn't the brief's form, so an agent writes only that one, and on a question part of a doc
-with solutions that no marker cuts (step 3.4 says what each needs). Inside a code fence only the looser forms (a `# Solution` comment, which the heading
-form also reads as, or a bare `Solution:` or `Solution` line) are code and cut nothing; the bold
-`**Solution:**` and bracketed `Solution [<doc> <loc>]:` markers cut wherever they sit, so
-question code never writes them.
+`UNREADABLE:` flags and `(illegible at 300 dpi: ...)` work in it as in an extract.
 
-A line no marker cuts that cites an answers page (any page of an answers file, of an Answers
-`yes` doc with no question part, or a key page or page-less section of a past exam: a page no
-question part's `Pages:` line names, read across every extract) is a solution worded off the
-format: `qonly.py` makes a copy due for it and `extract_check.py` fails it by file and line (a
-`Pages:` line holding nothing but cites doesn't count). A solution that cites only its own
-question page, or nothing, can't be told from question text: `extract_check.py` warns on each
-question part of a doc with solutions that no marker cuts. The reverse holds too: a question
-that quotes a document in a nested fence (a four-backtick fence holding a three-backtick line and
-a `## Solution` heading) loses everything from that heading to the block's end in the
-question-only copy. That fails safe, so it stands, but quoted material
-avoids a heading-form marker. A block of an answers file (MANIFEST's Answers `yes`) is all
-answer, except a page of a past exam's own questions, which a question part names on its
-`Pages:` line.
+The solved docs come from MANIFEST: an Answers `yes` doc with a `solutions to <doc>` note solves
+the docs it names, and one with no note solves itself (a past exam with its key).
+`python3 -I <skill>/scripts/extract_check.py --parts` prints the number of question parts whose
+solutions block holds a `Solution [` line: `05-verify`'s PARTS, never a lecture's worked example.
+
+Who reads it. Hard rule 4 and FB-191 keep the answers of a set the student hasn't attempted out
+of everything they read, so the agents that must not see answers read `_build/extract/` and never
+open or search `_build/solutions/`, whether or not the student has attempted the set: the sheet
+gap scan, the audits (Must-know, cheat sheet, cram order) and the mock writer (`agent-briefs.md`
+says so in each brief and keeps each one's searches off that folder). The cold reader and the
+cold solver open nothing under `_build/`. The extract agents, the section writers and section
+reviewers, the checker and the tutor read both folders: they need a set's conventions, and the
+briefs keep them from quoting its answers.
 
 ## Step 3: Check what came back
 
 The main session runs every check: delegated agents can't run Python or `pdfinfo`, so a check an
-agent says it ran didn't run (L07). First `git status`: it names nothing but the extracts (an
-agent that wrote anywhere else broke its brief: undo that and say so in STATUS).
+agent says it ran didn't run (L07). First `git status`: it names nothing but the extracts and
+the solutions files (an agent that wrote anywhere else broke its brief: undo that and say so in
+STATUS).
 
 1. `python3 -I <skill>/scripts/extract_check.py`. It checks every in-scope MANIFEST row against
-   the blocks: each in-scope page of a PDF rendered and with a block, each in-scope slide of a
-   deck, at least one block for any other source (the Ed digest is read as it is). It prints the
-   missing pages or slides and the image-only and `UNREADABLE:` counts per document, then each open
-   `UNREADABLE:` flag by file and line, with the re-read it needs (step 2). It fails while any
-   such flag is open; a value marked `(illegible at 300 dpi: <what>)` (step 2) is counted, and
-   doesn't fail it. A missing
+   the blocks of both folders, `_build/extract/` and `_build/solutions/`: each in-scope page of a
+   PDF rendered and with a block, each in-scope slide of a deck, at least one block for any other
+   source (the Ed digest is read as it is). It prints the missing pages or slides and the
+   image-only and `UNREADABLE:` counts per document, then each open `UNREADABLE:` flag in either
+   folder by file and line, with the re-read it needs (step 2). It fails while any such flag is
+   open; each value marked `(illegible at 300 dpi: <what>)` (step 2) is listed by file and line,
+   and doesn't fail it. A missing
    page goes back to its agent (SendMessage to its id), or the main session extracts it. Blocks
    for a `reserved` doc fail the check: delete them, and find which brief let the agent open it
    (FB-023). Blocks for a `pending` row fail too: its file has arrived, so give the row a real
    Scope (`01-ingest`, step 5). A Scope cell the check can't read fails rather than being
    guessed at. A warning about an unknown doc id is usually a typo in a header: fix the header.
+
+   It checks the pairing of the two folders ("The solutions file"), by file and line, and fails:
+   - a question part (`Q..`, not a stem) of a solved doc with a block in an extract and none in
+     any solutions file (`NO SOLUTION BLOCK: write its solution or "No official solution."`):
+     the agent that wrote the pair, or the main session, adds the part's block;
+   - a solutions block naming a part no extract has, a part with two solutions blocks, and a
+     part's block holding neither a `Solution [` line nor `No official solution.`;
+   - in an extract, a line citing an answers page (a `Pages:` line holding only cites, and the
+     closing `Coverage:` line, aside), a bracketed `Solution [<doc> <loc>]` or bold
+     `**Solution:**` line in a block of a solved doc, and a page block of an answers doc on no
+     question part's page
+     (`AN ANSWERS PAGE IN AN EXTRACT: move it to _build/solutions/<name>.md`): move the line or
+     block into its solutions file, a solution under the part it answers;
+   - an Answers `yes` doc with no question parts in any extract and no `solutions to` note: add
+     the note to its MANIFEST row.
+
+   It warns on a solutions block for a stem (each of its parts still needs its own block) and on
+   a loose `Solution:` line outside a fence in a solved doc's extract block. The main session
+   reads each: a solution moves to the solutions file, and question text stays.
 2. Resolve every `UNREADABLE:` flag and every flagged small label at 300 dpi, on a crop: a whole
    300 dpi page gets scaled down by the image viewer, which loses the gain. Find the label on the
    100 dpi image, multiply its box by 3, and crop into `_build/pages/<doc>@300dpi/` (make it
@@ -115,39 +121,12 @@ agent that wrote anywhere else broke its brief: undo that and say so in STATUS).
    page, is never guessed: replace its flag with `(illegible at 300 dpi: <what, and where on the
    page>)`, note it in STATUS as a judgment call, and ask the student for it once no `Build
    running` line stands (hard rule 1). Only the main session writes that form, after the re-read.
+   Once the student gives the value, the main session replaces the mark with it, noting
+   `(given by the student)`, reruns `extract_check.py`, then reruns the self-test
+   (`python3 -I _build/verify/selftest.py`) if the checker exists, since a value in a solutions
+   file may be one the self-test reproduces.
 3. Spot-check one diagram per deck against its page image, and check that the page numbers in the
    headers are real pages, never numbers from an agent's summary (FB-051).
-4. Write the question-only copies (FB-056) once the checks above pass: `python3 -I
-   <skill>/scripts/qonly.py`. Each extract that holds a solution, or a block of an Answers `yes`
-   doc, gets `_build/q-only/<name>.md`: the extract with every solution and answers-file block
-   taken out, the questions, figures and given data verbatim, under a first line naming the
-   extract and its SHA-256. Then rerun `extract_check.py`: until the copies exist it fails each
-   such extract as having no copy, and after any later edit to one (a resolved flag, a re-read
-   page) it fails the copy as stale until `qonly.py` runs again. It also fails, by file and line,
-   a copy that still holds a solution, and one that differs from what `qonly.py` would write now
-   (a hand edit): run `qonly.py` again. It fails, by file and line, an extract's line that no
-   marker cuts and that cites an answers page (`CITES AN ANSWERS PAGE`): a solution is rewritten
-   as `Solution [<soldoc> p.N]: ...`, question text cites the question's own page. It warns, by
-   file and line, on a marker it cuts that isn't `Solution [<doc> <loc>]:`: the main session
-   reads the line; a solution is rewritten as `Solution [<doc> <loc>]: ...` and `qonly.py` runs
-   again, and question text is left as is. It warns, by file and line, on a question part of a
-   doc with solutions that no marker cuts: the main session reads that part; a solution there
-   gets the brief's marker, and a part the official solutions skip needs nothing. It warns on an
-   Answers `yes` row with no `solutions to <doc>` note: add the note. It fails, by file and line,
-   an extract's code fence that never closes before the next block header, the closing
-   `Coverage:` line or the end of the file (no fence exempts a marker then): close it with the
-   same mark. It warns, by file and line, on
-   a looser marker left inside a fence, kept as code: the main session checks whether it starts
-   a solution (a starter fence whose closer was forgotten) and, if so, closes the fence above it
-   or rewrites the marker as `Solution [<doc> <loc>]:`. After either fix, run `qonly.py` and
-   `extract_check.py` again. Hard rule 4 and FB-191 keep the answers of a set the
-   student hasn't attempted out of everything they read, so every agent that must not see
-   answers reads the copy and never the extract for a source with solutions, whether or not the
-   student has attempted it: the sheet gap scan, the audits (Must-know, cheat sheet, cram order),
-   and the mock writer (`agent-briefs.md` names it in each brief, and keeps each one's searches
-   off that extract). The cold reader and the cold solver open nothing under `_build/`. The
-   extract and section writers, the section reviewers and the checker read the extracts, answers
-   and all: they need a set's conventions, and the briefs keep them from quoting its answers.
 
 ## Step 4: Record coverage
 
@@ -158,12 +137,14 @@ audits the second group against their images (FB-052, FB-104).
 
 ## Done when
 
-`extract_check.py` exits 0 (it fails while any `UNREADABLE:` flag is open, though not on a value
-marked `(illegible at 300 dpi: ...)`, while an extract's code fence never closes, while a line no
-marker cuts cites an answers page, or while a question-only copy is missing, stale, differs from
-`qonly.py`'s output or holds a solution), and STATUS has the coverage and each value marked
-illegible as a judgment call. Its warnings (an off-form marker, an unmarked part, an Answers
-`yes` row with no `solutions to` note, a loose marker in a fence) are each read and either fixed
-or noted in STATUS. It skips a doc on a STATUS `Unverified:` line (`11-next-exam`, "A source added
-unverified") until that doc has a block. Commit the extracts and their question-only copies:
-they are tracked in the hub, which stays local.
+`extract_check.py` exits 0 (it fails while any `UNREADABLE:` flag is open in either folder,
+though not on a value marked `(illegible at 300 dpi: ...)`, while a question part of a solved doc
+has no solutions block or a part has two, while a solutions block names no extract's part or
+holds neither a `Solution [` line nor `No official solution.`, while an extract holds a solution
+line, a line citing an answers page or a page block of an answers doc, or while an Answers `yes`
+doc with no question parts lacks its `solutions to` note), and STATUS has the coverage and each
+value marked illegible as a judgment call. Its warnings (a solutions block for a stem, a loose
+`Solution:` line in a solved doc's extract) are each read and either fixed or noted in STATUS. It
+skips a doc on a STATUS `Unverified:` line (`11-next-exam`, "A source added unverified") until
+that doc has a block. Commit the extracts and the solutions files: they are tracked in the hub,
+which stays local.
