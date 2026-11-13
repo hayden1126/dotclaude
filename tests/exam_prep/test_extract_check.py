@@ -2451,6 +2451,64 @@ class LeakFiles(unittest.TestCase):
                                           "allow _build/extract/hw1.md\n"
                                           "questions _build/extract/pe4.md\n"))
 
+    def test_extensions_are_read_in_any_case(self):
+        # r22-1 #1: a course page's `.HTML` or `.htm` is a course page, and an extract's `.MD`
+        # is an extract.
+        row = "| PE4 | `sources/{}` | - | in | yes | inline | n/a | exam |\n"
+        self.write("_build/extract/pe4.MD", "### [PE4 Q1] Trace\n")
+        for name in ("PE4.HTML", "pe4.htm"):
+            with self.subTest(name=name):
+                self.manifest(hw1="no, attempted 2026-11-01", extra=row.format(name))
+                self.write(f"sources/{name}", "<p>Q3. Run a search.</p>\n")
+                self.assertEqual(self.leak(), (0, "allow _build/extract/d1.md\n"
+                                                  "allow _build/extract/hw1.md\n"
+                                                  "questions _build/extract/pe4.MD\n"
+                                                  f"questions sources/{name}\n"))
+
+    def write_bytes(self, rel, data):
+        with open(os.path.join(self.root, rel), "wb") as f:
+            f.write(data)
+
+    def test_a_course_page_that_isnt_utf8_is_refused_never_guessed(self):
+        # r22-1 #2, the review's repro: is_deck() called a page it couldn't decode a deck, so
+        # the main check's deck_slides() crashed with a traceback and --leak-files left the page
+        # off the list without a word.
+        row = "| PE4 | `sources/pe4.html` | - | {} | {} | | yes | exam |\n"
+        self.manifest(hw1="no, attempted 2026-11-01", extra=row.format("in", "no"))
+        self.write("_build/extract/pe4.md", "### [PE4 Q1] x\n")
+        self.write("sources/pe4.html", "")
+        self.write_bytes("sources/pe4.html", b"<html><body><p>Q1 \xa9 2026</p></body></html>")
+        self.assertEqual(self.leak_err(), (2, "", "extract_check: can't read the hub: "
+                                                  "sources/pe4.html isn't UTF-8 text\n"))
+        code, out = self.leak_check()
+        self.assertEqual(code, 1, out)
+        self.assertIn("\nPE4: sources/pe4.html isn't UTF-8 text: save it as UTF-8, then rerun\n",
+                      out)
+        # A slide range skips is_deck()'s read, and deck_slides() names the same fix.
+        self.manifest(hw1="no, attempted 2026-11-01",
+                      extra=row.format("in, slides #/0-#/2", "no"))
+        self.assertIn("\nPE4: sources/pe4.html isn't UTF-8 text: save it as UTF-8, then rerun\n",
+                      self.leak_check()[1])
+        # An answers file solving an unattempted set is decided too.
+        self.manifest(hw1="no, attempted 2026-11-01",
+                      extra="| HW4 | `sources/hw4.pdf` | 1 | in | no | | yes | hw |\n"
+                            "| PE4 | `sources/pe4.html` | - | in | yes | for HW4 | yes | sol |\n")
+        self.write("_build/extract/hw4.md", "### [HW4 Q1a] Tree\nPages: [HW4 p.1]\n")
+        self.write("_build/solutions/hw4.md", "### [HW4 Q1a] Tree\nSolution [PE4 Q1a]: 42.\n")
+        self.assertEqual(self.leak_err(), (2, "", "extract_check: can't read the hub: "
+                                                  "sources/pe4.html isn't UTF-8 text\n"))
+        # Its twin: PE4 attempted while HW1 is not, so --leak-files needn't decide PE4.
+        self.manifest(extra=row.format("in", "no, attempted 2026-11-01"))
+        code, out, err = self.leak_err()
+        self.assertEqual((code, err), (0, ""))
+        self.assertNotIn("pe4.html", out)
+        # A missing course page keeps today's answer: it counts as a deck, so nothing is listed
+        # and the main check says it can't read the deck.
+        os.remove(os.path.join(self.root, "sources/pe4.html"))
+        self.manifest(hw1="no, attempted 2026-11-01", extra=row.format("in", "no"))
+        self.assertEqual(self.leak_err()[0::2], (0, ""))
+        self.assertIn("PE4: can't read the deck sources/pe4.html", self.leak_check()[1])
+
     def test_a_word_answers_files_rendered_text_is_listed_while_its_set_is_unattempted(self):
         # The same gap on the answers side: a Word answers file `for` an unattempted set.
         rows = ("| HW4 | `sources/hw4.pdf` | 1 | in | {} | | yes | hw |\n"

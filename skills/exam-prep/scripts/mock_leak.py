@@ -421,12 +421,13 @@ def reading(path, raw):
     """The file's text as its reader sees it, with the same line breaks: tags, scripts, styles
     and comments dropped from HTML (a block tag ends a sentence, a phrasing tag joins its
     neighbours), % comments and command names from LaTeX, and citation brackets from both."""
-    if path.endswith((".html", ".htm")):
+    name = path.lower()
+    if name.endswith((".html", ".htm")):
         s = re.sub(r"(?is)<(script|style)\b.*?</\1\s*>|<!--.*?-->", lambda m: " \x1e" + lines_kept(m), raw)
         s = re.sub(r"<\s*/?\s*([A-Za-z][\w-]*)?[^>]*>",
                    lambda m: ("" if (m.group(1) or "").lower() in INLINE else " \x1e ") + lines_kept(m), s)
         s = html.unescape(s)
-    elif path.endswith(".tex"):
+    elif name.endswith(".tex"):
         s = re.sub(r"(?<!\\)%[^\n]*", "", raw)
         s = re.sub(r"\\[A-Za-z]+\*?|[{}]", " ", s)
     else:
@@ -479,7 +480,7 @@ def expand(paths):
     out = []
     for p in paths:
         if os.path.isdir(p):
-            out += sorted(os.path.join(d, f) for d, _, fs in os.walk(p) for f in fs if f.endswith(SUFFIXES))
+            out += sorted(os.path.join(d, f) for d, _, fs in os.walk(p) for f in fs if f.lower().endswith(SUFFIXES))
         elif os.path.isfile(p):
             out.append(p)
         else:
@@ -525,7 +526,7 @@ def hub_pages(root):
     out = [notes] if os.path.isdir(notes) else []
     if os.path.isdir(sheets):
         out += sorted(os.path.join(sheets, f) for f in os.listdir(sheets)
-                      if f.endswith(SUFFIXES) and os.path.isfile(os.path.join(sheets, f)))
+                      if f.lower().endswith(SUFFIXES) and os.path.isfile(os.path.join(sheets, f)))
     return out
 
 
@@ -645,9 +646,9 @@ def main(argv=None):
         print(f"mock_leak: {e}", file=sys.stderr)
         return 2
     # Text, not HTML: a < in math would open a "tag". Markdown is read both ways and as written.
-    if page_path.endswith(".tex"):
+    if page_path.lower().endswith(".tex"):
         readings = [text_page(delatex(raw)), text_page(bare_tex(delatex(raw)))]
-    elif page_path.endswith(".md"):
+    elif page_path.lower().endswith(".md"):
         md = unquote(raw)
         readings = [text_page(demark(md)), text_page(demark(md, underscores=False)), text_page(raw)]
         # Inline HTML a renderer passes through (a <br> in a table cell, &shy;) as a browser shows it.

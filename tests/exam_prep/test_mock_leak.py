@@ -753,20 +753,74 @@ class HubQuestions(unittest.TestCase):
         page = f"# Rounds\n\nRecall that {KEY_TEXT}.\n"
         rc, out, err = self.hub(page_text=page)
         self.assertEqual((rc, err), (1, ""), out)
-        self.assertIn(f"words in a row match {text}:3", out)
+        # r22-2 #2: the hit names the rendered text's path:line and no part, since label() reads
+        # only Markdown headings, and this text has none.
+        self.assertIn(f"words in a row match {text}:3\n", out)
         rc, out, err = self.hub()
         self.assertEqual((rc, out, err), (0, "QUESTIONS OK: 1 pages checked against 3 question "
                                              "files\n", ""))
-        # A course page (not a deck) is read from its own source, as HTML.
+        # A course page (not a deck) is read from its own source, as HTML, and its hit names
+        # path:line alone too (an <h2> is no Markdown heading).
         self.write("MANIFEST.md", HUB_HEAD + row.format("yes").replace("pe4.docx", "pe4.html"))
         src = self.write("sources/pe4.html", f"<html><body><h2>Q3</h2>\n<p>Show that {KEY_TEXT}."
                                              "</p></body></html>\n")
         rc, out, err = self.hub(page_text=page)
         self.assertEqual((rc, err), (1, ""), out)
-        self.assertIn(f"words in a row match {src}:2", out)
+        self.assertIn(f"words in a row match {src}:2\n", out)
         # Its twin: PE4 attempted, nothing is read.
         self.write("MANIFEST.md", HUB_HEAD + row.format("yes, attempted 2026-11-01"))
         self.assertEqual(self.hub(page_text=page)[:2], (0, "QUESTIONS OK: no unattempted set\n"))
+
+    def test_a_course_pages_extension_is_read_in_any_case(self):
+        # r22-1 #1, the review's repro: reading() tested `.html` case-sensitively, so PE4.HTML
+        # was read as raw text, its inline tags broke the 8-word runs, and the copy passed.
+        row = "| PE4 | `sources/{}` | - | in | {} | inline | yes | exam |\n"
+        self.write("_build/extract/pe4.md", "### [PE4 Q1] Trace\n")
+        self.write("_build/solutions/pe4.md", "### [PE4 Q1] Trace\nSolution [PE4 Q1]: s.\n")
+        page = "Run a search from the depot to every customer and report the total.\n"
+        for name in ("PE4.HTML", "pe4.htm", "pe4.Html"):
+            with self.subTest(name=name):
+                self.write("MANIFEST.md", HUB_HEAD + row.format(name, "yes"))
+                src = self.write(f"sources/{name}", "<p>Run a <em>search</em> from the depot to "
+                                                    "<b>every</b> customer and report the total</p>")
+                rc, out, err = self.hub(page_text=page)
+                self.assertEqual((rc, err), (1, ""), out)
+                self.assertIn(f"words in a row match {src}:1\n", out)
+                os.remove(src)
+        # Its twin: PE4 attempted, nothing is read.
+        self.write("MANIFEST.md", HUB_HEAD + row.format("PE4.HTML", "yes, attempted 2026-11-01"))
+        self.assertEqual(self.hub(page_text=page)[:2], (0, "QUESTIONS OK: no unattempted set\n"))
+
+    def test_a_page_with_an_upper_case_extension_is_checked(self):
+        # The same case test picked the pages: notes/sec2.HTML was never read, so its copy passed.
+        self.write("MANIFEST.md", HUB_HEAD + "| HW1 | `sources/hw1.pdf` | 1 | in | no | | yes | |\n")
+        ext = self.write("_build/extract/hw1.md", f"### [HW1 Q1a] Round\n\"{KEY_TEXT}\"\n")
+        self.write("notes/sec1.md", "Nothing from any set here.\n")
+        page = self.write("notes/sec2.HTML", f"<p>Recall that {KEY_TEXT}.</p>\n")
+        rc, out, err = self.bare_hub()
+        self.assertEqual((rc, err), (1, ""), out)
+        self.assertIn(f"{page}:1: ", out)
+        self.assertIn(f"words in a row match {ext}:2", out)
+        # Its twin: without the copy it passes.
+        self.write("notes/sec2.HTML", "<p>Nothing here.</p>\n")
+        self.assertEqual(self.bare_hub()[:2], (0, "QUESTIONS OK: 2 pages checked against 1 "
+                                                  "question files\n"))
+
+    def test_a_course_page_that_isnt_utf8_is_bad_usage(self):
+        # r22-1 #2, the review's repro: is_deck() called an unreadable page a deck, so --hub left
+        # it off the list without a word. What it is can't be told, so --hub refuses.
+        row = "| PE4 | `sources/pe4.html` | - | in | {} | | yes | exam |\n"
+        self.write("MANIFEST.md", HUB_HEAD + row.format("no"))
+        self.write("_build/extract/pe4.md", "### [PE4 Q1] x\n")
+        with open(self.write("sources/pe4.html", ""), "wb") as f:
+            f.write(b"<html><body><p>Q1 \xa9 2026</p></body></html>")
+        rc, out, err = self.hub()
+        self.assertEqual((rc, out), (2, ""), err)
+        self.assertEqual(err, f"mock_leak: can't read the hub {os.path.abspath(self.root)}: "
+                              "sources/pe4.html isn't UTF-8 text\n")
+        # Its twin: PE4 attempted, --hub needn't decide it, so it stays silent.
+        self.write("MANIFEST.md", HUB_HEAD + row.format("no, attempted 2026-11-01"))
+        self.assertEqual(self.hub(), (0, "QUESTIONS OK: no unattempted set\n", ""))
 
     def test_an_unverified_row_with_an_unread_key_is_a_set(self):
         # r20-1 #2, the review's repro: PE5's Key `pages 2` is no Key form, so it was no set, and

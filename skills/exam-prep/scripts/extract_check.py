@@ -179,8 +179,10 @@ solutions file (one added late), prints `no file holds <doc>, the answers to an 
 reasons joined with `; `, and it exits 2. With no unattempted set it prints nothing. It exits 0;
 2 with no MANIFEST.md, one with no rows under a header it knows (the main check's reason, on
 stderr), a doc it must read that no file holds (above), or an extract or solutions file that isn't
-UTF-8 (`can't read the hub: <file> isn't UTF-8 text`, as mock_leak.py --hub says); 1 on a
-MANIFEST.md it can't read.
+UTF-8, or a course page it must decide (an unattempted set's, or an answers file's solving one)
+that isn't (`can't read the hub: <file> isn't UTF-8 text`, as mock_leak.py --hub says); 1 on a
+MANIFEST.md it can't read. The main check fails a doc whose .html source isn't UTF-8 with
+`<DOC>: <file> isn't UTF-8 text: save it as UTF-8, then rerun`, never guessing what it holds.
 Stdlib only, plus reveal_slice.py from this directory."""
 import argparse
 import contextlib
@@ -484,7 +486,7 @@ def files(root, kind):
     d = os.path.join(root, "_build", kind)
     out = []
     for name in sorted(os.listdir(d)) if os.path.isdir(d) else []:
-        if name.endswith(".md"):
+        if name.lower().endswith(".md"):
             rel = f"_build/{kind}/{name}"
             try:
                 with open(os.path.join(d, name), encoding="utf-8") as f:
@@ -720,15 +722,30 @@ def reveal_slice():
     return module
 
 
+# The fix the main check names after `<file> isn't UTF-8 text` for a source.
+NOT_UTF8_FIX = "save it as UTF-8, then rerun"
+
+
+def source_text(root, row):
+    """The text of a row's source file. It raises OSError when the file can't be opened, and
+    ValueError naming the file (`<file> isn't UTF-8 text`) when it isn't UTF-8: what such a file
+    holds is never guessed (r22-1 #2)."""
+    try:
+        with open(os.path.join(root, row["file"]), encoding="utf-8") as f:
+            return f.read()
+    except UnicodeDecodeError:
+        raise ValueError(f"{row['file']} isn't UTF-8 text") from None
+
+
 def is_deck(root, row, scope):
     """Whether an .html source is a reveal deck: its Scope gives a slide range, or it holds an
-    element of class `slides`. One it can't read counts as a deck, whose check says so."""
+    element of class `slides`. One it can't open counts as a deck, whose check says so; one that
+    isn't UTF-8 raises source_text()'s ValueError, since either answer would be a guess."""
     if scope[0] == "slides":
         return True
     try:
-        with open(os.path.join(root, row["file"]), encoding="utf-8") as f:
-            source = f.read()
-    except (OSError, ValueError):
+        source = source_text(root, row)
+    except OSError:
         return True
     return reveal_slice().Deck(source).container is not None
 
@@ -750,11 +767,15 @@ def deck_slides(root, row, scope):
     """The fragments of the deck's in-scope slides, or a string saying why there are none."""
     reveal = reveal_slice()
     try:
-        with open(os.path.join(root, row["file"]), encoding="utf-8") as f:
-            source = f.read()
+        source = source_text(root, row)
+    except ValueError as e:
+        return f"{e}: {NOT_UTF8_FIX}"
+    except OSError as e:
+        return f"can't read the deck {row['file']}: {e}"
+    try:
         with contextlib.redirect_stderr(io.StringIO()):
             slides = reveal.slides(source)
-    except (OSError, SystemExit) as e:
+    except SystemExit as e:
         return f"can't read the deck {row['file']}: {e}"
     last = max((int(frag.split("/")[1]) for frag, _ in slides), default=-1)
     lo, hi = scope[1] if scope[0] == "slides" else (0, last)
@@ -779,7 +800,11 @@ def check(root, doc, row, b):
         return (f"{doc}: SCOPE NOT UNDERSTOOD: {row['scope']!r}; write `in`, "
                 "`in, PDF pp.A-B` or `in, slides #/A-#/B`"), True
     open_flags = b["unreadable"] > 0
-    if name.endswith((".html", ".htm")) and is_deck(root, row, scope):
+    try:
+        deck = name.endswith((".html", ".htm")) and is_deck(root, row, scope)
+    except ValueError as e:
+        return f"{doc}: {e}: {NOT_UTF8_FIX}", True
+    if deck:
         if scope[0] == "pages":
             return f"{doc}: a deck's scope is a slide range (`in, slides #/A-#/B`)", True
         want = deck_slides(root, row, scope)
