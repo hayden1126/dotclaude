@@ -151,9 +151,14 @@ extract) whose own Answers cell lacks the attempt mark; an `Unverified:` line ex
 `questions`: every extract holding any block of an unattempted set, every existing home
 solutions file of one (the homes above), and each multi-set answers file's own
 _build/solutions/<doc id lower>.md, when it exists, while any set it names is unattempted; a file
-serving an attempted set too is still listed. `allow`: every other extract. With no unattempted
-set it prints nothing; it exits 0, 2 with no MANIFEST.md or one with no rows under a header it
-knows (the main check's reason, on stderr), 1 on a MANIFEST.md it can't read.
+serving an attempted set too is still listed. An unattempted set no extract holds a block of (a
+source added unverified, 11-next-exam, has a row and renders but no extract) is read from its
+rendered text instead: `questions _build/text/<doc>/` when that directory holds a page's text,
+else `questions _build/text/<doc lower>.md` (or `<doc>.md`, a Word file's) when it exists; with
+neither it prints `no file holds <doc>, an unattempted set: ...; render it (01-ingest) or extract
+it, then rerun` on stderr and exits 2. `allow`: every other extract. With no unattempted set it
+prints nothing; it exits 0, 2 with no MANIFEST.md, one with no rows under a header it knows (the
+main check's reason, on stderr) or a set with neither, 1 on a MANIFEST.md it can't read.
 Stdlib only, plus reveal_slice.py from this directory."""
 import argparse
 import contextlib
@@ -268,6 +273,8 @@ DIRS = ("extract", "solutions")
 # A MANIFEST.md whose table header this reader doesn't know (`| Id | File | ... |`) yields no rows;
 # every mode refuses it rather than reading it as a hub with no docs.
 NO_ROWS = "MANIFEST.md has no rows under a `| Doc id | File | ... |` header"
+# The files the questions check reads in a directory (mock_leak.py's SUFFIXES).
+TEXT_SUFFIXES = (".md", ".txt", ".tex", ".html", ".htm")
 
 def numbers(text):
     """`17-20, 23` -> {17, 18, 19, 20, 23}."""
@@ -1110,15 +1117,38 @@ def unattempted(rows, extracts):
     return sorted(doc for doc in sets if not rows[doc]["attempted"])
 
 
+def rendered_text(root, doc):
+    """A doc's rendered text (01-ingest), relative to root: the directory _build/text/<doc>/ (a
+    PDF's pages) when it holds a file the questions check reads, else _build/text/<doc lower>.md
+    or _build/text/<doc>.md (a Word file's) when it exists; None for neither."""
+    d = os.path.join(root, "_build", "text", doc)
+    if any(f.endswith(TEXT_SUFFIXES) for _, _, fs in os.walk(d) for f in fs):
+        return f"_build/text/{doc}/"
+    for name in dict.fromkeys((doc.lower(), doc)):
+        if os.path.isfile(os.path.join(root, "_build", "text", f"{name}.md")):
+            return f"_build/text/{name}.md"
+    return None
+
+
+def no_text(missing):
+    """The reason the questions check can't read the unattempted sets in `missing`, each with no
+    block in any extract and no rendered text (leak_files())."""
+    return "; ".join(f"no file holds {doc}, an unattempted set: no extract holds a block of it and "
+                     "_build/text/ holds no rendered text of it; render it (01-ingest) or extract "
+                     "it, then rerun" for doc in missing)
+
+
 def leak_files(root, rows=None):
-    """(unattempted(), [(kind, path)]) for the questions check (mock_leak.py --hub), each path
-    relative to root, sorted by path, each once. `questions`: every extract holding any block of
-    an unattempted set (set_homes()), every existing home solutions file of one, and each
-    multi-set answers file's own _build/solutions/<doc id lower>.md, when it exists, while any set
-    it names is unattempted; a file serving an attempted set too is listed (fail closed).
-    `allow`: every other extract. With no unattempted set the list is empty. `rows` is
-    manifest_rows() (read from root's MANIFEST.md when None; it raises as that does, and raises
-    ValueError(NO_ROWS) on no rows)."""
+    """(unattempted(), [(kind, path)], the unattempted sets with neither an extract nor rendered
+    text) for the questions check (mock_leak.py --hub), each path relative to root, sorted by
+    path, each once. `questions`: every extract holding any block of an unattempted set
+    (set_homes()), every existing home solutions file of one, its rendered text (rendered_text())
+    when no extract holds a block of it, and each multi-set answers file's own
+    _build/solutions/<doc id lower>.md, when it exists, while any set it names is unattempted; a
+    file serving an attempted set too is listed (fail closed). `allow`: every other extract. With
+    no unattempted set the list is empty. Its callers refuse to run while the third item names a
+    set (no_text()). `rows` is manifest_rows() (read from root's MANIFEST.md when None; it raises
+    as that does, and raises ValueError(NO_ROWS) on no rows)."""
     if rows is None:
         rows = manifest_rows(os.path.join(root, "MANIFEST.md"))
     if not rows:
@@ -1126,20 +1156,27 @@ def leak_files(root, rows=None):
     extracts = files(root, "extract")
     sets = unattempted(rows, extracts)
     if not sets:
-        return sets, []
+        return sets, [], []
     homes = set_homes(extracts)
-    questions = set()
+    questions, texts, missing = set(), set(), []
     for doc in sets:
         for name in homes.get(doc, ()):
             questions.add(f"_build/extract/{name}")
             questions.add(f"_build/solutions/{name}")
+        if doc not in homes:
+            # A source added unverified (11-next-exam) has a row and its renders, no extract.
+            text = rendered_text(root, doc)
+            if text:
+                texts.add(text)
+            else:
+                missing.append(doc)
     for doc, row in rows.items():
         if key_of(row) == "for" and len(row["key"]["docs"]) > 1 and row["key"]["docs"] & set(sets):
             questions.add(f"_build/solutions/{doc.lower()}.md")
-    questions = {p for p in questions if os.path.isfile(os.path.join(root, p))}
+    questions = {p for p in questions if os.path.isfile(os.path.join(root, p))} | texts
     allow = {rel for rel, _ in extracts} - questions
     listed = [("questions", p) for p in questions] + [("allow", p) for p in allow]
-    return sets, sorted(listed, key=lambda item: item[1])
+    return sets, sorted(listed, key=lambda item: item[1]), missing
 
 
 def unverified(root):
@@ -1178,7 +1215,10 @@ def main(argv=None):
         if not rows:
             print(f"extract_check: {NO_ROWS}", file=sys.stderr)
             return 2
-        _, listed = leak_files(args.root, rows)
+        _, listed, missing = leak_files(args.root, rows)
+        if missing:
+            print(f"extract_check: {no_text(missing)}", file=sys.stderr)
+            return 2
         for kind, path in listed:
             print(f"{kind} {path}")
         return 0

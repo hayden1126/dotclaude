@@ -675,6 +675,41 @@ class HubQuestions(unittest.TestCase):
         self.assertEqual((rc, err), (0, ""), out)
         self.assertEqual(out, "QUESTIONS OK: 1 pages checked against 1 question files\n")
 
+    def test_an_unattempted_set_with_no_extract_is_read_from_its_rendered_text(self):
+        # r18-1 #2, r18-2 #1: PE4, added unverified (11-next-exam), has a row and its renders but
+        # no extract. Alone it made --hub exit 2; beside another unattempted set it was left out.
+        rows = ("| HW1 | `sources/hw1.pdf` | 1 | in | {} | | yes | |\n"
+                "| PE4 | `sources/pe4.pdf` | 4 | in | yes | pp. 3-4 | yes | |\n")
+        self.write("MANIFEST.md", HUB_HEAD + rows.format("no, attempted 2026-11-01"))
+        self.write("_build/extract/hw1.md", "### [HW1 Q1a] Round\nPages: [HW1 p.1]\n\"Round it.\"\n")
+        self.write("_build/pages/HW1/p-001.png", "")
+        self.write("STATUS.md", "Unverified: PE4, S9, 2026-11-12\n")
+        text = self.write("_build/text/PE4/p-003.txt", f"{KEY_TEXT}.\n")
+        page = f"# Rounds\n\nRecall that {KEY_TEXT}.\n"
+        rc, out, err = self.hub(page_text=page)
+        self.assertEqual((rc, err), (1, ""), out)
+        self.assertIn(f"words in a row match {text}:1", out)
+        # Its twin: a page that copies nothing passes.
+        rc, out, err = self.hub()
+        self.assertEqual((rc, out, err), (0, "QUESTIONS OK: 1 pages checked against 1 question "
+                                             "files\n", ""))
+        # With another unattempted set, PE4's text is still read.
+        self.write("MANIFEST.md", HUB_HEAD + rows.format("no"))
+        rc, out, err = self.hub(page_text=page)
+        self.assertEqual((rc, err), (1, ""), out)
+        self.assertIn(f"words in a row match {text}:1", out)
+        # With neither an extract nor rendered text, it exits 2 naming the set, alone or not.
+        os.remove(text)
+        for hw1 in ("no", "no, attempted 2026-11-01"):
+            with self.subTest(hw1=hw1):
+                self.write("MANIFEST.md", HUB_HEAD + rows.format(hw1))
+                rc, out, err = self.hub(page_text=page)
+                self.assertEqual((rc, out), (2, ""), err)
+                self.assertEqual(err, "mock_leak: no file holds PE4, an unattempted set: no "
+                                      "extract holds a block of it and _build/text/ holds no "
+                                      "rendered text of it; render it (01-ingest) or extract it, "
+                                      "then rerun\n")
+
     def test_bad_usage(self):
         self.write("_build/extract/hw1.md", "### [HW1 Q1a] Round\n")
         for name, args, message in (

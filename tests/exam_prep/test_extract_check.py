@@ -2224,6 +2224,39 @@ class LeakFiles(unittest.TestCase):
             code = extract_check.main(["--root", self.root])
         return code, out.getvalue()
 
+    def test_an_unattempted_set_with_no_extract_lists_its_rendered_text(self):
+        # r18-1 #2, r18-2 #1: a source added unverified (11-next-exam) has a row and its renders,
+        # no extract; a self-keyed one is an unattempted set, which was left out of the list.
+        pe4 = "| PE4 | `sources/pe4.pdf` | 4 | in | yes | pp. 3-4 | yes | |\n"
+        self.manifest(extra=pe4)
+        self.write("STATUS.md", "Unverified: PE4, S9, 2026-11-12\n")
+        self.write("_build/text/PE4/p-003.txt", "Question 1.\n")
+        self.assertEqual(self.leak(), (0, "allow _build/extract/d1.md\n"
+                                          "questions _build/extract/hw1.md\n"
+                                          "questions _build/solutions/hw1.md\n"
+                                          "questions _build/text/PE4/\n"))
+        # A Word file's rendered text, when the directory holds none.
+        os.remove(os.path.join(self.root, "_build/text/PE4/p-003.txt"))
+        self.manifest(extra=pe4.replace("pe4.pdf` | 4 | in | yes | pp. 3-4", "pe4.docx` | - | in | "
+                                                                             "yes | inline"))
+        self.write("_build/text/pe4.md", "Question 1.\n")
+        self.assertIn("questions _build/text/pe4.md\n", self.leak()[1])
+        # Neither: it exits 2 naming the set, whatever other set is listed.
+        os.remove(os.path.join(self.root, "_build/text/pe4.md"))
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            self.assertEqual(self.leak(), (2, ""))
+        self.assertEqual(err.getvalue(), "extract_check: no file holds PE4, an unattempted set: no "
+                                         "extract holds a block of it and _build/text/ holds no "
+                                         "rendered text of it; render it (01-ingest) or extract "
+                                         "it, then rerun\n")
+        # Its twin: once extracted, its extract is listed and its text isn't.
+        self.write("_build/extract/pe4.md", "### [PE4 Q1] Trace\nPages: [PE4 p.1]\n")
+        self.assertEqual(self.leak(), (0, "allow _build/extract/d1.md\n"
+                                          "questions _build/extract/hw1.md\n"
+                                          "questions _build/extract/pe4.md\n"
+                                          "questions _build/solutions/hw1.md\n"))
+
     def test_no_manifest_exits_2(self):
         os.remove(os.path.join(self.root, "MANIFEST.md"))
         err = io.StringIO()

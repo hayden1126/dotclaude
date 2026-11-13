@@ -67,11 +67,13 @@ usage (a missing file, no question file or page, a file that isn't UTF-8).
 The same check on the files the hub's own homes give (extract_check.py's leak_files(), the list
 `extract_check.py --leak-files` prints): its `questions` files as --questions, its `allow` files
 as --allow, so the list never drifts from the homes the extract check computes (a deck's second
-part, a stray block's solutions file). With no unattempted set it prints `QUESTIONS OK: no
-unattempted set` and exits 0. Output and exit codes otherwise as --questions; bad usage too is a
-hub with no MANIFEST.md or one it can't read (a table header it doesn't know, which gives no
-rows, among them), --hub with --questions or --allow, or unattempted
-sets no file holds a block of. It can't be combined with the other forms.
+part, a stray block's solutions file, an unextracted set's rendered text under _build/text/).
+With no unattempted set it prints `QUESTIONS OK: no unattempted set` and exits 0. Output and exit
+codes otherwise as --questions; bad usage too is a hub with no MANIFEST.md or one it can't read (a
+table header it doesn't know, which gives no rows, among them), --hub with --questions or
+--allow, or an unattempted set with neither a block in any extract nor rendered text (`no file
+holds <doc>, an unattempted set: ...; render it (01-ingest) or extract it, then rerun`). It can't
+be combined with the other forms.
 Stdlib only, plus extract_check.py from this directory (loaded by its path) for --hub."""
 import bisect
 import html
@@ -542,17 +544,18 @@ def hub_main(root, page_paths):
         raise Usage("no page found")
     if not os.path.isfile(os.path.join(root, "MANIFEST.md")):
         raise Usage(f"no MANIFEST.md in {os.path.abspath(root)}")
+    checker = extract_check()
     try:
-        sets, listed = extract_check().leak_files(root)
+        sets, listed, missing = checker.leak_files(root)
     except (OSError, ValueError) as e:
         raise Usage(f"can't read the hub {os.path.abspath(root)}: {e}")
     if not sets:
         print("QUESTIONS OK: no unattempted set")
         return 0
+    if missing:
+        raise Usage(checker.no_text(missing))
     paths = {kind: [os.path.normpath(os.path.join(root, p)) for k, p in listed if k == kind]
              for kind in ("questions", "allow")}
-    if not paths["questions"]:
-        raise Usage(f"no file holds a block of {', '.join(sets)}, the unattempted sets: run extract_check.py")
     return compare(load(paths["questions"], True), load(paths["allow"]), pages)
 
 
