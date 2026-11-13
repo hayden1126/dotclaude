@@ -256,6 +256,20 @@ class QuestionsCheckFiles(unittest.TestCase):
         final = sheet.split("## The final sheet", 1)[1].split("## After shipping", 1)[0]
         self.assertIn("Step 6's questions check", final)
 
+    def test_the_sheet_is_checked_before_it_ships(self):
+        """07 step 6 runs the questions check before the sheet is published, committed or
+        printed (round 19): its bullet comes first, and a hit on a LaTeX sheet waits for the
+        student's recompile before the commit takes the PDF."""
+        step6 = self.flat("07-cheatsheet.md").split("## Step 6: Ship", 1)[1].split(
+            "## The final sheet", 1)[0]
+        check = step6.index("- The questions check first (FB-191), before a sheet is published or "
+                            "printed: `05-verify` step 5's command, " + self.COMMAND)
+        publish = step6.index("- Publish the mock sheet")
+        commit = step6.index("- Commit the sheet's source")
+        self.assertLess(check, publish)
+        self.assertLess(publish, commit)
+        self.assertIn("the student recompiles it", step6[check:publish])
+
     def test_the_first_site_names_the_list_and_the_empty_case(self):
         flat = self.flat("05-verify.md")
         for phrase in ("`python3 -I <skill>/scripts/extract_check.py --leak-files`",
