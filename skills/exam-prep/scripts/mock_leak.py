@@ -62,7 +62,7 @@ label), never the matched text: the main session reads it there, and a log must 
 set. The last line is QUESTIONS OK or QUESTIONS: N found. Exit 0 clean, 1 on a hit, 2 on bad
 usage (a missing file, no question file or page, a file that isn't UTF-8).
 
-  mock_leak.py --hub <root> --pages <page>...
+  mock_leak.py --hub <root> [--pages <page>...]
 
 The same check on the files the hub's own homes give (extract_check.py's leak_files(), the list
 `extract_check.py --leak-files` prints): its `questions` files as --questions, its `allow` files
@@ -73,7 +73,10 @@ codes otherwise as --questions; bad usage too is a hub with no MANIFEST.md or on
 table header it doesn't know, which gives no rows, among them), --hub with --questions or
 --allow, or an unattempted set with neither a block in any extract nor rendered text (`no file
 holds <doc>, an unattempted set: ...; render it (01-ingest) or extract it, then rerun`). It can't
-be combined with the other forms.
+be combined with the other forms. With no --pages, the pages are every file under the hub's
+notes/ and cheatsheet/ that a directory stands for above (each folder when it exists), so a cheat
+sheet that rebuilds an unattempted set's setup fails as a notes page does; neither existing is bad
+usage (`no page found`). --pages names the pages instead (the tutor checks one passage file).
 Stdlib only, plus extract_check.py from this directory (loaded by its path) for --hub."""
 import bisect
 import html
@@ -503,7 +506,9 @@ def runs(marks):
 
 
 QUESTIONS_USAGE = ("usage: mock_leak.py --questions <file or dir>... [--allow <file or dir>...] --pages <page>...\n"
-                   "       mock_leak.py --hub <root> --pages <page>...")
+                   "       mock_leak.py --hub <root> [--pages <page>...]")
+# The hub's pages when --hub has no --pages: the notes and the cheat sheets.
+HUB_PAGES = ("notes", "cheatsheet")
 
 
 def extract_check():
@@ -526,7 +531,9 @@ def questions_main(argv):
         else:
             lists[flag].append(a)
     if "--hub" in argv:
-        if len(lists["--hub"]) != 1 or lists["--questions"] or lists["--allow"] or not lists["--pages"]:
+        # --pages is optional here, but a --pages naming nothing (a glob that matched no file) is refused.
+        if (len(lists["--hub"]) != 1 or lists["--questions"] or lists["--allow"]
+                or ("--pages" in argv and not lists["--pages"])):
             raise Usage(QUESTIONS_USAGE)
         return hub_main(lists["--hub"][0], lists["--pages"])
     if not lists["--questions"] or not lists["--pages"]:
@@ -538,12 +545,15 @@ def questions_main(argv):
 
 
 def hub_main(root, page_paths):
-    """The questions check on the files extract_check.leak_files() lists for the hub at root."""
+    """The questions check on the files extract_check.leak_files() lists for the hub at root, for
+    the pages given, or with none every page under the hub's notes/ and cheatsheet/ (HUB_PAGES)."""
+    if not os.path.isfile(os.path.join(root, "MANIFEST.md")):
+        raise Usage(f"no MANIFEST.md in {os.path.abspath(root)}")
+    if not page_paths:
+        page_paths = [p for p in (os.path.join(root, d) for d in HUB_PAGES) if os.path.exists(p)]
     pages = load(page_paths)
     if not pages:
         raise Usage("no page found")
-    if not os.path.isfile(os.path.join(root, "MANIFEST.md")):
-        raise Usage(f"no MANIFEST.md in {os.path.abspath(root)}")
     checker = extract_check()
     try:
         sets, listed, missing = checker.leak_files(root)

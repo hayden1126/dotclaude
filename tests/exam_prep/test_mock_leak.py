@@ -710,6 +710,44 @@ class HubQuestions(unittest.TestCase):
                                       "rendered text of it; render it (01-ingest) or extract it, "
                                       "then rerun\n")
 
+    def bare_hub(self, *args):
+        """--hub with no --pages: the hub's notes/ and cheatsheet/ are the pages."""
+        r = subprocess.run([sys.executable, "-I", os.path.join(SCRIPTS, "mock_leak.py"), "--hub",
+                            self.root, *args], capture_output=True, text=True, timeout=60, cwd=self.root)
+        return r.returncode, r.stdout, r.stderr
+
+    def test_with_no_pages_the_notes_and_the_cheat_sheets_are_read(self):
+        # r18-2 #2: the workflows passed only notes/*.md, so a cheat sheet rebuilding an
+        # unattempted set's setup was never checked.
+        self.write("MANIFEST.md", HUB_HEAD + "| HW1 | `sources/hw1.pdf` | 1 | in | no | | yes | |\n")
+        self.write("_build/extract/hw1.md", f"### [HW1 Q1a] Round\nPages: [HW1 p.1]\n\"{KEY_TEXT}\"\n")
+        rc, out, err = self.bare_hub()
+        self.assertEqual((rc, out), (2, ""), err)
+        self.assertEqual(err, "mock_leak: no page found\n")
+        self.write("notes/sec1.md", "Nothing from any set here.\n")
+        sheet = self.write("cheatsheet/sheet.tex", f"\\section{{Rounds}}\nRecall that {KEY_TEXT}.\n")
+        rc, out, err = self.bare_hub()
+        self.assertEqual((rc, err), (1, ""), out)
+        self.assertIn(f"mock_leak: {sheet}:2: ", out)
+        self.assertIn("QUESTIONS: 1 found; 2 pages checked against 1 question files\n", out)
+        # Its twin: a sheet that copies nothing passes, and a cheat sheet alone is read.
+        self.write("cheatsheet/sheet.tex", "\\section{Rounds}\nA round has a cost.\n")
+        rc, out, err = self.bare_hub()
+        self.assertEqual((rc, out, err), (0, "QUESTIONS OK: 2 pages checked against 1 question "
+                                             "files\n", ""))
+        os.remove(os.path.join(self.root, "notes", "sec1.md"))
+        os.rmdir(os.path.join(self.root, "notes"))
+        self.assertEqual(self.bare_hub()[:2], (0, "QUESTIONS OK: 1 pages checked against 1 "
+                                                  "question files\n"))
+        # A --pages naming nothing (a glob that matched no file) is refused.
+        rc, out, err = self.bare_hub("--pages")
+        self.assertEqual((rc, out), (2, ""), err)
+        self.assertIn("usage:", err)
+        # --pages still names the pages instead: the notes page alone passes.
+        rc, out, err = self.hub()
+        self.assertEqual((rc, out, err), (0, "QUESTIONS OK: 1 pages checked against 1 question "
+                                             "files\n", ""))
+
     def test_bad_usage(self):
         self.write("_build/extract/hw1.md", "### [HW1 Q1a] Round\n")
         for name, args, message in (
