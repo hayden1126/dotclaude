@@ -1785,8 +1785,23 @@ class SolutionsFiles(unittest.TestCase):
         self.assertEqual(code, 0, out)
 
     def test_a_solutions_block_with_no_home_fails(self):
-        # r16-1 #1: a block whose home can't be computed (its set has no block in any extract,
-        # a pending or out-of-scope set among them) passed in any file.
+        # r16-1 #1: a block whose home can't be computed (its in-scope set has no block in any
+        # extract yet) passed in any file.
+        self.remove("_build/extract/hw1.md")
+        self.remove("_build/solutions/hw1.md")
+        self.write("_build/solutions/hw1s.md", "### [HW1S p.1] Solutions\n\"Q1a: f = 42\"\n")
+        code, out = self.check()
+        self.assertEqual(code, 1, out)
+        self.assertIn("_build/solutions/hw1s.md:1: NO HOME FILE: [HW1S p.1] has no home: no "
+                      "extract holds a block of HW1; extract HW1 first", out)
+        # Its twin: HW1 with a block in an extract, the page beside it.
+        self.write("_build/extract/hw1.md", CLEAN)
+        self.write("_build/solutions/hw1.md", SOLVED + "### [HW1S p.1] Solutions\n\"Q1a: 42\"\n")
+        self.remove("_build/solutions/hw1s.md")
+        code, out = self.check()
+        self.assertEqual(code, 0, out)
+        # r17 (Hayden, 2026-11-13): an answers file keyed for a pending or out set fails at
+        # MANIFEST (KEY NAMES A SET NOT IN SCOPE), so "extract HW1 first" is never said of it.
         pending = SOL_MANIFEST.replace("| 1 | in | no | | yes | Homework 1 |",
                                        "| 1 | pending: in | no | | no | Homework 1 |")
         self.write("MANIFEST.md", pending)
@@ -1795,23 +1810,27 @@ class SolutionsFiles(unittest.TestCase):
         self.write("_build/solutions/hw1s.md", "### [HW1S p.1] Solutions\n\"Q1a: f = 42\"\n")
         code, out = self.check()
         self.assertEqual(code, 1, out)
-        self.assertIn("_build/solutions/hw1s.md:1: NO HOME FILE: [HW1S p.1] has no home: no "
-                      "extract holds a block of HW1; extract HW1 first", out)
-        # Its twin: HW1 in scope with a block in an extract, the page beside it.
-        self.write("MANIFEST.md", SOL_MANIFEST)
+        self.assertIn("HW1S: KEY NAMES A SET NOT IN SCOPE: HW1 is pending", out)
+        self.assertNotIn("NO HOME FILE", out)
+        self.write("MANIFEST.md", SOL_MANIFEST + "| HW2 | `sources/hw2.pdf` | 1 | out | no | | no | |\n"
+                   "| HW2S | `sources/hw2s.pdf` | 1 | in | yes | for HW2 | yes | |\n")
+        self.write("_build/pages/HW2S/p-001.png", "")
         self.write("_build/extract/hw1.md", CLEAN)
-        self.write("_build/solutions/hw1.md", SOLVED + "### [HW1S p.1] Solutions\n\"Q1a: 42\"\n")
+        self.write("_build/solutions/hw1.md", SOLVED + "### [HW2S p.1] Solutions\n\"Q1: 7\"\n")
         self.remove("_build/solutions/hw1s.md")
         code, out = self.check()
-        self.assertEqual(code, 0, out)
-        # A stem of an out-of-scope set no extract holds.
+        self.assertEqual(code, 1, out)
+        self.assertIn("HW2S: KEY NAMES A SET NOT IN SCOPE: HW2 is out", out)
+        self.assertNotIn("NO HOME FILE", out)
+        # A stem of an out-of-scope set no key names is a block of an out row, as in an
+        # extract: a warning, with no home to name.
         self.write("MANIFEST.md", SOL_MANIFEST + "| HW2 | `sources/hw2.pdf` | 1 | out | no | | no | |\n")
         self.write("_build/solutions/hw1.md", SOLVED + "### [HW2 Q1 stem] Setup\n"
                    "Solution [HW1S p.1]: f = 42 throughout.\n")
         code, out = self.check()
-        self.assertEqual(code, 1, out)
-        self.assertIn("_build/solutions/hw1.md:6: NO HOME FILE: [HW2 Q1 stem] has no home: no "
-                      "extract holds a block of HW2; extract HW2 first", out)
+        self.assertEqual(code, 0, out)
+        self.assertIn("warning: blocks for HW2, whose MANIFEST.md scope is 'out'", out)
+        self.assertNotIn("NO HOME FILE", out)
         # A self-keyed doc's key section with no block of its doc in any extract.
         self.write("MANIFEST.md", SOL_MANIFEST + "| PE3 | `sources/pe3.docx` | n/a | in | yes | "
                                                  "sections: Marking scheme | n/a | |\n")
@@ -1956,6 +1975,44 @@ class SolutionsFiles(unittest.TestCase):
         code, out = self.check()
         self.assertEqual(code, 0, out)
         self.assertNotIn("KEY SECTION NOT FOUND", out)
+
+    def test_a_key_naming_a_set_not_in_scope_fails(self):
+        # r17 (Hayden, 2026-11-13): an in-scope answers file keyed for a set that is pending,
+        # reserved or out passed, its official text then having no home but "extract HW1 first".
+        self.remove("_build/extract/hw1.md")
+        self.remove("_build/solutions/hw1.md")
+        self.write("_build/solutions/hw1s.md", "### [HW1S p.1] Solutions\n\"Q1a: f = 42\"\n")
+        for scope, kind in (("pending: in", "pending"), ("reserved: Final", "reserved"),
+                            ("out", "out")):
+            with self.subTest(kind):
+                self.write("MANIFEST.md", SOL_MANIFEST.replace(
+                    "| 1 | in | no | | yes | Homework 1 |", f"| 1 | {scope} | no | | no | |"))
+                code, out = self.check()
+                self.assertEqual(code, 1, out)
+                self.assertIn(f"HW1S: KEY NAMES A SET NOT IN SCOPE: HW1 is {kind}: drop it from "
+                              "the Key cell and cut its pages from HW1S's Scope, or give HW1S the "
+                              "same Scope\n", out)
+        # One set of several out of scope fails alone.
+        self.write("MANIFEST.md", SOL_MANIFEST.replace("| for HW1 |", "| for HW1 and HW2 |")
+                   .replace("| 1 | in | no | | yes | Homework 1 |", "| 1 | out | no | | no | |")
+                   + "| HW2 | `sources/hw2.pdf` | 1 | in | no | | yes | |\n")
+        out = self.check()[1]
+        self.assertIn("HW1S: KEY NAMES A SET NOT IN SCOPE: HW1 is out", out)
+        self.assertNotIn("HW2 is", out)
+        # Its twins: the answers row out of scope too solves nothing, so it isn't checked; both
+        # in scope pass.
+        for scope in ("pending: in", "out"):
+            with self.subTest(answers=scope):
+                self.write("MANIFEST.md", SOL_MANIFEST.replace(
+                    "| 1 | in | no | | yes | Homework 1 |", f"| 1 | {scope} | no | | no | |")
+                    .replace("| 1 | in | yes | for HW1 |", f"| 1 | {scope} | yes | for HW1 |"))
+                self.assertNotIn("KEY NAMES A SET NOT IN SCOPE", self.check()[1])
+        self.write("MANIFEST.md", SOL_MANIFEST)
+        self.write("_build/extract/hw1.md", CLEAN)
+        self.write("_build/solutions/hw1.md", SOLVED)
+        self.remove("_build/solutions/hw1s.md")
+        code, out = self.check()
+        self.assertEqual(code, 0, out)
 
 if __name__ == "__main__":
     unittest.main()

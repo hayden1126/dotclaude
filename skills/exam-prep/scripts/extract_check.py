@@ -77,9 +77,11 @@ question block):
   _build/solutions/<its doc id in lower case>.md, its own file, holding its pages in full (the
   questions check reads it while any set it solves is unattempted); it needs no set's extract.
 - a key page's or key section's block of a doc with its own key: any home of the doc.
-A stem's, a single-set answers page's or a key block whose set has no block in any extract (a
-pending or out-of-scope set among them) has no home, so the questions check would never read it:
-it fails NO HOME FILE, naming the set to extract first. It fails, naming the file and line:
+A stem's, a single-set answers page's or a key block whose in-scope set has no block in any
+extract has no home, so the questions check would never read it: it fails NO HOME FILE, naming
+the set to extract first. A set that is pending, reserved or out is never told to be extracted:
+an answers file keyed for one fails at MANIFEST (KEY NAMES A SET NOT IN SCOPE, below), and a
+stem of one is a block of that row, as in an extract. It fails, naming the file and line:
 - NO SOLUTION BLOCK: a question part of a solved doc with a block in an extract and none in any
   solutions file.
 - in a solutions file: a part block naming a part no extract has (NO SUCH PART), a part with two
@@ -100,7 +102,9 @@ it fails NO HOME FILE, naming the set to extract first. It fails, naming the fil
   `UNREADABLE:` flag fails and an illegible value is listed, by file and line.
 - in MANIFEST, for an in-scope row the `Unverified:` skip (below) doesn't cover: the Key checks
   above; NO KEY, an Answers `yes` row with an empty Key cell (or no Key column); ANSWERS WITH NO
-  PAIRING, a doc with its own key and no question block in any extract.
+  PAIRING, a doc with its own key and no question block in any extract; KEY NAMES A SET NOT IN
+  SCOPE, a `for` key naming a set whose Scope is `pending`, `reserved` or `out` (an answers row
+  that is itself not in scope solves nothing and isn't checked).
 It warns, by file and line, outside a code fence in a solved doc's extract block (or before the
 first block of a file holding one), for a person to read: on a loose `Solution:` line (a `####
 Solution` heading, `Solutions:`), and on an answer line, one starting (after list or quote marks)
@@ -463,23 +467,27 @@ def block_home(m, rows, homes):
     """(the names a block in _build/solutions/ may sit under, why) for a stem's block, a page or
     section block of a `for` answers file, or a key page's or key section's block of a doc with its
     own key; ([], the set) when that set (the stem's doc, a single-set answers file's set, the
-    self-keyed doc) has no block in any extract, so no home can be named (NO HOME FILE); None for
-    a part's block (solutions_check() places it by its own question block), any other block, and a
-    block of a row that is not in scope. A multi-set answers file's home is its own file, which no
-    extract decides. `homes` is set_homes()."""
+    self-keyed doc, each in scope) has no block in any extract, so no home can be named (NO HOME
+    FILE); None for a part's block (solutions_check() places it by its own question block), any
+    other block, a block of a row that is not in scope (a stem's among them), and a single-set
+    answers page whose set is not in scope (its row fails KEY NAMES A SET NOT IN SCOPE, key_check()).
+    A multi-set answers file's home is its own file, which no extract decides. `homes` is
+    set_homes()."""
     doc, q = m.group("doc"), m.group("q")
+    row = rows.get(doc) or {}
+    if row.get("kind") not in ("in", "concepts"):
+        return None
     if q:
         if PART.fullmatch(q):
             return None
         return (homes[doc], "beside its extract") if doc in homes else ([], doc)
-    row = rows.get(doc) or {}
-    if row.get("kind") not in ("in", "concepts"):
-        return None
     if key_of(row) == "for":
         docs = row["key"]["docs"]
         if len(docs) > 1:
             return [f"{doc.lower()}.md"], "its own file, since it solves several sets"
         one = next(iter(docs))
+        if (rows.get(one) or {}).get("kind") not in ("in", "concepts"):
+            return None
         return (homes[one], "beside the one set it solves") if one in homes else ([], one)
     if own_key(row) and answers_cite(doc, locator(m), rows):
         return (homes[doc], "beside its own extract") if doc in homes else ([], doc)
@@ -995,6 +1003,13 @@ def key_check(doc, row, rows, qdocs, keyed, homes):
             out.append(f"{doc}: KEY NAMES ITS OWN DOC: \"for\" names the docs an answers file "
                        "solves; a doc holding its own key uses \"pp. N-M\", \"inline\" or "
                        "\"sections: <name>\"")
+        # An in-scope answers file solving a set that isn't in scope: its official text would
+        # have no home the questions check reads (block_home()).
+        out += [f"{doc}: KEY NAMES A SET NOT IN SCOPE: {word} is {rows[word]['kind']}: drop it "
+                f"from the Key cell and cut its pages from {doc}'s Scope, or give {doc} the same "
+                "Scope"
+                for word in sorted(key["docs"] & set(rows))
+                if rows[word]["kind"] in ("pending", "reserved", "out")]
         return out
     out = []
     # Only a PDF has pages a locator names; a deck's Pages column holds its slide count.
