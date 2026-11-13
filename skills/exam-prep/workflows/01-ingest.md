@@ -1,6 +1,6 @@
 # 01 Ingest
 
-Baseline as of 2026-11-10; changes only via `12-retro`.
+Baseline as of 2026-11-12; changes only via `12-retro`.
 
 Ingest puts every source the plan names on disk under `<root>`, renders each in-scope page to an
 image and its text, counts everything from disk into `MANIFEST.md`, and pulls Ed. The main session
@@ -46,6 +46,15 @@ in STATUS or the plan: a total written from memory has been wrong before. Record
 slide numbers next to PDF pages wherever the two differ (L04). Fill each row's Notes as
 `<what it is>[; <remark>]`, what the source is in a few words ("Lecture 4: search") first, and its
 By, as the template's legend says: the page's source key shows both.
+
+Fill each row's Answers from intake's question 2 (`yes` for a file that holds answers). A
+separate answers file's Notes name the sets it answers, `solutions to <doc>` or a list
+(`solutions to HW1, HW2 and HW3`), each a doc id of this table. A file that answers itself (a
+past exam with its key) gets no such note: look at its rendered pages, then name its key pages in
+the remark, `key p.N`, `key pp. N-M` or a list (`key pp. 7-9, 11`), or `key inline` when each
+solution sits under its question on the same page ("Practice exam 1; key pp. 7-9"). Only the
+named key pages go to `_build/solutions/`; the cover, the rules and a formula sheet stay in the
+extract (`02-extract`), and `extract_check.py` fails the row without its key note.
 
 ## Step 4: Originals
 

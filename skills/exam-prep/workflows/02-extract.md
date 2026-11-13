@@ -51,16 +51,24 @@ either (hard rule 6). Both are tracked in the hub. The solutions file opens with
 - one block per question part of a solved doc, `### [HW1 Q1a]` (a title is optional), the part's
   own block id from the extract, holding either `Solution [HW1S p.2]: ...` and its working
   (tables, fenced traces) or the exact line `No official solution.`;
-- every page or section block of an answers doc: each block of a separate answers file
-  (`### [HW1S p.1] ...`), and each key page of a past exam (a page of an Answers `yes` doc that
-  no question part's `Pages:` line names).
+- the page or section block of each answers page: every block of a separate answers file
+  (`### [HW1S p.1] ...`), and each key page of a past exam that its MANIFEST row names (below).
 
 `UNREADABLE:` flags and `(illegible at 300 dpi: ...)` work in it as in an extract.
 
 The solved docs come from MANIFEST's in-scope rows (Scope `in` or `concepts only`): an Answers
-`yes` doc with a `solutions to <doc>` note solves the docs it names, and one with no note solves
-itself (a past exam with its key), so a separate answers file needs the note. A `reserved`,
-`pending` or `out` answers file solves nothing. A part's block counts as answered only with a
+`yes` doc with a `solutions to <doc>` note solves the docs it names (`solutions to HW1, HW2 and
+HW3` names three, each a MANIFEST doc id), and one with no note solves itself (a past exam with
+its key), so a separate answers file needs the note. A `reserved`, `pending` or `out` answers
+file solves nothing. A past exam with its key names its key pages in its Notes (`01-ingest`,
+step 3): `key p.N`, `key pp. N-M` or a list (`key pp. 7-9, 11`), or `key inline` when each
+solution sits under its question on the same page, so no page is a key page. The brief's `{{KEY
+PAGES}}` slot gives the agent those pages, copied from the note, or `none` for `key inline`.
+Only the named key pages go to the solutions file; every other page of that doc (the cover, the
+rules, a formula sheet, an appendix table) keeps its block in the extract, so the answer-blind
+agents (the mock writer cloning a question's setup, the gap scan) still read it. A part's
+solution goes under its part's block in the solutions file wherever it sits, on a key page or
+under its question. A part's block counts as answered only with a
 `Solution [<doc> <loc>]` line, the cite followed by a colon or the line's end, or the exact line
 `No official solution.`
 `python3 -I <skill>/scripts/extract_check.py --parts` prints the number of question parts whose
@@ -111,16 +119,31 @@ STATUS).
    - `CITES AN ANSWERS PAGE`: an extract's line citing an answers page (a `Pages:` line holding
      only cites, and the closing `Coverage:` line, aside);
    - `AN ANSWERS PAGE IN AN EXTRACT: ... move it to _build/solutions/<name>.md`: a page block of
-     an answers doc on no question part's page.
+     an answers doc on an answers page: any page of a separate answers file, or a key page its
+     MANIFEST row names.
 
-   Each of the last three moves into its solutions file, a solution under the part it answers.
-   It also fails, by doc and with no file or line, `<doc>: ANSWERS WITH NO PAIRING`: an in-scope
-   Answers `yes` doc with no question parts in any extract and no `solutions to` note. Add the
-   note to its MANIFEST row.
+   `SOLUTION IN AN EXTRACT` holds for any extract block, a lecture's too, when its `Solution [`
+   or `**Solution...**` line cites a solved or answers doc; and the lines above a file's first
+   `###` header get every check a block's lines get. A solution line moves into its solutions
+   file, under the part it answers, and so does an answers page's block. `CITES AN ANSWERS PAGE`
+   has two fixes: a line that gives an answer moves into the solutions file, under its part; a
+   line that is the question's own text keeps its place and cites the question's own page
+   instead. It also fails, by doc and with no file or line:
+   - `<doc>: ANSWERS WITH NO PAIRING`: an in-scope Answers `yes` doc with no question parts in
+     any extract and no `solutions to` note. Add the note to its MANIFEST row.
+   - `<doc>: NO KEY NOTE: a doc with its own key names its key pages in Notes ("key pp. N-M", or "key inline")`:
+     an in-scope self-answering row (Answers `yes`, no `solutions to` note) without its key
+     note. Look at the PDF and add the note (`01-ingest`, step 3); a page the note now names moves
+     to the solutions file.
+   - `<doc>: NOTE NAMES NO DOC: ...`: a `solutions to` note names an id that is no MANIFEST doc
+     id. Fix the note or the id.
 
-   It warns on a solutions block for a stem (each of its parts still needs its own block) and on
-   a loose `Solution:` line outside a fence in a solved doc's extract block. The main session
-   reads each: a solution moves to the solutions file, and question text stays.
+   It warns on a solutions block for a stem (each of its parts still needs its own block), on a
+   loose `Solution:` line outside a fence in a solved doc's extract block, and on an `Answer:`,
+   `Ans:` or `Final answer:` line (or the like) in a solved doc's extract block that isn't an
+   answer blank. The main session reads each: an answer or a solution moves to the solutions
+   file, under its part, and question text stays. With no MANIFEST.md, `extract_check.py
+   --parts` exits 2, as the full check does.
 2. Resolve every `UNREADABLE:` flag and every flagged small label at 300 dpi, on a crop: a whole
    300 dpi page gets scaled down by the image viewer, which loses the gain. Find the label on the
    100 dpi image, multiply its box by 3, and crop into `_build/pages/<doc>@300dpi/` (make it
@@ -133,9 +156,10 @@ STATUS).
    page>)`, note it in STATUS as a judgment call, and ask the student for it once no `Build
    running` line stands (hard rule 1). Only the main session writes that form, after the re-read.
    Once the student gives the value, the main session replaces the mark with it, noting
-   `(given by the student)`, reruns `extract_check.py`, then reruns the self-test
-   (`python3 -I _build/verify/selftest.py`) if the checker exists, since a value in a solutions
-   file may be one the self-test reproduces.
+   `(given by the student)`; if the checker exists, it turns the self-test's `skip` for that part
+   (`05-verify` step 1, which names the mark) back into a `check` of the value. It then reruns
+   `extract_check.py` and the self-test (`python3 -I _build/verify/selftest.py`), since a value
+   in a solutions file may be one the self-test reproduces.
 3. Spot-check one diagram per deck against its page image, and check that the page numbers in the
    headers are real pages, never numbers from an agent's summary (FB-051).
 
@@ -152,10 +176,12 @@ audits the second group against their images (FB-052, FB-104).
 though not on a value marked `(illegible at 300 dpi: ...)`, while a question part of a solved doc
 has no solutions block or a part has two, while a solutions block names no extract's part or
 holds neither a `Solution [` line nor `No official solution.`, while an extract holds a solution
-line, a line citing an answers page or a page block of an answers doc, or while an in-scope
-Answers `yes` doc with no question parts lacks its `solutions to` note), and STATUS has the coverage and each
-value marked illegible as a judgment call. Its warnings (a solutions block for a stem, a loose
-`Solution:` line in a solved doc's extract) are each read and either fixed or noted in STATUS. It
+line, a line citing an answers page or a block of an answers page, while an in-scope Answers
+`yes` doc with no question parts lacks its `solutions to` note or one with its own key lacks its
+key note, or while a `solutions to` note names no MANIFEST doc), and STATUS has the coverage and
+each value marked illegible as a judgment call. Its warnings (a solutions block for a stem, a
+loose `Solution:` line or an `Answer:` line in a solved doc's extract) are each read and either
+fixed or noted in STATUS. It
 skips a doc on a STATUS `Unverified:` line (`11-next-exam`, "A source added unverified") until
 that doc has a block. Commit the extracts and the solutions files: they are tracked in the hub,
 which stays local.

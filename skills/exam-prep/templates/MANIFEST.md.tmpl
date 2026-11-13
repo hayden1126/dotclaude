@@ -39,15 +39,25 @@ Topic cuts: {{none | one line each:}}
   is what the source key shows, the file name under it; with it empty the key shows the file name
   alone. A remark on the row (why a range is cut, when a file arrives) follows a `;` and stays off
   the page, so what it is holds no `;` of its own.
-- **Answers:** `yes` marks a file that holds answers (official solutions, a past exam's key), with
-  `solutions to <doc>` in Notes naming the set it answers; with no such note it answers itself (a
-  past exam with its key), so a separate answers file needs the note. Only an in-scope row (`in`
-  or `concepts only`) answers anything. Its answers are extracted into `_build/solutions/`, never
-  into an extract (`02-extract`). Mock writers never read it. Nothing
-  published quotes it until the student has attempted that set, which the cell then records as
-  `yes, attempted`. A question set that no row's `solutions to <doc>` names records the student's
-  attempt in its own Answers cell, `no, attempted YYYY-MM-DD`: until then `05-verify` step 5's
-  questions check treats it as unattempted.
+- **Answers:** `yes` marks a file that holds answers (official solutions, a past exam's key).
+  - A separate answers file names the sets it answers in Notes, `solutions to <doc>`, or a list,
+    `solutions to HW1, HW2 and HW3`. Each name is a doc id of this table: `extract_check.py`
+    fails any other (`NOTE NAMES NO DOC`).
+  - A row with no such note answers itself (a past exam with its key) and names its key pages in
+    Notes' remark: `key p.N`, `key pp. N-M` (a list too, `key pp. 7-9, 11`), or `key inline`
+    when each solution sits under its question on the same page, so no page is a key page
+    ("Practice exam 1; key pp. 7-9"). `01-ingest` writes it after looking at the PDF, and
+    `extract_check.py` fails such a row without it (`NO KEY NOTE`).
+  - Only an in-scope row (`in` or `concepts only`) answers anything. Its answers are extracted into
+    `_build/solutions/` (every page of a separate answers file; a past exam's named key pages, and
+    each part's solution under its part), never into an extract. A past exam's other pages (the
+    cover, the rules, a formula sheet) stay in its extract (`02-extract`). Mock writers never read
+    `_build/solutions/`.
+  - Nothing published quotes an answer until the student has attempted that set, which a cell
+    then records: a `solutions to` row's as `yes, attempted`, a past exam's own row's as `yes,
+    attempted YYYY-MM-DD`. A question set with no answers anywhere (Answers `no`, named by no
+    `solutions to` note) records the attempt in its own cell, `no, attempted YYYY-MM-DD`. Until
+    then `05-verify` step 5's questions check treats the set as unattempted.
 - **Topic cuts** name what the exam leaves out inside an `in` range, which no page range can say
   ("negative weights are not on Exam 1", from a staff post). They are a list under the table, never
   a second table, and scope like the rows: `03-backbone` marks the subsections a cut reaches and

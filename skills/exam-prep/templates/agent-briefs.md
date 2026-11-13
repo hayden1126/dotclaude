@@ -106,8 +106,8 @@ that must not see answers read the extract, so it holds none.}}
   instead of one per page: `### [{{DOC}} Q3a] <short title>`, with a shared stem as
   `### [{{DOC}} Q3 stem] <title>`; a deeper part is `Q3b.1` or `Q3bii`, a numbered part `Q2.1`,
   and a part the source numbers in roman `Q3ii`. A page with no question on it still gets its
-  page block (`(blank)` or `(image only: ...)`){{SOLUTIONS: , in the solutions file when it is a
-  page of {{SOLDOC}} (below)}}, and text on a question page outside every part
+  page block (`(blank)` or `(image only: ...)`){{SOLUTIONS: , in the solutions file when it is
+  one of {{SOLDOC}}'s answers pages (below)}}, and text on a question page outside every part
   (the title, the instructions) goes in that page's block, `### [{{DOC}} p.N] <title>`, before
   its parts. Each question block holds
   - `Pages: [{{DOC}} p.N]`, the page or pages the part sits on;
@@ -118,10 +118,17 @@ that must not see answers read the extract, so it holds none.}}
     check runs when, or how a board is numbered; or "none">`
 - Last line: `Coverage: {{RANGE}}; N blocks; K image only (<why, per page>); U flagged unreadable.`
   (a flag's detail may follow, in parentheses).
-- {{SOLUTIONS: The extract holds no answer, and the check fails each one it finds there. Never
-  write in it a `Solution [` or `**Solution:**` line, or a line that cites an answers page
-  (`Pages:` lines aside): any page of a separate solutions file, or a page of {{SOLDOC}} that no
-  question part's `Pages:` line names (a key page of a past exam).
+- {{SOLUTIONS: The answers pages of {{SOLDOC}} are {{KEY PAGES: for a separate answers file,
+  every page of it; for a doc with its own key (a past exam), the key pages MANIFEST.md's key note
+  names, given here as "pp. 7-9", or "none: each solution sits under its question on the same
+  page" for `key inline`}}. Every other page of {{SOLDOC}} (the cover, the rules, a formula
+  sheet, an appendix table) gets its block in the extract, as any page does: the agents that
+  must not see answers read those pages there.
+- The extract holds no answer, and the check fails each one it finds there. Never write in it a
+  `Solution [` or `**Solution:**` line, a line that cites an answers page (`Pages:` lines aside),
+  or a block for an answers page. A line that states an answer (`Answer: ...`, `Final answer:
+  ...`) goes to the solutions file too, under its part; the question's own text and its answer
+  blanks stay.
 - The solutions file, {{ROOT}}/_build/solutions/{{OUT}}:
   - First lines: `# {{DOC}} solutions (extract)`, then the extract's `Sources:` line.
   - One block per question part of {{DOC}}, in the extract's order, its header the part's own
@@ -134,11 +141,12 @@ that must not see answers read the extract, so it holds none.}}
       after the cite's `]`, and its working (a table, a fenced trace) follows under it. The self-test counts each part whose block holds
       a `Solution [` line as an official part;
     - the exact line `No official solution.` for a part the official solutions skip.
-  - Every page or section of {{SOLDOC}} with no question part on it gets its own block here,
-    never in the extract, as the extract's page blocks are written: `### [{{SOLDOC}} p.N]
-    <title>`. That is every page of a separate solutions file, and each key page of a past exam.
+  - Each answers page of {{SOLDOC}} (above) gets its own block here, never in the extract, as
+    the extract's page blocks are written: `### [{{SOLDOC}} p.N] <title>`. A part's solution on
+    a key page still goes under its part's block, and the key page's block holds what else is on
+    that page.
   - `UNREADABLE:` flags as in the extract.
-  - Last line: the extract's `Coverage:` line, for {{SOLDOC}} {{SOLRANGE}}.}}
+  - Last line: the extract's `Coverage:` line, for the answers pages of {{SOLDOC}}.}}
 ```
 
 ## Write (stage 04)
