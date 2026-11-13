@@ -211,7 +211,9 @@ evidence ids.
     MANIFEST.md alone, and an Answers `yes` row whose Key cell is empty or unread counts as an
     unattempted set, so the check exits 2 until that cell is fixed and the doc extracted.
     `11-next-exam`'s unverified path judges a doc by the MANIFEST.md row it will write, as
-    `extract_check.py` counts sets (a recitation with its solutions inline is one), refuses it as
+    `extract_check.py` counts sets (a recitation with its solutions inline is one), and any other
+    question doc the student hasn't attempted, Answers `no` included, which the script counts only
+    once a `Q` block of it is extracted; it refuses such a doc as
     an ending that adds nothing (logged on the `Skip asked` line, the `/clear` line while a mock
     is untaken), and a second ask for a doc the skip isn't open to runs "A source added"; a late
     set's undo runs on that path only for an attempted set (round 21 review).

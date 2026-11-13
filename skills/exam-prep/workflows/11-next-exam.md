@@ -490,8 +490,8 @@ happens:
 unchecked, its values quoted from the source and never computed, under an `Unverified` banner, off
 every sheet, out of the mocks and the cram order's reading rows, and out of `09`'s walk-throughs and
 quizzes while its STATUS line stands) and about how long "A source added" would take for this
-source. For a doc the skip isn't open to, one whose MANIFEST.md row would mark it an unattempted
-set or the answers to one (the addition's item 1 gives the test, and refuses it), the pushback
+source. For a doc the skip isn't open to, a question doc the student hasn't attempted or the
+answers to one (the addition's item 1 gives the test, and refuses it), the pushback
 says instead that the skip isn't open to it and why, and offers "A source added".
 Then commit `Skip asked: <file>, <date>, pushback given` in STATUS (while a mock is untaken,
 after `08-practice` step 4's STATUS check with the untaken mocks' keys, as every STATUS write then), and wait, writing no notes. The full path, if
@@ -519,15 +519,18 @@ type /clear, then "why did the addition stop?"`, since the student, looking away
    `practice/tutor/`; note `git rev-parse HEAD`. A check that fails is told to the student, and
    the addition waits for it. Then the doc itself, judged by the MANIFEST.md row item 2 will write
    for it (its Answers and Key cells as the template's legend says): this path takes a lecture, a
-   reading, a set the student has attempted or one no official solution in scope answers, and
-   refuses an unattempted set or an answers file that solves one, as `extract_check.py` counts them: a row whose Answers cell is `yes` and whose
+   reading or a set the student has attempted, and refuses an unattempted set or an answers file
+   that solves one, as `extract_check.py` counts them: a row whose Answers cell is `yes` and whose
    Key cell either is `for` naming a set whose row lacks `attempted`, or is anything else (the
    doc's own pages, `inline`, `sections:`, or empty or unread) with no `attempted` in its own
    Answers cell; or a row with no `attempted` in its Answers cell that an in-scope answers row's
    `for` key names (or will, once item 2's undo puts it back). A recitation with its worked
-   solutions inline is one. Its notes would quote such a set, which the questions check
-   blocks, and that check exits without a verdict until the doc is extracted, and this path
-   extracts only in item 2's undo, for an attempted set. A refused doc goes to "A source added", which extracts it: the addition ends there
+   solutions inline is one. Its notes would quote such a set, which the questions check blocks,
+   and that check exits without a verdict until the doc is extracted, and this path extracts
+   only in item 2's undo, for an attempted set. It refuses too any other question doc the student
+   hasn't attempted, whatever its row says: a practice set, homework or past exam that no answers
+   row names, Answers `no` included, which the script counts as a set only once a `Q` block of it
+   is extracted, so its notes here would quote unattempted questions unchecked. A refused doc goes to "A source added", which extracts it: the addition ends there
    with nothing added, as its opening says, the `Skip asked` line gaining `; refused: <why>, "A
    source added" takes it` (committed, checked as the pushback's STATUS write) and kept until that
    path's closing commit, and the student told so. Pick the

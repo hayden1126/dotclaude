@@ -323,12 +323,15 @@ class QuestionsCheckFiles(unittest.TestCase):
         set or an answers file that solves one and sends it to "A source added" (round 20). The
         test reads the row item 2 will write, as extract_check.py's unattempted() counts sets
         (an inline key is one), and the refusal is an ending that adds nothing, so the student
-        told to look away gets the /clear line (round 21)."""
+        told to look away gets the /clear line (round 21). A question doc no answers row names,
+        Answers `no` included, is refused too: the script counts it only once extracted."""
         flat = self.flat("11-next-exam.md")
         path = flat.split("## A source added unverified", 1)[1]
         opening = path.split("1. **Check and fence.**", 1)[0]
         check = path.split("1. **Check and fence.**", 1)[1].split("2. **Ingest**", 1)[0]
-        for phrase in ("this path takes a lecture, a reading, a set the student has attempted",
+        for phrase in ("this path takes a lecture, a reading or a set the student has attempted",
+                       "any other question doc the student hasn't attempted, whatever its row says",
+                       "Answers `no` included",
                        "refuses an unattempted set or an answers file that solves one",
                        "judged by the MANIFEST.md row item 2 will write",
                        "a row whose Answers cell is `yes`", "`for` naming a set whose row lacks "
