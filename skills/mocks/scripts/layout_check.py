@@ -552,8 +552,8 @@ def check_zoom(report: Report, browser: Browser, url: str):
         check_settled(report, scope, tab.settle(*ZOOM_SIZE))
         reach = tab.evaluate(ZOOM_REACH_JS)
         report.check(scope, "zoom 200% reaches 2x",
-                     abs(reach["width"] - 2 * reach["renderWidth"]) <= 2 * TOLERANCE
-                     and abs(reach["height"] - 2 * reach["renderHeight"]) <= 2 * TOLERANCE,
+                     reach["width"] >= 2 * reach["renderWidth"] - TOLERANCE
+                     and reach["height"] >= 2 * reach["renderHeight"] - TOLERANCE,
                      f"reaches {reach['width']:.0f} x {reach['height']:.0f} "
                      f"of {2 * reach['renderWidth']} x {2 * reach['renderHeight']}")
     tab.close()

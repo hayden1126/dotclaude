@@ -52,7 +52,10 @@ GUTTER_RULE = "@media (width < 1101px) { html { scrollbar-gutter: stable; } }"
 STACKED_COLUMNS = ".m-main { display: grid; grid-template-columns: minmax(0, 1fr);"
 STACKED_WIDTH = ": frameEl.parentElement.clientWidth) - 1;"
 RENDER_END = "</main></body></html>`;"
-FRAME_HEIGHT = "scaler.style.height = frameEl.style.height = height;"
+FRAME_HEIGHT = 'frameEl.style.height = Math.min(height, heightLeft + 1) + "px";'
+SCALER_HEIGHT = 'scaler.style.height = height + "px";'
+ZOOM_SCALE = "parseInt(state.zoom, 10) / 100"
+CUSTOMERS_SCREENS = 'screens: ["Customers"] }'
 MODES_LINE = 'const MODES = ["Light", "Dark"];'
 FRAME_OVERFLOW = ".m-frame { overflow: auto;"
 DENSITY_READ = 'compact = state.Density === "Compact"'
@@ -151,6 +154,18 @@ MUTANTS = {
     "zoom_cannot_scroll": {
         "edits": [(FRAME_OVERFLOW, ".m-frame { overflow: clip;")],
         "kind": "zoom 100% scrolls",
+        "also": {"zoom 200% reaches 2x"},
+    },
+    # 200% that draws at 100%: the frame can't scroll past the render's own size.
+    "zoom_200_stays_1x": {
+        "edits": [(ZOOM_SCALE, f"Math.min(1, {ZOOM_SCALE})")],
+        "kind": "zoom 200% reaches 2x",
+        "also": set(),
+    },
+    # A question's screens names a screen SCREENS lacks: the shell throws once the page is built.
+    "screens_typo": {
+        "edits": [(CUSTOMERS_SCREENS, 'screens: ["Customer"] }')],
+        "kind": "no script errors",
         "also": set(),
     },
     "render_script_throws": {
@@ -160,9 +175,10 @@ MUTANTS = {
         "also": set(),
     },
     "frame_clips_render": {
-        "edits": [(FRAME_HEIGHT, 'scaler.style.height = frameEl.style.height = Math.ceil(f.height * k / 2) + "px";')],
+        "edits": [(SCALER_HEIGHT, 'scaler.style.height = Math.ceil(height / 2) + "px";'),
+                  (FRAME_HEIGHT, 'frameEl.style.height = Math.ceil(height / 2) + "px";')],
         "kind": "render fit",
-        "also": {"zoom 100% scrolls"},
+        "also": {"zoom 100% scrolls", "zoom 200% reaches 2x"},
     },
     "stacked_two_columns": {
         "edits": [(STACKED_COLUMNS, ".m-main { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);")],
@@ -458,6 +474,12 @@ class Mutants(TemporaryPages):
     def test_zoom_cannot_scroll(self):
         self.assert_mutant_fails("zoom_cannot_scroll")
 
+    def test_zoom_200_stays_1x(self):
+        self.assert_mutant_fails("zoom_200_stays_1x")
+
+    def test_screens_typo(self):
+        self.assert_mutant_fails("screens_typo")
+
     def test_render_script_throws(self):
         self.assert_mutant_fails("render_script_throws")
 
@@ -490,7 +512,8 @@ class LivePage(TemporaryPages):
         steps = ["m-fit-1", "m-fit-2", "m-fit-3"]
         # Wide enough that every step fires between 1,905 and 1,101 px, and step 3 still fits at 1,101.
         short_group = '  { label: "Short", options: ["One", "Two", "Three"] },\n'
-        page = self.page([(CONTROLS_OPEN, CONTROLS_OPEN + extra_groups(1) + short_group)])
+        pair_group = '  { label: "Pair", options: ["Comfortable", "Compact"] },\n'
+        page = self.page([(CONTROLS_OPEN, CONTROLS_OPEN + extra_groups(1) + short_group + pair_group)])
         tab = self.open(page, 1905, 800)
         state = """(() => {
           const top = document.querySelector(".m-top");
