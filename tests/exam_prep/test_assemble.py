@@ -20,8 +20,9 @@ them), a row with no depth label while others have one or Markdown the map can't
 hand-written cram block or an open attribute in examnav.html is refused; a cram order with no label
 on any row (written before S33) builds bare, with one WARN naming 10-polish. A citation finds its
 row in any case (`Ed` the row ED) and links with the row's spelling. A writer's leftovers in a
-fragment (tool-call markup, a rule id such as (FB-123) in prose) are refused by fragment and
-line, a bare (S33), (L07) or (K02) warns once each and builds; code, math and a bare (C1) pass. PLAN.md's `- Review view: <N> minutes of reading` keeps
+fragment (tool-call markup, a rule id such as (FB-123) or CHASSIS (C4) in prose) are refused by
+fragment and line, a bare (S33), (L07), (K02) or (C1), after "rule" too, warns once each and
+builds; code and math pass. PLAN.md's `- Review view: <N> minutes of reading` keeps
 the toggle, `none` or no line strips it and refuses class rv; rv anywhere but a worked example or
 a Pitfall directly in its section, rv in a section whose Not on or Unverified banner comes before
 its first h3, an unreadable line, and a view over its minutes are refused; the map's cram block
@@ -590,10 +591,15 @@ class AssembleTest(unittest.TestCase):
                 ('<p>x &lt;parameter name="w"&gt; y</p>', "tool-call markup <parameter"),
                 (f"<p>x &lt;/{tool}parameter&gt;</p>", f"tool-call markup </{tool}p"),
                 ("<p>Linked, as asked (FB-123).</p>", "a skill rule id (FB-123)"),
+                ("<p>Linked (FB-12).</p>", "a skill rule id (FB-12)"),
                 ("<p>Themed, per CHASSIS (C4).</p>", "a skill rule id CHASSIS (C4)"),
-                ("<p>Per rule (C2), a fixed icon.</p>", "a skill rule id rule (C2)")):
+                ("<p>Themed, per CHASSIS (C3).</p>", "a skill rule id CHASSIS (C3)")):
             with self.subTest(extra=extra):
                 self.assertRefused(self.in_sec1(extra), f"frag/sec1.html:6: {needle}")
+        # A refused CHASSIS id isn't also a bare-id warning.
+        rc, out = self.in_sec1("<p>Themed, per CHASSIS (C4).</p>").run()
+        self.assertEqual(rc, 1, out)
+        self.assertNotIn("WARN", out)
         h = self.hub()
         h.write("_build/frag/examnav.html", NAV.replace("</p></div>", "</p>\n<p>Read first (FB-7).</p></div>"))
         self.assertRefused(h, "frag/examnav.html:3: a skill rule id (FB-7)")
@@ -601,12 +607,16 @@ class AssembleTest(unittest.TestCase):
         h.write("_build/frag/step-fig-2-walk.html", STEP.replace("</figure>", "<p>x</invoke></p></figure>"))
         self.assertRefused(h, "frag/step-fig-2-walk.html:2: tool-call markup </invoke>")
 
-    def test_a_bare_s_l_or_k_id_warns_and_builds(self):
-        # A course writes a state (S1), an inductor (L1) or a lecture (L3) so: one WARN per hit,
-        # naming fragment and line, and the page is written.
+    def test_a_bare_s_l_k_or_c_id_warns_and_builds(self):
+        # A course writes a state (S1), an inductor (L1), a lecture (L3), a capacitor or a case
+        # (C1) so, and "by the product rule (C3)" is course text (the student's call): one WARN
+        # per hit, naming fragment and line, and the page is written.
         for extra, needle in (("<p>Know it cold (S33).</p>", "(S33)"),
                               ("<p>One idea per block (L07).</p>", "(L07)"),
-                              ("<p>Opens on load (K02).</p>", "(K02)")):
+                              ("<p>Opens on load (K02).</p>", "(K02)"),
+                              ("<p>The capacitor (C1) charges.</p>", "(C1)"),
+                              ("<p>By the product rule (C3) it holds.</p>", "(C3)"),
+                              ("<p>Per Rule (C2), a fixed icon.</p>", "(C2)")):
             with self.subTest(extra=extra):
                 h = self.in_sec1(extra)
                 rc, out = h.run()
@@ -624,9 +634,9 @@ class AssembleTest(unittest.TestCase):
         self.assertIn("WARN: frag/examnav.html:3: a skill rule id (S7)", warns[0])
         self.assertIn("WARN: frag/examnav.html:3: a skill rule id (L3)", warns[1])
 
-    def test_code_math_and_circuit_labels_are_no_leftovers(self):
-        # A course can write (C1) for a capacitor or a case, and anything at all in code or math.
-        h = self.in_sec1('<p>The capacitor (C1) charges, case (C2) holds, \\(f(S1) = g(L2)\\) and</p>\n'
+    def test_code_and_math_are_no_leftovers(self):
+        # A course can write anything at all in code or math.
+        h = self.in_sec1('<p>It holds, \\(f(S1) = g(L2) + (C1)\\) and</p>\n'
                          '<p>\\[ (K02) + (FB-1) \\] and <code>(S33) &lt;/invoke&gt;</code>, as cited '
                          '(<a class="slink">D1 p.2</a>).</p>\n'
                          '<pre><code>(L07) &lt;parameter name="x"&gt; (FB-123)</code></pre>')

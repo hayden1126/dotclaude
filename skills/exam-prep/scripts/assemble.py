@@ -47,10 +47,10 @@ apart), or a TODO-VERIFY left from 05-verify; when a citation names a code MANIF
 is missing or its table has no Doc id or File column or repeats a code (in any case), or the key's
 own text fails the fragment checks; when a section, the map or a step-through holds what a writer
 agent left behind (FB-095, naming the fragment and its line): tool-call markup, as a tag or as text, or a
-skill rule id in parentheses in the student's text, `(FB-123)` or `(C4)` right after CHASSIS or
-rule (a bare `(C1)` is a capacitor or a case as often as a rule), code and math exempt; a bare
-`(S12)`, `(L07)` or `(K02)` only warns (one WARN line each, fragment and line), since a course
-writes a state, an inductor or a lecture that way; when a FIG marker holds a < or >, sits inside a
+skill rule id in parentheses in the student's text, `(FB-123)` or `(C4)` right after CHASSIS,
+code and math exempt; a bare `(S12)`, `(L07)`, `(K02)` or `(C1)`, after "rule" too, only warns
+(one WARN line each, fragment and line), since a course writes a state, an inductor, a lecture,
+a capacitor or a case that way, and "by the product rule (C3)" is course text; when a FIG marker holds a < or >, sits inside a
 tag, an attribute or code or outside a section (in the exam-day map or a step-through), is left
 with no step-through, or a step-through file isn't one <figure id="<fig-id>"> or isn't placed
 exactly once.
@@ -158,15 +158,16 @@ INLINE = re.compile(r"\\\((.*?)\\\)|`([^`]+)`|\*\*(.+?)\*\*|\[([^\]]+)\]\(([^)\s
 UNRENDERED = re.compile(r"[*`\[\]\\]|(?<!\w)_|_(?!\w)|<[A-Za-z/!?]")
 # What a writer agent leaves behind in a fragment, by line: its tool-call markup, as a tag or as
 # text, and a skill rule id in parentheses (STYLE's S, the feedback log's FB, the lessons' L, the
-# backlog's K, CHASSIS's C). Markup, FB and C are refused; a bare (C1) is as often a capacitor, a
-# case or a condition as a rule, so C counts only right after CHASSIS or rule. A bare S, L or K id
-# only warns (RULE_ID_WARN): a course writes a state (S1), an inductor (L1) or a lecture (L3) so,
-# and a wrong refusal mid-exam costs more than a stray id left on the page.
+# backlog's K, CHASSIS's C). Markup, FB and a C id right after CHASSIS are refused. A bare S, L,
+# K or C id, after "rule" too, only warns (RULE_ID_WARN): a course writes a state (S1), an
+# inductor (L1), a lecture (L3), a capacitor or a case (C1) so, and "by the product rule (C3)"
+# is course text (the student's call, 2026-11-12); a wrong refusal mid-exam costs more than a
+# stray id left on the page.
 TOOL_PREFIX = "antml" + ":"
 TOOL_TAGS = {"invoke", "parameter", "content"}
 TOOL_TEXT = re.compile(r"</invoke>|<invoke\s|</content>|<parameter\s|</parameter>|</?" + TOOL_PREFIX + r"\w")
-RULE_ID = re.compile(r"\(FB-\d+\)|\b(?:CHASSIS|[Rr]ule)\s*\(C\d+\)")
-RULE_ID_WARN = re.compile(r"\((?:S|L|K)\d+\)")
+RULE_ID = re.compile(r"\(FB-\d+\)|\bCHASSIS\s*\(C\d+\)")
+RULE_ID_WARN = re.compile(r"\((?:S|L|K|C)\d+\)")
 MATH = re.compile(r"\\\(.*?\\\)|\\\[.*?\\\]", re.S)
 TREE_VOID = {"br", "wbr", "img", "hr", "col", "input", "meta", "link", "source", "area", "base",
              "embed", "track", "param"}
@@ -465,7 +466,7 @@ class Leftovers(HTMLParser):
 
 def leftovers(name, text, problems, warnings=None):
     """Append what a writer agent left in one fragment (TOOL_TAGS, TOOL_TEXT, RULE_ID) to problems,
-    and each bare S, L or K id (RULE_ID_WARN) to warnings when it is a list, by line; text in code
+    and each bare S, L, K or C id (RULE_ID_WARN) to warnings when it is a list, by line; text in code
     or in \\( \\) or \\[ \\] math is exempt, and a rule id is read within one run of text, so a
     citation in parentheses, `(<a class="slink">L3</a>)`, is no rule id."""
     p = Leftovers()
@@ -481,18 +482,23 @@ def leftovers(name, text, problems, warnings=None):
         starts.append((len(joined), line, data))
         joined += data + "\0"
     joined = MATH.sub(lambda m: re.sub(r"[^\n\0]", " ", m.group(0)), joined)
-    maybe = []
+    maybe, refused = [], []
     for pattern, what, into in ((TOOL_TEXT, "tool-call markup", found), (RULE_ID, "a skill rule id", found),
                                 (RULE_ID_WARN, "a skill rule id", maybe)):
         for m in pattern.finditer(joined):
+            if into is maybe and any(a <= m.start() < b for a, b in refused):
+                continue  # CHASSIS (C4): refused already
+            if into is found:
+                refused.append(m.span())
             at, line, data = max((s for s in starts if s[0] <= m.start()), key=lambda s: s[0])
             into.append((line + data.count("\n", 0, m.start() - at), f"{what} {m.group(0).strip()}"))
     for line, what in sorted(found):
         problems.append(f"{name}:{line}: {what} left by a writer agent: take it out "
                         "of the notes and rebuild")
     if warnings is not None:
-        warnings += [f"{name}:{line}: {what}, if a writer agent left it (a state, an inductor or a "
-                     "lecture written so is fine): take it out of the notes" for line, what in maybe]
+        warnings += [f"{name}:{line}: {what}, if a writer agent left it (a state, an inductor, a "
+                     "lecture, a capacitor or a case written so is fine): take it out of the notes"
+                     for line, what in maybe]
 
 
 def tex_macros(text):
