@@ -242,16 +242,14 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
       text. So the bar includes trying a plain fetch before calling a page unreachable.
     Lands in lane practices' next PR (Hayden, 2026-11-13: "practices lane"), after Nov 16;
     tell the lane when it unparks.
-  - **A reusable product-research library** (Hayden, 2026-11-13: a capella lane's research for
-    its app plan "could be helpful for developing new apps/websites/company products"). That
-    lane holds about 30 topic files (legal: privacy and age, payments, hosting and transfers;
-    platform; backend cost; fonts licensing; security practices; analytics; retention) and a
-    source log of 852 entries from 388 sources, each with a quote and a read date. Lead's
-    shape: a private library outside dotclaude (it is a client's work), indexed by topic, each
-    claim keeping its source id, read date and checked or reported status, plus a pointer skill
-    telling a new-product session to read it first and re-verify anything that decides
-    something (prices, laws and limits go stale). Open, Hayden's: whether that lane's research
-    is his to reuse outside that client's product, and where the library lives. Not picked yet.
+  - **A reusable product-research library** (Hayden, 2026-11-13): a lane's research for an app
+    plan, reusable for new apps, websites and products. Hayden owns it. Built 2026-11-13 in
+    `~/scratch/product-research/` (private): a snapshot of about 30 topic files and a source log
+    of 852 entries from 388 sources, with a README that indexes the topics and sets the rules
+    (re-verify before deciding, checked versus reported). Left: a pointer skill telling a
+    new-product session to read the index first and re-verify what decides something. Any
+    skill made from it never names the source client, product or people (Hayden). Not picked
+    yet.
   - **The 5-hour usage limit may be gone for Hayden's account** (2026-11-12, unsettled): claude.ai
     Settings > Usage no longer lists it, but Claude Code's `/usage` still shows a session limit
     (Hayden), and 2.1.323's changelog announces no change. Settle it first: if the status line's
