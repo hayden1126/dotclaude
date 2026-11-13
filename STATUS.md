@@ -248,6 +248,16 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
       text. So the bar includes trying a plain fetch before calling a page unreachable.
     Lands in lane practices' next PR (Hayden, 2026-11-13: "practices lane"), after Nov 16;
     tell the lane when it unparks.
+  - **The skill-copy check calls `~/.claude/skills` a copy of itself when the cwd is home**
+    (reported 2026-11-13 by session f5c6b8c5, cwd `~`): at session start it says "This project
+    has its own copy of the installed practices skill auth-secrets: ~/.claude/skills/auth-secrets,
+    beside ~/.claude/skills/auth-secrets", and the same for dependencies and server-code, and tells
+    the model to propose deleting one. Cause, read in `hooks/practices_check.py` `discover`: with
+    the project at `~`, `<project>/.claude/skills` is the installed root (`config_home()/skills`),
+    so every installed skill is loaded again as a copy. Rules aren't doubled (a copy only adds
+    new ids), only the false note. Fix: skip the project root when its realpath matches the
+    installed root's, plus a test with the project at the config home's parent. For lane
+    practices' next PR (it owns the file), after Nov 16.
   - **A reusable product-research library** (Hayden, 2026-11-13): a lane's research for an app
     plan, reusable for new apps, websites and products. Hayden owns it. Built 2026-11-13 in
     `~/scratch/product-research/` (private): a snapshot of about 30 topic files and a source log
