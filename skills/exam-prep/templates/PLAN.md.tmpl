@@ -57,7 +57,7 @@ spawn, and spawn unnamed.
 | Stage | Who | This course | Output |
 |---|---|---|---|
 | 01 ingest | main | {{ADAPTERS: PDF, reveal.js HTML, ebook, Ed}} | `MANIFEST.md` counts, renders, Ed digest |
-| 02 extract | {{N}} agents | {{DECK SPLITS: one whole deck per agent; decks over P pages split at a section divider, 3-page overlap}} | `_build/extract/<name>.md`, and `_build/solutions/<name>.md` for each solved set, one file per set (a multi-set answers file's agent writes each set's file and one for its own pages) |
+| 02 extract | {{N}} agents | {{DECK SPLITS: one whole deck per agent; decks over P pages split at a section divider, 3-page overlap}} | `_build/extract/<name>.md`, and `_build/solutions/<name>.md` beside each extract holding a solved set's blocks (a multi-set answers file's agent writes each set's file and one for its own pages) |
 | 03 backbone | main | {{EXPECTED SECTIONS, final cut set by the extracts}} | `_build/backbone.md` |
 | 04 write | {{N}} writers, or the main session alone (two or three short sections, `04-write`) | one per backbone section | `notes/NN-<slug>.md` |
 | 05 verify | main, {{N}} section reviewers, {{N}} checklist auditors, {{N}} cold readers (one per two or three sections) | | fixes applied single-threaded |

@@ -83,7 +83,7 @@ session) when the hub has its own conventions:
 | `_build/pages/`, `_build/text/`, `_build/slices/`, `_build/media/` | renders, deck slices, extracted images | ignored |
 | `_build/shots/`, `_build/package*.json` | the browser check's screenshots, a local Playwright install | ignored |
 | `_build/videos/` | the watch list's frames and transcripts, when kept at all | ignored |
-| `_build/solutions/` | the official solutions, one file per set, named as its extract, plus one for a multi-set answers file's own pages in full, `<doc id in lower case>.md`; each block has one home file (`02-extract`, "The solutions file") | tracked |
+| `_build/solutions/` | the official solutions, one file beside each extract that needs one, named as it (a deck split over two extracts may need two), plus one for a multi-set answers file's own pages in full, `<doc id in lower case>.md`; each block has one home file (`02-extract`, "The solutions file") | tracked |
 | `_build/img/` | slide-image figures, cropped from the page renders (`04-write` step 4) | ignored |
 | `_build/watch/` | the watch list's topics, candidates, fetch log, rankings, merge log and annotations | tracked |
 | `_build/` (rest) | extracts, backbone, checker, hub copies of STYLE, CHASSIS, CONVERT, WATCH, page build | tracked |
@@ -99,7 +99,7 @@ names (00 runs 01's Ed pull; 02 starts 05's checker).
 |---|---|---|---|
 | 00 | `workflows/00-intake.md` | hub, `CLAUDE.md`, `MANIFEST.md` scope, approved `PLAN.md` | PLAN.md reads `Approved: <date>` |
 | 01 | `workflows/01-ingest.md` | `sources/`, `MANIFEST.md`, renders, Ed digest | every in-scope row has pages on disk |
-| 02 | `workflows/02-extract.md` | `_build/extract/<name>.md`, and `_build/solutions/<name>.md` for a solved set (one file per set) | `extract_check.py` exits 0 (a doc on an `Unverified:` line excepted) |
+| 02 | `workflows/02-extract.md` | `_build/extract/<name>.md`, and `_build/solutions/<name>.md` beside each extract holding a solved set's blocks | `extract_check.py` exits 0 (a doc on an `Unverified:` line excepted) |
 | 03 | `workflows/03-backbone.md` | `_build/backbone.md`: order, id registry, coverage | the coverage check is clean |
 | 04 | `workflows/04-write.md` | `notes/NN-<slug>.md`, wired | `linkcheck.py` is clean (plain-text notes: references checked by hand) |
 | 05 | `workflows/05-verify.md` | checker, reviews applied | self-test covers every official part (or nothing is computable), no `TODO-VERIFY` left |
