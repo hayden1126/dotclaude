@@ -459,6 +459,36 @@ class Questions(unittest.TestCase):
         rc, out, err = self.run_on(page, "--allow", lecture)
         self.assertEqual((rc, err), (0, ""), out)
 
+    def test_a_note_line_holding_prose_is_still_read(self):
+        # Any line starting `Coverage:` or `Pages:` used to be dropped whole, so question text
+        # after either went unchecked. Only the brief's own forms are dropped now.
+        long = ("Every courier in the depot must plan a delivery round that visits each "
+                "customer once and returns home")
+        page = self.write("sec9.md", f"## A round\n\n{long} before dark.\n")
+        for name, lead in (("coverage", "Coverage: "), ("pages", "Pages: "),
+                           ("listed pages", "- Pages: [HW9 p.3] ")):
+            with self.subTest(name):
+                q = self.write(f"q-{name.replace(' ', '-')}.md",
+                               f"### [HW9 Q3] Rounds\n- Pages: [HW9 p.3]\n{lead}{long}.\n")
+                r = subprocess.run([sys.executable, os.path.join(SCRIPTS, "mock_leak.py"),
+                                    "--questions", q, "--pages", page],
+                                   capture_output=True, text=True, timeout=60)
+                self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+                self.assertIn(f"{page}:3: ", r.stdout)
+        # The real note lines are still dropped: their words match nothing.
+        notes = self.write("q-notes.md", "### [HW9 Q3] Rounds\n- Pages: [HW9 p.3], [HW9 p.4]\n"
+                           "Pages: [HW9 p.5]\n**Shape:** plan a delivery round that visits each "
+                           "customer once\n**Conventions:** returns home before dark each day and "
+                           "every night\nCoverage: HW9 pp.1-4; 4 blocks; 1 image only (p.2: a map "
+                           "of the depot); 0 flagged unreadable.\n")
+        echo = self.write("sec10.md", "Plan a delivery round that visits each customer once. Returns "
+                          "home before dark each day and every night. Coverage HW9 pp 1 4 4 blocks "
+                          "1 image only p 2 a map of the depot 0 flagged unreadable.\n")
+        r = subprocess.run([sys.executable, os.path.join(SCRIPTS, "mock_leak.py"),
+                            "--questions", notes, "--pages", echo],
+                           capture_output=True, text=True, timeout=60)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+
     def test_bad_usage(self):
         page = self.write("sec8.md", "Nothing here.\n")
         for name, args, message in (

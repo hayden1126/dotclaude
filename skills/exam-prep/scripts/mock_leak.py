@@ -50,8 +50,10 @@ every reading keeps its line breaks, so a hit names a line. A hit is either of t
   digits with an optional decimal part, standing alone: x1, Q3, 10pts and p.17 hold none, and
   3 and 3.0 are the same number. Consecutive matching triples count as one hit.
 Citation brackets (`[D4 p.17]`, `[HW1 Q3a]`) are dropped from both sides first, and so are a
-question file's `Pages:`, `**Shape:**`, `**Conventions:**` and `Coverage:` lines: the extract's
-own notes, not the set's text. A run or a triple that an --allow file (a source the student may
+question file's note lines, as the extract brief writes them: `Pages:` with nothing but cites
+after it, `**Shape:**`, `**Conventions:**`, and the closing `Coverage: <range>; N blocks; K image
+only; U flagged unreadable.`: the extract's own notes, not the set's text. Any other line starting
+`Pages:` or `Coverage:` is read like the rest. A run or a triple that an --allow file (a source the student may
 read, such as a lecture's extract) also holds is boilerplate the set shares with the course, and
 doesn't count. Each hit prints the page and its line, how many words or numbers match, and the
 question file's line with its part label (the nearest heading's `[HW3 Q2c]` bracket or Q2c-style
@@ -361,7 +363,19 @@ NUMBER = re.compile(r"(?<![\w.])\d+(?:\.\d+)?(?!\w)")
 CITE = re.compile(r"\[[A-Z][A-Za-z]*\d+[A-Za-z]* [^\]\n]{1,40}\]")
 # A sentence's end: ., ! or ? before a space, a blank line, the line before a heading, a block tag.
 SENTENCE_END = re.compile(r"[.!?](?=\s)|\n[ \t]*\n|\n(?=[ \t]*#)|\x1e")
-NOTE_LINE = re.compile(r"^[ \t]*(?:Pages:|\*\*Shape:\*\*|\*\*Conventions:\*\*|Coverage:).*$", re.M)
+# A question file's own note lines (the extract brief's forms), dropped whole, as a list item or
+# bare: `Pages:` with nothing after it but cites (CITE has blanked most already) and separators;
+# a `**Shape:**` or `**Conventions:**` note; the closing `Coverage: <range>; N blocks; K image only
+# (...); U flagged unreadable.` (or an older `0 UNREADABLE.` / `UNREADABLE: none.` tail). Any
+# other line starting `Pages:` or `Coverage:` is read, so question text can't hide after one.
+NOTE_LINE = re.compile(
+    r"^[ \t]*(?:[-*][ \t]+)?(?:"
+    r"Pages:(?:[ \t,;&]|and\b|\[[A-Za-z][\w.-]*[ \t][^\]\n]{1,40}\])*"
+    r"|\*\*(?:Shape|Conventions):\*\*.*"
+    r"|Coverage:[^;\n]{1,80};[ \t]*\d+[ \t]+blocks?[ \t]*;[ \t]*\d+[ \t]*"
+    r"(?:image[ \t]+only(?:[ \t]*\([^)\n]*\))?|\(image[ \t]+only[^)\n]*\))[ \t]*;[ \t]*"
+    r"(?i:\d+[ \t]+(?:flagged[ \t]+)?unreadable|unreadable:[ \t]*none)\.?[ \t]*"
+    r")$", re.M)
 HEADING = re.compile(r"^[ \t]*(?:#{1,6}[ \t]|(?:Question|Problem)[ \t]+\d)")
 BRACKET = re.compile(r"\[([A-Z][A-Za-z]*\d+[A-Za-z]* [^\]\n]{1,40})\]")
 QLABEL = re.compile(r"\bQ\d+[a-z0-9.]*\b")
