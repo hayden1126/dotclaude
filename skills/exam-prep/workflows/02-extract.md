@@ -48,17 +48,29 @@ line. Nothing of the question follows a marker inside its block, since the quest
 drops everything from the marker to the block's end.
 
 `qonly.py` cuts at a strict marker in every block: the brief's form, `**Solution:**`,
-`**Solution**`, a `#### Solution` heading, a bare `Solution:`. In a question part's block of a
-doc with solutions (an Answers `yes` doc, or one a `solutions to <doc>` note names), wider forms
-cut too: `Worked solution`, `Answer`, `Answer key`, `Key`, and a qualifier that names a part
-(`Solution to Q1a [<soldoc> p.N]:`, `Solution, part (a) [<soldoc> p.N]:`, `**Solution (Q1):**`,
-`**Answer:**`). A bracketed `Answer [...]:` or `Key [...]:` counts only when its cite points into
-answers, and a qualifier that names no part (`**Solutions to recurrences**`, `**Solution
-set:**`) never cuts. `extract_check.py` warns on every cutting marker but the brief's form, so an
-agent writes only that one. Inside a code fence only the looser forms (a `# Solution` comment,
-which the heading form also reads as, or a bare `Solution:` or `Solution` line) are code and cut
-nothing; the bold `**Solution:**` and bracketed `Solution [<doc> <loc>]:` markers cut wherever
-they sit, so question code never writes them.
+`**Solution**`, a `#### Solution` heading, a bare `Solution:`. Wider forms cut only in a question
+part's block (never a stem's or a page's) of a doc with solutions, and only when no `**Shape:**`
+or `**Conventions:**` line follows the marker in that block, since the brief puts the solution
+last: `Worked solution`, a bold `**Answer:**` or `**Key:**`, a qualifier that names a part
+(`Solution to Q1a [<soldoc> p.N]:`, `Solution, part (a) [<soldoc> p.N]:`, `**Solution (Q1):**`),
+and an `Answer [...]:` whose cite points into answers. A qualifier that names no part
+(`**Solutions to recurrences**`, `**Solution set:**`) never cuts. Nor does a plain `Key:`,
+`Keys:` or `Answer:` (no bold, no qualifier, no cite), or an `Answer:` followed by blanks or
+underscores: such a line in question text stays, and a solution written that way is caught only
+by the unmarked-part warning below.
+
+A doc with solutions is one MANIFEST marks Answers `yes`, one a `solutions to <doc>` note names,
+or, while an Answers `yes` row has no `solutions to` note, any doc: `extract_check.py` warns
+about that missing note, and adding it keeps the wider forms to the doc it names.
+`qonly.py --parts` counts the official parts for `05-verify`'s self-test: one per question
+part's block of a doc with solutions whose marker cuts, plus each `Solution [` line in an
+answers-file block, and never a lecture's worked example. `extract_check.py` warns (exit 0) on
+a cutting marker in those blocks (a question part's of a doc with solutions, an answers file's)
+that isn't the brief's form, so an agent writes only that one, and on a question part of a doc
+with solutions that no marker cuts (step 3.4 says what each needs). Inside a code fence only the looser forms (a `# Solution` comment, which the heading
+form also reads as, or a bare `Solution:` or `Solution` line) are code and cut nothing; the bold
+`**Solution:**` and bracketed `Solution [<doc> <loc>]:` markers cut wherever they sit, so
+question code never writes them.
 
 A line no marker cuts that cites an answers page (any page of an answers file, of an Answers
 `yes` doc with no question part, or a key page or page-less section of a past exam: a page no
@@ -66,11 +78,13 @@ question part's `Pages:` line names, read across every extract) is a solution wo
 format: `qonly.py` makes a copy due for it and `extract_check.py` fails it by file and line (a
 `Pages:` line holding nothing but cites doesn't count). A solution that cites only its own
 question page, or nothing, can't be told from question text: `extract_check.py` warns on each
-question part of a doc with solutions that no marker cuts. The reverse holds too: a question that quotes a document in a nested fence (a four-backtick fence
-holding a three-backtick line and a `## Solution` heading) loses everything from that heading to
-the block's end in the question-only copy. That fails safe, so it stands, but quoted material
+question part of a doc with solutions that no marker cuts. The reverse holds too: a question
+that quotes a document in a nested fence (a four-backtick fence holding a three-backtick line and
+a `## Solution` heading) loses everything from that heading to the block's end in the
+question-only copy. That fails safe, so it stands, but quoted material
 avoids a heading-form marker. A block of an answers file (MANIFEST's Answers `yes`) is all
-answer, except a page of a past exam's own questions, which a question part names on its `Pages:` line.
+answer, except a page of a past exam's own questions, which a question part names on its
+`Pages:` line.
 
 ## Step 3: Check what came back
 
@@ -82,7 +96,9 @@ agent that wrote anywhere else broke its brief: undo that and say so in STATUS).
    the blocks: each in-scope page of a PDF rendered and with a block, each in-scope slide of a
    deck, at least one block for any other source (the Ed digest is read as it is). It prints the
    missing pages or slides and the image-only and `UNREADABLE:` counts per document, then each open
-   `UNREADABLE:` flag by file and line, with the re-read it needs (step 2). A missing
+   `UNREADABLE:` flag by file and line, with the re-read it needs (step 2). It fails while any
+   such flag is open; a value marked `(illegible at 300 dpi: <what>)` (step 2) is counted, and
+   doesn't fail it. A missing
    page goes back to its agent (SendMessage to its id), or the main session extracts it. Blocks
    for a `reserved` doc fail the check: delete them, and find which brief let the agent open it
    (FB-023). Blocks for a `pending` row fail too: its file has arrived, so give the row a real
@@ -95,7 +111,10 @@ agent that wrote anywhere else broke its brief: undo that and say so in STATUS).
    _build/pages/<doc>@300dpi/crop-NNN`. (`RENDER_DPI=300 bash <skill>/scripts/render_pdf.sh
    <file> <doc> N N` renders the whole page there when a crop isn't enough.) Replace the flag
    with the value and `(re-read at 300 dpi)`. A misread edge weight carries into every trace
-   built on it (FB-055, L06).
+   built on it (FB-055, L06). A value still illegible at 300 dpi, on the crop and on the whole
+   page, is never guessed: replace its flag with `(illegible at 300 dpi: <what, and where on the
+   page>)`, note it in STATUS as a judgment call, and ask the student for it once no `Build
+   running` line stands (hard rule 1). Only the main session writes that form, after the re-read.
 3. Spot-check one diagram per deck against its page image, and check that the page numbers in the
    headers are real pages, never numbers from an agent's summary (FB-051).
 4. Write the question-only copies (FB-056) once the checks above pass: `python3 -I
@@ -109,13 +128,15 @@ agent that wrote anywhere else broke its brief: undo that and say so in STATUS).
    (a hand edit): run `qonly.py` again. It fails, by file and line, an extract's line that no
    marker cuts and that cites an answers page (`CITES AN ANSWERS PAGE`): a solution is rewritten
    as `Solution [<soldoc> p.N]: ...`, question text cites the question's own page. It warns, by
-   file and line, on a marker it cuts that isn't `Solution [<doc> <loc>]:` (rewrite it in that
-   form and rerun `qonly.py`), and on a question part of a doc with solutions that no marker
-   cuts: the main session reads that part; a solution there gets the brief's marker, and a part
-   the official solutions skip needs nothing. It fails, by file and line, an extract's code fence
-   that
-   never closes before the next block header, the closing `Coverage:` line or the end of the file
-   (no fence exempts a marker then): close it with the same mark. It warns, by file and line, on
+   file and line, on a marker it cuts that isn't `Solution [<doc> <loc>]:`: the main session
+   reads the line; a solution is rewritten as `Solution [<doc> <loc>]: ...` and `qonly.py` runs
+   again, and question text is left as is. It warns, by file and line, on a question part of a
+   doc with solutions that no marker cuts: the main session reads that part; a solution there
+   gets the brief's marker, and a part the official solutions skip needs nothing. It warns on an
+   Answers `yes` row with no `solutions to <doc>` note: add the note. It fails, by file and line,
+   an extract's code fence that never closes before the next block header, the closing
+   `Coverage:` line or the end of the file (no fence exempts a marker then): close it with the
+   same mark. It warns, by file and line, on
    a looser marker left inside a fence, kept as code: the main session checks whether it starts
    a solution (a starter fence whose closer was forgotten) and, if so, closes the fence above it
    or rewrites the marker as `Solution [<doc> <loc>]:`. After either fix, run `qonly.py` and
@@ -137,10 +158,12 @@ audits the second group against their images (FB-052, FB-104).
 
 ## Done when
 
-`extract_check.py` exits 0 (it fails while any `UNREADABLE:` flag is open, while an extract's code
-fence never closes, while a line no marker cuts cites an answers page, or while a question-only
-copy is missing, stale, differs from `qonly.py`'s output or holds a solution), and STATUS has the
-coverage. Its warnings (an off-form marker, an unmarked part, a loose marker in a fence) are each
-read and either fixed or noted in STATUS. It skips a doc on a STATUS `Unverified:` line (`11-next-exam`, "A source added
+`extract_check.py` exits 0 (it fails while any `UNREADABLE:` flag is open, though not on a value
+marked `(illegible at 300 dpi: ...)`, while an extract's code fence never closes, while a line no
+marker cuts cites an answers page, or while a question-only copy is missing, stale, differs from
+`qonly.py`'s output or holds a solution), and STATUS has the coverage and each value marked
+illegible as a judgment call. Its warnings (an off-form marker, an unmarked part, an Answers
+`yes` row with no `solutions to` note, a loose marker in a fence) are each read and either fixed
+or noted in STATUS. It skips a doc on a STATUS `Unverified:` line (`11-next-exam`, "A source added
 unverified") until that doc has a block. Commit the extracts and their question-only copies:
 they are tracked in the hub, which stays local.

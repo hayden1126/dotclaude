@@ -92,7 +92,9 @@ Transcribe; never summarize.
     empty one: every page in your range gets a block, in a question document too;
   - `UNREADABLE: <what, and where on the page>` for anything you can't read with certainty. Never
     guess a value. Flag a small, rotated or crowded label (an edge weight, a subscript) the same
-    way, so the main session re-reads it at a higher resolution.
+    way, so the main session re-reads it at a higher resolution. The main session alone replaces
+    a flag with `(illegible at 300 dpi: ...)` when the re-read fails too; never write that form
+    yourself.
 - If your first or last page continues a topic from outside your range, say so in one line under
   its block.
 - A question document (homework, recitation, practice exam) gets one block per question part

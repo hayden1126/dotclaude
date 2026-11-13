@@ -19,7 +19,9 @@ derivations.
 - Copy `<skill>/templates/verify-selftest.py` to `_build/verify/selftest.py`. Add one `check` per
   official answer part, cited to its page, and a `skip` with its shape for a part the reference
   can't compute (a proof); set `PARTS` to the number `python3 -I <skill>/scripts/qonly.py --parts`
-  prints from the hub root, one per solution marker `qonly.py` cuts (FB-100). Add an `example`
+  prints from the hub root: one per question part of a doc with solutions whose marker `qonly.py`
+  cuts, plus each `Solution [` line in an answers-file block, never a lecture's worked example
+  (`02-extract`, "Solutions in an extract"; FB-100). Add an `example`
   for each worked example the course itself shows: before any official solutions are out, those
   are what test the reference. `python3 -I _build/verify/selftest.py` must print `ALL PASS` with
   every part covered once before anything uses the reference.

@@ -109,15 +109,15 @@ evidence ids.
   `workflows/00-intake.md`, `workflows/02-extract.md`, `workflows/03-backbone.md`,
   `workflows/04-write.md`, `workflows/05-verify.md`, `workflows/06-site.md`,
   `workflows/07-cheatsheet.md`, `workflows/08-practice.md`, `workflows/09-tutor.md`,
-  `workflows/10-polish.md`, `workflows/11-next-exam.md` and `workflows/12-retro.md`, each baseline
-  2026-11-12; `templates/WATCH.md` and `templates/videos-addon.html`, new, baseline 2026-11-12;
+  `workflows/10-polish.md`, `workflows/11-next-exam.md`, `workflows/12-retro.md`,
+  `templates/verify-selftest.py` and `templates/verify-set-key.py`, each baseline 2026-11-12;
+  `templates/WATCH.md` and `templates/videos-addon.html`, new, baseline 2026-11-12;
   `templates/chassis-shots/`, regenerated, with new `-pin` and `-review-pin` shots and two new
   figure shots (`-fig-1-slide`, `-fig-2-triangle`) at each width;
   `scripts/qonly.py`, `scripts/videos.py` and `scripts/verify_videos.mjs`, new, and
   `scripts/assemble.py`, `scripts/coverage_check.py`, `scripts/cram_check.py`,
   `scripts/extract_check.py`, `scripts/mock_leak.py`, `scripts/mockpage.py`,
-  `scripts/verify_page.mjs`, `templates/verify-selftest.py` and `templates/verify-set-key.py`,
-  which carry no date.
+  `scripts/verify_page.mjs`, which carry no date.
 - **Changes:**
   - FB-124 and L26: the theme chrome, CHASSIS C2 (themed scrollbars, an opaque page track), C3
     (a fixed theme icon with no words) and C4 (full screen where granted, the F and T keys), on
@@ -133,7 +133,9 @@ evidence ids.
   - FB-123: citation codes now match their MANIFEST.md row in any case, silently, the source key
     keeping the row's spelling (I3.C8).
   - FB-056: question-only copies of the extracts with solutions (`qonly.py`, `02-extract` step
-    3.4, checked by `extract_check.py`), read by every answer-blind brief (I3.C18, I3.G9, I2.G10).
+    3.4, checked by `extract_check.py`, which warns on an off-form marker and on an unmarked
+    part, with `qonly.py --parts` feeding `05-verify`'s PARTS, FB-100), read by every
+    answer-blind brief (I3.C18, I3.G9, I2.G10).
   - FB-191: `mock_leak.py`'s questions mode drops only the extract brief's own note lines (a
     `Pages:` line of cites alone, `**Shape:**`, `**Conventions:**` and the closing `Coverage:`
     line), so question text on any other `Pages:` or `Coverage:` line is checked (round 6 review).
