@@ -177,7 +177,10 @@ order (`08-practice`) get the same audit when they exist.
   a shared answers file's own file is a blocker like any other, even when the set it quotes is
   attempted: the notes quote an attempted set's official text only once every set its answers
   file solves is attempted.
-  Each hit names a page's line (a notes section or a sheet) and a set's part, never the text. The Review view (`07-cheatsheet`)
+  Each hit names a page's line (a notes section or a sheet) and a set's part, never the text; the
+  part comes only from a Markdown heading or a `Question N` line above it, so a hit in a Word
+  set's rendered text or a course page's `.html` source may name only its file and line. The
+  Review view (`07-cheatsheet`)
   only tags blocks of the notes, so this check covers it, and every later change runs it as
   `08-practice`'s "Changing the notes or a sheet" item 4 says, with this same command.
   A hit is a blocker: rewrite the passage with fresh numbers and a fresh setup (S7), and rerun
