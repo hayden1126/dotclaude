@@ -20,10 +20,13 @@ transcribes and never summarizes.
 - **An answers file that solves several sets gets its own agent** (its Key cell `for HW1, HW2
   and HW3`). It reads those sets' question pages for their part ids, and the answers file, and
   writes one solutions file per set, `_build/solutions/<name>.md` under that set's extract
-  `<name>`, holding the set's part blocks, plus `_build/solutions/<answers file name>.md` for the
-  answers file's own page blocks. Each set's own agent then writes only its extract (the brief
-  without the SOLUTIONS slots), with the same part ids. An agent may write several files, and no
-  file is written by two agents (hard rule 6).
+  `<name>`, holding the set's part blocks and a stem block `### [<set> Q3 stem]` for official
+  text a question's parts share, plus `_build/solutions/<answers file name>.md` for the answers
+  file's own page or section blocks, each holding only the line `(transcribed under the sets'
+  blocks)` (or `(blank)`, `(image only: ...)` or a flag). Its brief keeps the SHARED ANSWERS
+  slots. Each set's own agent then writes only its extract (the brief without the SOLUTIONS
+  slots), with the same part ids. An agent may write several files, and no file is written by
+  two agents (hard rule 6).
 - **By source type:** a PDF agent reads `_build/text/` and `_build/pages/`; a Word document's agent
   reads `_build/text/<doc>.md` and `_build/media/<doc>/`. A reveal deck agent reads a slice that
   the main session cuts before spawning:
@@ -52,11 +55,12 @@ them), and it must reproduce them before anything uses it (FB-100).
 
 An extract holds no answer (FB-056). A solved set's official solutions sit in one file per set,
 `_build/solutions/<name>.md`, under its extract's `<name>` (`_build/extract/hw1.md` pairs with
-`_build/solutions/hw1.md`): a set's part blocks always sit there, beside its extract, and
-`extract_check.py` fails one anywhere else (`WRONG SOLUTIONS FILE`, step 3). The set's extract
-agent writes it, except when the set's answers file solves several sets: that file's own agent
-writes each of those sets' solutions files, and `_build/solutions/<answers file name>.md` for
-the answers file's own page blocks (step 1). No file is written by two agents (hard rule 6). All
+`_build/solutions/hw1.md`): a set's part and stem blocks always sit there, beside its extract,
+and `extract_check.py` fails a part block anywhere else (`WRONG SOLUTIONS FILE`, step 3). The
+set's extract agent writes it, except when the set's answers file solves several sets: that
+file's own agent writes each of those sets' solutions files, and `_build/solutions/<answers file
+name>.md` for the answers file's own page blocks, which hold only a pointer line (below, and step
+1). No file is written by two agents (hard rule 6). All
 are tracked in the hub. Each solutions file opens with `# <DOC> solutions (extract)`, naming its
 one set (or, for the answers file's own file, that file), never several docs, then the `Sources:`
 line of its set's extract with the answers file added, and ends with a `Coverage:` closing line
@@ -65,10 +69,17 @@ in the extract's form, for the blocks it holds. Between them:
 - one block per question part of the set, `### [HW1 Q1a]` (a title is optional), the part's own
   block id from the extract, holding either `Solution [HW1S p.2]: ...` and its working (tables,
   fenced traces) or the exact line `No official solution.`;
+- when the set's answers file solves several sets, a stem block `### [HW1 Q3 stem]` before a
+  question's part blocks for the official text its parts share (a common setup, a table they all
+  use); each part keeps its own block and its own solution;
 - the page or section block of each answers page: every page of a separate answers file
-  (`### [HW1S p.1] ...`), in the set's solutions file when the answers file solves that set alone
-  and in `_build/solutions/<answers file name>.md` when it solves several, and each key page or
-  key section of a doc holding its own key that its Key cell names (below).
+  (`### [HW1S p.1] ...`), in the set's solutions file when the answers file solves that set alone,
+  and each key page or key section of a doc holding its own key that its Key cell names (below).
+  When the answers file solves several sets, its page blocks go in `_build/solutions/<answers
+  file name>.md` instead, and each holds only the line `(transcribed under the sets' blocks)`
+  (or `(blank)`, `(image only: ...)` or a flag): every word of official text on the page sits
+  under its set's stem or part block, in the set's own file, so the questions check, which reads
+  only the sets' files, sees all of it (`SHARED ANSWERS PAGE HOLDS TEXT`, step 3).
 
 `UNREADABLE:` flags and `(illegible at 300 dpi: ...)` work in it as in an extract. An erratum
 (an official answer that is wrong) is the main session's alone: an `Erratum: ...` line under the
@@ -77,11 +88,14 @@ part's `Solution [` line, the official line kept (`05-verify` step 1).
 The solved docs come from MANIFEST's Key column (`01-ingest` step 3 writes it; Notes are free
 text and nothing reads them for this), on in-scope rows (Scope `in` or `concepts only`) whose
 Answers is `yes`. A Key cell `for HW1, HW2 and HW3` marks a separate answers file solving the docs
-it names, each a MANIFEST doc id. Any other Key form marks a doc holding its own key (a past exam),
-which solves itself: `pp. 7-9, 11` or `p.N` names its key pages; `inline` names none, since each
-solution sits under its question on the same page; `sections: Marking scheme, Answers` names the
-key sections of a source without pages (a Word exam) by their exact locators, and its extract
-agent writes each one as a block with that locator, `### [PE3 Marking scheme] ...`. A `reserved`,
+it names, each a MANIFEST doc id and never the row's own. Any other Key form marks a doc holding
+its own key (a past exam), which solves itself: `pp. 7-9, 11` or `p.N` names its key pages, on a
+PDF or a row whose Pages is a number; `inline` names none, since each solution sits under its
+question on the same page; `sections: Marking scheme, Answers` names the key sections of a source
+without pages (a Word exam, or a slide deck by its slides, `sections: #/5, #/6`) by their exact
+locators, and its extract agent writes each one as a block with that locator, `### [PE3 Marking
+scheme] ...`. A block whose locator is such a name followed by ` Q...` or a comma (`### [PE3
+Marking scheme Q2] ...`) is key material too, and goes to the solutions file. A `reserved`,
 `pending` or `out` answers file solves nothing, nor does a row on a STATUS `Unverified:` line
 until it is verified. The brief's `{{KEY PAGES}}` slot gives the agent what the Key cell names:
 the pages, `none` for `inline`, or the key sections by locator. Only those pages or sections go
@@ -143,7 +157,13 @@ STATUS).
      only cites, and the closing `Coverage:` line, aside);
    - `AN ANSWERS PAGE IN AN EXTRACT: ... move it to _build/solutions/<name>.md`: a page block of
      an answers doc on an answers page: any page of a separate answers file, or a key page or key
-     section its Key cell names.
+     section its Key cell names (a locator that is a key section's name followed by ` Q...` or a
+     comma included);
+   - `SHARED ANSWERS PAGE HOLDS TEXT`, printed
+     `<file>:<line>: SHARED ANSWERS PAGE HOLDS TEXT: a page block of <doc>, which solves several sets, holds only "(transcribed under the sets' blocks)"; put this under its set's stem or part block in _build/solutions/<set>.md`:
+     a line in a page block of a multi-set answers file other than that pointer line, `(blank)`,
+     `(image only: ...)` or a flag. Move the text under its set's stem or part block, in the
+     set's own solutions file.
 
    `SOLUTION IN AN EXTRACT` holds for any extract block, a lecture's too, when its `Solution [`
    or `**Solution...**` line cites a solved or answers doc; and the lines above a file's first
@@ -161,10 +181,16 @@ STATUS).
      a Key cell in any other wording. Rewrite it in one of the forms; a remark goes in Notes.
    - `<doc>: KEY NAMES NO DOC: "<word>" in its Key cell is no doc id in MANIFEST.md`: a `for ...`
      cell names an id that is no MANIFEST doc id. Fix the cell or the id.
+   - `<doc>: KEY NAMES ITS OWN DOC: "for" names the docs an answers file solves; a doc holding its own key uses "pp. N-M", "inline" or "sections: <name>"`:
+     a `for ...` cell names its own row's id. A doc holding its own key takes one of those forms.
    - `<doc>: KEY WITHOUT ANSWERS: its Key cell is filled but Answers isn't yes`: either the file
      holds answers (set Answers to `yes`) or it doesn't (empty the Key cell, or write `-`).
    - `<doc>: SECTIONS KEY ON A PAGED DOC: use "pp. N-M" or "inline"`: `sections: ...` on a doc
      with pages, whose key is named by its pages.
+   - `<doc>: PAGES KEY ON AN UNPAGED DOC: use "sections: <name>, <name>" or "inline"`: a `p.` or
+     `pp.` key on a row that is neither a PDF nor has a numeric Pages. A Word file or a slide deck
+     names its key sections or slides by their exact locators: `sections: Marking scheme`,
+     `sections: #/5, #/6`.
    - `<doc>: KEY SECTION NOT FOUND: no block [<doc> <name>] in _build/solutions/`: a section the
      Key cell names has no block with that exact locator in the solutions files. Give the key
      section's block that locator, in the doc's solutions file, or fix the name in the cell.
@@ -172,7 +198,8 @@ STATUS).
      by its Key cell, yet has no question block in any extract: its question parts need blocks in
      an extract, as the line says (a separate answers file needs a `for ...` cell instead).
 
-   It warns on a solutions block for a stem (each of its parts still needs its own block), on a
+   It warns on a solutions block for a stem (each of its parts still needs its own block; a
+   multi-set answers file's stem block for shared text is expected, once its parts have theirs), on a
    loose `Solution:` line outside a fence in a solved doc's extract block, and on an `Answer:`,
    `Ans:` or `Final answer:` line (or the like) in a solved doc's extract block that isn't an
    answer blank. The main session reads each: an answer or a solution moves to the solutions
@@ -211,10 +238,12 @@ though not on a value marked `(illegible at 300 dpi: ...)`, while a question par
 has no solutions block, a part has two, or a part's block sits outside its set's solutions file
 (`WRONG SOLUTIONS FILE`), while a solutions block names no extract's part or holds neither a
 `Solution [` line nor `No official solution.`, while an extract holds a solution line, a line
-citing an answers page or a block of an answers page, and while an in-scope MANIFEST row fails:
-`NO KEY`, `UNREAD KEY`, `KEY NAMES NO DOC`, `KEY WITHOUT ANSWERS`, `SECTIONS KEY ON A PAGED DOC`,
-`KEY SECTION NOT FOUND` or `ANSWERS WITH NO PAIRING`), and STATUS has the coverage and each value
-marked illegible as a judgment call. Its warnings (a solutions block for a stem, a
+citing an answers page or a block of an answers page, while a multi-set answers file's page
+block holds text (`SHARED ANSWERS PAGE HOLDS TEXT`), and while an in-scope MANIFEST row fails:
+`NO KEY`, `UNREAD KEY`, `KEY NAMES NO DOC`, `KEY NAMES ITS OWN DOC`, `KEY WITHOUT ANSWERS`,
+`SECTIONS KEY ON A PAGED DOC`, `PAGES KEY ON AN UNPAGED DOC`, `KEY SECTION NOT FOUND` or
+`ANSWERS WITH NO PAIRING`), and STATUS has the coverage and each value marked illegible as a
+judgment call. Its warnings (a solutions block for a stem, a
 loose `Solution:` line or an `Answer:` line in a solved doc's extract) are each read and either
 fixed or noted in STATUS. It
 skips a doc on a STATUS `Unverified:` line (`11-next-exam`, "A source added unverified") until

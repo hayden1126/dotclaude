@@ -149,8 +149,10 @@ order (`08-practice`) get the same audit when they exist.
   blocks alone) as question files, and the lecture extracts the notes cite as allowed sources:
   `python3 -I <skill>/scripts/mock_leak.py --questions <the unattempted sets' extracts and
   solutions files> --allow <the lecture extracts> --pages notes/*.md`. An attempted set's
-  solutions file is never passed, nor is a multi-set answers file's own file (its page blocks hold
-  no part's solution). The main session runs it, since reviewers never open `practice/`.
+  solutions file is never passed, nor is a multi-set answers file's own file: its page blocks
+  hold only the line `(transcribed under the sets' blocks)`, since its agent puts every word of
+  official text under a set's stem or part block in that set's own file (`02-extract`, "The
+  solutions file"). The main session runs it, since reviewers never open `practice/`.
   Each hit names a notes line and a set's part, never the text. The Review view (`07-cheatsheet`)
   only tags blocks of the notes, so this check covers it, and every later change runs it as
   `08-practice`'s "Changing the notes or a sheet" item 4 says, with these same files.

@@ -38,13 +38,19 @@ An answers file that solves several sets (its MANIFEST.md Key cell `for HW1, HW2
 `02-extract` step 1) gets an agent of its own, from this brief with every SOLUTIONS slot kept:
 {{DOC}} names those sets, whose question pages it reads only for their part ids, and it uses
 those ids as the extracts do, `### [<set> <part>]`; {{SOLDOC}} is the answers file. Its End
-state, Artifact path and Format drop every line about the extract: it writes one solutions file
-per set, {{ROOT}}/_build/solutions/<name>.md under that set's extract `<name>`, holding that
-set's part blocks, plus {{ROOT}}/_build/solutions/<answers file name>.md holding the answers
-file's page blocks. Each of those files gets its own first lines, `# <its one doc> solutions
+state, Artifact path and Format drop every line about the extract, and its SHARED ANSWERS slots
+are kept: it writes one solutions file per set, {{ROOT}}/_build/solutions/<name>.md under that
+set's extract `<name>`, holding that set's part blocks and, before a question's parts, a stem
+block `### [<set> Q3 stem]` for official text those parts share (a common setup, a table they
+all use), plus {{ROOT}}/_build/solutions/<answers file name>.md holding the answers file's page
+or section blocks, each holding only the line `(transcribed under the sets' blocks)` (or
+`(blank)`, `(image only: ...)` or an `UNREADABLE:` flag): every word of official text sits under
+its set's stem or part block, in that set's own file, since the questions check reads the sets'
+files alone. Each of those files gets its own first lines, `# <its one doc> solutions
 (extract)` (a header never names several docs) and a `Sources:` line, and its own closing
 `Coverage:` line. Each set's own agent gets this brief with no SOLUTIONS slot and writes only its
-extract. An agent may write several files; no file is written by two agents.
+extract. An agent may write several files; no file is written by two agents. An answers file
+that solves one set keeps the brief as it stands, its SHARED ANSWERS slots deleted.
 
 ```text
 # Brief: transcribe {{DOC}} {{RANGE}}{{SOLUTIONS: plus {{SOLDOC}} {{SOLRANGE}}}} into {{OUT}}
@@ -134,9 +140,11 @@ that must not see answers read the extract, so it holds none.}}
   Key cell, given here: for a separate answers file (`for ...`), every page of it; for a doc with
   its own key (a past exam), the pages the cell names, as "pp. 7-9, 11", or "none: each solution
   sits under its question on the same page" for `inline`, or for `sections: ...` (a source
-  without pages, such as a Word exam) "its key sections, by their exact locators: Marking scheme,
-  Answers. Each one's block takes that locator, `### [PE3 Marking scheme] ...`, and goes to the
-  solutions file; every other section (the instructions, a formula sheet) stays in the
+  without pages, such as a Word exam or a slide deck) "its key sections or slides, by their exact
+  locators: Marking scheme, Answers (a deck's are its slides, `#/5, #/6`). Each one's block takes
+  that locator, `### [PE3 Marking scheme] ...`, and goes to the solutions file, as does a block
+  whose locator is one of those names followed by ` Q...` or a comma (`### [PE3 Marking scheme
+  Q2] ...`); every other section (the instructions, a formula sheet) stays in the
   extract"}}. Every other page or section of {{SOLDOC}} (the cover, the rules, a formula sheet,
   an appendix table) gets its block in the extract, as any page does: the agents that must not
   see answers read those pages there.
@@ -149,7 +157,11 @@ that must not see answers read the extract, so it holds none.}}
   - First lines: `# {{DOC}} solutions (extract)`, then the extract's `Sources:` line.
   - One block per question part of {{DOC}}, in the extract's order, its header the part's own
     block id from the extract, `### [{{DOC}} Q3a]` (a title after it is optional). A stem gets
-    no block: each of its parts gets its own. The block holds one of two things:
+    no block: each of its parts gets its own.{{SHARED ANSWERS: Here {{SOLDOC}} solves several
+    sets, so official text a question's parts share (a common setup, a table they all use) goes
+    under a stem block in that set's own solutions file, `### [<set> Q3 stem]`, before its
+    parts' blocks; each part still gets its own block, holding its own solution.}} The block
+    holds one of two things:
     - the official solution on a line of its own, cited to its pages:
       `Solution [{{SOLDOC}} p.N]: ...`, or `Solution [{{SOLDOC}} <its section>]: ...` for a file
       without pages ({{SOLDOC}} is {{DOC}} when the solutions sit in the same file). It starts
@@ -160,7 +172,12 @@ that must not see answers read the extract, so it holds none.}}
   - Each answers page of {{SOLDOC}} (above) gets its own block here, never in the extract, as
     the extract's page blocks are written: `### [{{SOLDOC}} p.N] <title>`. A part's solution on
     a key page still goes under its part's block, and the key page's block holds what else is on
-    that page.
+    that page.{{SHARED ANSWERS: Not here: {{SOLDOC}}'s page or section blocks go in
+    {{ROOT}}/_build/solutions/<answers file name>.md, and each holds only the line
+    `(transcribed under the sets' blocks)`, or `(blank)`, `(image only: ...)` or an `UNREADABLE:`
+    flag. Every word of official text on that page goes under its set's stem or part block in the
+    set's own solutions file; the check fails any other text there (`SHARED ANSWERS PAGE HOLDS
+    TEXT`).}}
   - `UNREADABLE:` flags as in the extract.
   - Last line: the extract's `Coverage:` line, for the answers pages of {{SOLDOC}}.}}
 ```

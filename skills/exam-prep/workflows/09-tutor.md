@@ -110,7 +110,11 @@ Settle it before the first part:
   `inline` or `sections: ...`, a past exam with its key): the part's block, `### [<doc> <part>]`,
   in `_build/solutions/<name>.md`, `<name>` being the set's extract name (find the line with
   `grep -n -F '### [<doc> <part>]' _build/solutions/<name>.md`), its `Solution [` line and the
-  working under it. A block reading `No official solution.` sends the part to the next source.
+  working under it. When the set's answers file solves several sets, the official text the
+  question's parts share sits in the same file under the stem block, `### [<doc> Q3 stem]`
+  before the parts' blocks: read it with the part's block. The answers file's own file,
+  `_build/solutions/<answers file name>.md`, holds only pointer lines and is never the source. A
+  block reading `No official solution.` sends the part to the next source.
 - Any other set, with a checker: its values from the reference, before the first part (hard rule 3),
   once `selftest.py` prints `ALL PASS` (`05-verify` step 1) and no build runs (Step 1). Copy
   `<skill>/templates/verify-set-key.py` to `_build/verify/set_key.py` once, add the set's doc id to
