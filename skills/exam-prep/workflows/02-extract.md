@@ -46,8 +46,14 @@ A question part's official solution is the last thing in its block: its marker l
 the same), then whatever the solution goes on with (a table, a fenced trace) up to the next `###
 [<doc> <locator>]` header or the closing `Coverage:` line. Nothing of the question follows a
 marker inside its block, since the question-only copy drops everything from the marker to the
-block's end. A block of an answers file (MANIFEST's Answers `yes`) is all answer, except a page
-of a past exam's own questions, which a question part names on its `Pages:` line.
+block's end. Inside a code fence only a marker's comment forms (a `# Solution` line, which the
+heading form also reads as) are code and cut nothing; the bold `**Solution:**` and bracketed
+`Solution [<doc> <loc>]:` markers cut wherever they sit, so question code never writes them. The
+reverse holds too: a question that quotes a document in a nested fence (a four-backtick fence
+holding a three-backtick line and a `## Solution` heading) loses everything from that heading to
+the block's end in the question-only copy. That fails safe, so it stands, but quoted material
+avoids a heading-form marker. A block of an answers file (MANIFEST's Answers `yes`) is all
+answer, except a page of a past exam's own questions, which a question part names on its `Pages:` line.
 
 ## Step 3: Check what came back
 
