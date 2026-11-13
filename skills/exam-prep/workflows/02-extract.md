@@ -140,7 +140,7 @@ STATUS).
    instead. It also fails, by doc and with no file or line:
    - `<doc>: ANSWERS WITH NO PAIRING`: an in-scope Answers `yes` doc with no question parts in
      any extract and no `solutions to` note. Add the note to its MANIFEST row.
-   - `<doc>: NO KEY NOTE: a doc with its own key names its key pages in Notes ("key pp. N-M", or "key inline")`:
+   - `<doc>: NO KEY NOTE: a doc with its own key names its key pages in Notes ("key pp. N-M", "key inline" or "key sections")`:
      an in-scope self-answering row (Answers `yes`, no `solutions to` note) without its key
      note. Look at the PDF and add the note (`01-ingest`, step 3); a page the note now names moves
      to the solutions file.
