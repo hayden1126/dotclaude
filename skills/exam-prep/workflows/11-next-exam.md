@@ -516,8 +516,9 @@ type /clear, then "why did the addition stop?"`, since the student, looking away
    `_build/verify/mock_key.py`, and searches only `notes/`, `cheatsheet/`, `_build/frag/`,
    `_build/extract/` and `_build/solutions/`. Then check as "A source added" step 1 does: `05-verify`
    done (and `06-site` with a page), no `Build running` line, the hub free, the tree clean but for `_build/logs/` and
-   `practice/tutor/`; note `git rev-parse HEAD`. A check that fails is told to the student, and
-   the addition waits for it. Then the doc itself, judged by the MANIFEST.md row item 2 will write
+   `practice/tutor/`; note `git rev-parse HEAD`. A check that fails ends the addition with nothing
+   added, as the opening says: logged in STATUS, and told to the student, or, while a mock is
+   untaken, the reply ending with the `Nothing was added` line. Then the doc itself, judged by the MANIFEST.md row item 2 will write
    for it (its Answers and Key cells as the template's legend says): this path takes a lecture, a
    reading or a set the student has attempted, and refuses an unattempted set or an answers file
    that solves one, as `extract_check.py` counts them: a row whose Answers cell is `yes` and whose
