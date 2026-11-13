@@ -53,7 +53,8 @@ Review round 16: a doc's homes are the extracts holding any block of it (a page,
 question block), not only its question blocks, so a page-only set or a deck split over two
 extracts has a home; a stem's, a single-set answers page's or a key block whose set has no block
 in any extract fails NO HOME FILE, and KEY SECTION NOT FOUND looks in every home. A key
-section's locator is key material whatever page reference it carries (`Marking scheme p.2`)."""
+section's locator is key material whatever page reference it carries (`Marking scheme p.2`).
+AN ANSWERS PAGE IN AN EXTRACT names the block's home, not the extract's own solutions file."""
 import contextlib
 import importlib.util
 import io
@@ -1877,6 +1878,51 @@ class SolutionsFiles(unittest.TestCase):
                    "### [PE3 Marking scheme p.2] Key\n\"Q2: t\"\n")
         code, out = self.check()
         self.assertEqual(code, 0, out)
+
+    def test_an_answers_page_in_an_extract_is_sent_to_its_home(self):
+        # Merge minor: AN ANSWERS PAGE IN AN EXTRACT named the extract's own solutions file, where
+        # the block then failed WRONG SOLUTIONS FILE. It names the block's home (block_home()).
+        page = "### [HW1S p.1] Solutions\n\"Q1a: 7\"\n"
+        self.write("_build/extract/notes.md", page)
+        code, out = self.check()
+        self.assertEqual(code, 1, out)
+        self.assertIn("_build/extract/notes.md:1: AN ANSWERS PAGE IN AN EXTRACT: [HW1S p.1] is a "
+                      "block of HW1S, a separate answers file (its Key cell is \"for HW1\"); move "
+                      "it to _build/solutions/hw1.md, beside the one set it solves\n", out)
+        # A multi-set answers file's page goes to its own file.
+        self.write("MANIFEST.md", SOL_MANIFEST.replace("| for HW1 |", "| for HW1 and HW2 |")
+                   + "| HW2 | `sources/hw2.pdf` | 1 | in | no | | yes | |\n")
+        self.write("_build/pages/HW2/p-001.png", "")
+        self.write("_build/extract/hw2.md", "### [HW2 p.1] Homework 2\n")
+        code, out = self.check()
+        self.assertEqual(code, 1, out)
+        self.assertIn("_build/extract/notes.md:1: AN ANSWERS PAGE IN AN EXTRACT: [HW1S p.1] is a "
+                      "block of HW1S, a separate answers file (its Key cell is \"for HW1 and "
+                      "HW2\"); move it to _build/solutions/hw1s.md, its own file, since it solves "
+                      "several sets\n", out)
+        # A key page in its own extract stays beside it; in a second extract of the doc, beside
+        # that one.
+        self.write("MANIFEST.md", SOL_MANIFEST)
+        self.remove("_build/extract/notes.md")
+        self.add_pe1()
+        self.write("_build/extract/pe1b.md", PE_KEY)
+        code, out = self.check()
+        self.assertEqual(code, 1, out)
+        self.assertIn("_build/extract/pe1b.md:1: AN ANSWERS PAGE IN AN EXTRACT: [PE1 p.3] is a key "
+                      "page of PE1, as its MANIFEST.md Key cell names it; move it to "
+                      "_build/solutions/pe1b.md, beside its own extract\n", out)
+        # With no home (its set has no block in any extract), the extract's own file is named.
+        self.remove("_build/extract/pe1b.md")
+        self.write("MANIFEST.md", SOL_MANIFEST.replace("| 1 | in | no | | yes | Homework 1 |",
+                                                       "| 1 | pending: in | no | | no | |"))
+        self.remove("_build/extract/hw1.md")
+        self.remove("_build/solutions/hw1.md")
+        self.write("_build/extract/notes.md", page)
+        code, out = self.check()
+        self.assertEqual(code, 1, out)
+        self.assertIn("_build/extract/notes.md:1: AN ANSWERS PAGE IN AN EXTRACT: [HW1S p.1] is a "
+                      "block of HW1S, a separate answers file (its Key cell is \"for HW1\"); move "
+                      "it to _build/solutions/notes.md\n", out)
 
 if __name__ == "__main__":
     unittest.main()

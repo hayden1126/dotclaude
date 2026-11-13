@@ -90,7 +90,8 @@ it fails NO HOME FILE, naming the set to extract first. It fails, naming the fil
   too) when a cite on it names a solved doc or an answers doc; CITES AN ANSWERS PAGE, a line
   citing an answers page (answers_cite()), a `Pages:` line holding only cites and the closing
   `Coverage:` line aside; AN ANSWERS PAGE IN AN EXTRACT, a block of a separate answers file, or a
-  key page's or key section's block of a doc with its own key.
+  key page's or key section's block of a doc with its own key, naming its home (above; this
+  extract's own solutions file when it is one, or when the block has no home).
 - the lines before a file's first block header (its `# ...` title, `Sources:` and `Every page
   image was viewed.` lines pass): in an extract, a `Solution [` or `**Solution:**` line fails as
   SOLUTION IN AN EXTRACT and an answers cite as CITES AN ANSWERS PAGE, and in a file holding a
@@ -817,6 +818,7 @@ def solutions_check(root, rows, idle=frozenset()):
             for v in ILLEGIBLE.finditer(lines[i]):
                 out.append(f"{rel}:{i + 1}: {v.group(0)}, counted, not a failure")
     have, at, homes = set(), {}, {}
+    sethomes = set_homes(extracts)
     for rel, lines in extracts:
         name = rel.rsplit("/", 1)[1]
         target = f"_build/solutions/{name}"
@@ -857,8 +859,15 @@ def solutions_check(root, rows, idle=frozenset()):
                 homes.setdefault((doc, q), set()).add(name)
             row = rows.get(doc) or {}
             if answers_cite(doc, loc, rows):
+                # It goes to its home (block_home()): this extract's own solutions file when that
+                # is one of them, else the first; with no home, this extract's own.
+                home = block_home(m, rows, sethomes)
+                dest = target
+                if home and home[0]:
+                    dest = (f"_build/solutions/{name if name in home[0] else home[0][0]}, "
+                            f"{home[1]}")
                 out.append(f"{rel}:{start + 1}: AN ANSWERS PAGE IN AN EXTRACT: [{doc} {loc}] is "
-                           f"{answers_block(doc, loc, row)}; move it to {target}")
+                           f"{answers_block(doc, loc, row)}; move it to {dest}")
                 bad = True
                 continue
             mine = doc in named
@@ -900,7 +909,6 @@ def solutions_check(root, rows, idle=frozenset()):
                 if w:
                     out.append(w)
     parts, stems = solution_blocks(sols)
-    sethomes = set_homes(extracts)
     for key, found in sorted(parts.items()):
         doc, q = key
         rel, n = found[0][:2]
