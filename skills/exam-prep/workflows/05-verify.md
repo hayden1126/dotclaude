@@ -146,24 +146,21 @@ order (`08-practice`) get the same audit when they exist.
   YYYY-MM-DD` (a doc holding its own key): `00-intake` and `11-next-exam` write it from the
   student's word, `09-tutor` Step 7 when its last part is done. A separate answers file's row
   stays `yes` and never records an attempt, since it may solve several sets.
-  With no such set, skip the run and log `no unattempted set` in STATUS. Otherwise give, as
-  question files, each unattempted set's extract and its solutions file when it has one, plus a
-  multi-set answers file's own file while any set it solves is unattempted; never an attempted
-  set's own file: the extract `_build/extract/<name>.md`, and `_build/solutions/<name>.md` under
-  the same `<name>` (one file per set, so it holds that set's blocks alone) only when it exists,
-  and `_build/solutions/<doc id in lower case>.md` for each answers file whose Key cell names
-  several sets, one of them unattempted (it holds that file's pages in full, the shared setups
-  among them). A set with no official answers has no solutions file, and `mock_leak.py` exits 2
-  on a missing path. The lecture extracts the notes cite are the allowed sources:
-  `python3 -I <skill>/scripts/mock_leak.py --questions <the unattempted sets' extracts and
-  existing solutions files, and the shared answers files' own files> --allow <the lecture
-  extracts> --pages notes/*.md`. A hit from a shared answers file's own file is a blocker like
-  any other, even when the set it quotes is attempted: the notes quote an attempted set's
-  official text only once every set its answers file solves is attempted. The main session runs
-  it, since reviewers never open `practice/`.
+  The main session runs it from `<root>`, since reviewers never open `practice/`:
+  `python3 -I <skill>/scripts/mock_leak.py --hub . --pages notes/*.md`. It reads those attempt
+  marks and the extracts and builds its own file list, so no file is passed by hand: the question files
+  hold the unattempted sets' official text (each such set's extracts and solutions files, and a
+  multi-set answers file's own file, its pages in full, while any set it solves is unattempted),
+  and every other extract, the lectures the notes cite among them, is an allowed source. When a
+  hit needs explaining, `python3 -I <skill>/scripts/extract_check.py --leak-files` prints that
+  list, a `questions <path>` or `allow <path>` line per file. With no such set it prints
+  `QUESTIONS OK: no unattempted set` and exits 0: log `no unattempted set` in STATUS. A hit from
+  a shared answers file's own file is a blocker like any other, even when the set it quotes is
+  attempted: the notes quote an attempted set's official text only once every set its answers
+  file solves is attempted.
   Each hit names a notes line and a set's part, never the text. The Review view (`07-cheatsheet`)
   only tags blocks of the notes, so this check covers it, and every later change runs it as
-  `08-practice`'s "Changing the notes or a sheet" item 4 says, with these same files.
+  `08-practice`'s "Changing the notes or a sheet" item 4 says, with this same command.
   A hit is a blocker: rewrite the passage with fresh numbers and a fresh setup (S7), and rerun
   until it prints QUESTIONS OK. A passage cut or held back instead, which the student may want
   back once they attempt the set, goes to `_build/held.md`, one entry per passage: its section,
@@ -208,6 +205,7 @@ script (`08-practice`).
 `selftest.py` prints `ALL PASS` with every official part covered (or PLAN.md's Checker line says
 nothing is computable); no `TODO-VERIFY` is left; every blocker and major finding is applied or
 refuted with evidence in STATUS, and every minor one applied or logged there; `mock_leak.py
---questions` prints `QUESTIONS OK` on the notes, or no unattempted set, logged in STATUS (step 5);
+--hub . --pages notes/*.md` prints `QUESTIONS OK` on the notes, or `QUESTIONS OK: no unattempted
+set`, logged in STATUS (step 5);
 `linkcheck.py` exits
 0 (plain-text notes: references checked by hand); the fixes are committed.

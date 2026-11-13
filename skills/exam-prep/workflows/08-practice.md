@@ -650,14 +650,10 @@ The products, each one the hub has:
      lines fixed in `practice/videos.json`, then "Watch list" item 6 (`videos.py` exits 0, the
      page's checks, and its leak check while a mock is untaken).
 4. **The checks.** When the notes changed, `05-verify` step 5's questions check prints QUESTIONS
-   OK (FB-191): `mock_leak.py --questions` on the files that step passes, each unattempted set's
-   extract and its solutions file when it has one, plus a multi-set answers file's own file while
-   any set it solves is unattempted; never an attempted set's own file (`_build/extract/<name>.md`,
-   and `_build/solutions/<name>.md` only when it exists: a set with no official answers has none,
-   and `mock_leak.py` exits 2 on a missing path; plus `_build/solutions/<doc id in lower
-   case>.md` for such an answers file), the sets listed from MANIFEST.md, skipped when there is none, its
-   `--allow` the lecture extracts the notes cite and its `--pages` the notes Markdown
-   (`notes/*.md`). A hit is
+   OK (FB-191): `python3 -I <skill>/scripts/mock_leak.py --hub . --pages notes/*.md`, run from
+   `<root>` by the main session; the script builds its file list from MANIFEST.md's attempt marks
+   (`extract_check.py --leak-files` prints it, for when a hit needs explaining) and prints
+   `QUESTIONS OK: no unattempted set` when there is none. A hit is
    reworded with fresh numbers and setup (S7) and repeats from item 2. While a mock is untaken, also
    the leak compare: run item 1 again and compare the hit lines with the baseline's (count them,
    since every hit on the notes reads "(the page)" and a second copy of an answer adds one). A new

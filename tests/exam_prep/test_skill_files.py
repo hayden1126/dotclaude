@@ -6,8 +6,8 @@ is pinned here. Every template, workflow and reference opens with the baseline h
 paths the skill names must exist, except the ones later stages will add (PENDING, which shrinks as
 each stage lands and fails once a pending path exists). The privacy check reads the maintainer's
 private denylist when it exists and skips otherwise: the repo is public, and the denylist itself
-names what must stay out of it. The questions check's question files read the same at every
-workflow site that names them."""
+names what must stay out of it. Every workflow site of the questions check gives the one
+command that builds its own file list."""
 import os
 import re
 import unittest
@@ -180,51 +180,55 @@ class WatchRules(unittest.TestCase):
 
 
 class QuestionsCheckFiles(unittest.TestCase):
-    """05-verify step 5 gives mock_leak.py's question files, and 08-practice's "Changing the
-    notes or a sheet" item 4, 10-polish and 11-next-exam (twice) restate them. Each site names
-    the same files in the same words: the unattempted sets' extracts and their existing
-    solutions files, plus a multi-set answers file's own file (its pages in full) while any set
-    it solves is unattempted, never an attempted set's own file. The two sites that spell the
-    paths say a set with no official answers has no solutions file, since mock_leak.py exits 2 on
-    a missing path, and name the answers file's own file by its doc id."""
+    """05-verify step 5 runs the questions check, and 08-practice's "Changing the notes or a
+    sheet" item 4, 10-polish and 11-next-exam (twice) run it again. Round 17 found the
+    hand-written file lists drifting from extract_check.py's home rule, so mock_leak.py now
+    builds the list itself (`--hub .`, from `extract_check.py --leak-files`): each site gives
+    the one command, and none lists a file by hand, a `_build/solutions/` path or a
+    `--questions` or `--allow` argument. 05-verify names `--leak-files` and the line printed
+    with no unattempted set."""
 
-    SET = ("each unattempted set's extract and its solutions file when it has one, plus a "
-           "multi-set answers file's own file while any set it solves is unattempted; never an "
-           "attempted set's own file")
+    COMMAND = "python3 -I <skill>/scripts/mock_leak.py --hub . --pages notes/*.md"
     SITES = {"05-verify.md": 1, "08-practice.md": 1, "10-polish.md": 1, "11-next-exam.md": 2}
-    SPELLED = ("05-verify.md", "08-practice.md")
-    # The wording round 14 replaced, which passed a set's solutions file whether or not it exists,
-    # and round 15's, which left the multi-set answers file's own file out.
+    # The round 14 to 16 wordings of the hand-written list.
     OLD = ("extract and own solutions file", "and its own solutions file",
-           "never an attempted set's file or a multi-set answers file's own file")
-    CONTEXT = ("questions check", "--questions", "question files")
+           "each unattempted set's extract and its solutions file when it has one",
+           "one file per set", "exits 2 on a missing path")
+    HAND = ("_build/solutions/", "_build/extract/", "--questions", "--allow")
 
     @staticmethod
     def flat(name):
         with open(os.path.join(SKILL, "workflows", name), encoding="utf-8") as f:
             return " ".join(f.read().split())
 
-    def test_each_site_names_the_same_files(self):
+    def test_each_site_gives_the_one_command(self):
         for name, count in self.SITES.items():
             flat = self.flat(name)
-            self.assertEqual(flat.count(self.SET), count, name)
+            self.assertEqual(flat.count(self.COMMAND), count, name)
             for old in self.OLD:
                 self.assertNotIn(old, flat, name)
 
-    def test_each_site_is_the_questions_check(self):
+    def test_no_site_lists_files_by_hand(self):
         for name in self.SITES:
             flat = self.flat(name)
-            for m in re.finditer(re.escape(self.SET), flat):
-                before = flat[max(0, m.start() - 300):m.start()]
-                self.assertTrue(any(c in before for c in self.CONTEXT), (name, before))
+            for m in re.finditer(re.escape(self.COMMAND), flat):
+                context = flat[max(0, m.start() - 900):m.end() + 900]
+                self.assertTrue("questions check" in context or "QUESTIONS OK" in context,
+                                (name, context))
+                around = flat[max(0, m.start() - 600):m.end() + 600]
+                for hand in self.HAND:
+                    self.assertNotIn(hand, around, (name, hand))
 
-    def test_the_spelled_sites_pass_only_existing_files(self):
-        for name in self.SPELLED:
-            flat = self.flat(name)
-            for phrase in ("set with no official answers has", "`_build/solutions/<name>.md`",
-                           "`mock_leak.py` exits 2 on a missing path",
-                           "`_build/solutions/<doc id in lower case>.md`"):
-                self.assertTrue(phrase in flat, (name, phrase))
+    def test_no_workflow_passes_question_files(self):
+        for name in sorted(os.listdir(os.path.join(SKILL, "workflows"))):
+            self.assertNotIn("--questions", self.flat(name), name)
+
+    def test_the_first_site_names_the_list_and_the_empty_case(self):
+        flat = self.flat("05-verify.md")
+        for phrase in ("`python3 -I <skill>/scripts/extract_check.py --leak-files`",
+                       "`questions <path>`", "`allow <path>`",
+                       "`QUESTIONS OK: no unattempted set`", "The main session runs it"):
+            self.assertIn(phrase, flat)
 
 
 class KeySectionRule(unittest.TestCase):
