@@ -1924,5 +1924,38 @@ class SolutionsFiles(unittest.TestCase):
                       "block of HW1S, a separate answers file (its Key cell is \"for HW1\"); move "
                       "it to _build/solutions/notes.md\n", out)
 
+    def test_a_key_sections_name_with_a_page_reference_matches_its_block(self):
+        # r17-1 #4: key_section() dropped the page reference from the locator but not from the
+        # Key cell's names, so under `sections: Answers p.4` the exact block [PE3 Answers p.4]
+        # was no key section: it passed in an extract and failed KEY SECTION NOT FOUND beside it.
+        key = extract_check.read_key
+        for cell, loc in (("sections: Answers p.4", "Answers p.4"),
+                          ("sections: Answers p.4", "Answers"),
+                          ("sections: Answers p.4", "Answers (continued) p.5"),
+                          ("sections: Answers", "Answers p.4")):
+            with self.subTest(cell=cell, loc=loc):
+                rows = {"PE3": {"answers": True, "key": key(cell)}}
+                self.assertTrue(extract_check.answers_cite("PE3", loc, rows))
+        rows = {"PE3": {"answers": True, "key": key("sections: Answers p.4")}}
+        for loc in ("Answer p.4", "Answers 2 p.4", "Rules p.4", "p.4"):
+            self.assertFalse(extract_check.answers_cite("PE3", loc, rows), loc)
+        self.write("MANIFEST.md", SOL_MANIFEST + "| PE3 | `sources/pe3.docx` | n/a | in | yes | "
+                                                 "sections: Answers p.4 | n/a | |\n")
+        question = "### [PE3 Q1] Trace\n\"Trace a BFS.\"\n"
+        block = "### [PE3 Answers p.4] Key\n\"Q1: s\"\n"
+        self.write("_build/extract/pe3.md", question + block)
+        self.write("_build/solutions/pe3.md", "### [PE3 Q1] Trace\nSolution [PE3 Answers]: s\n")
+        code, out = self.check()
+        self.assertEqual(code, 1, out)
+        self.assertIn("_build/extract/pe3.md:3: AN ANSWERS PAGE IN AN EXTRACT: [PE3 Answers p.4] "
+                      "is a key section of PE3", out)
+        # Its twin: the block beside its extract is the key section the Key cell names.
+        self.write("_build/extract/pe3.md", question)
+        self.write("_build/solutions/pe3.md", "### [PE3 Q1] Trace\nSolution [PE3 Answers]: s\n"
+                   + block)
+        code, out = self.check()
+        self.assertEqual(code, 0, out)
+        self.assertNotIn("KEY SECTION NOT FOUND", out)
+
 if __name__ == "__main__":
     unittest.main()

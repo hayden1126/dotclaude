@@ -51,8 +51,9 @@ Key says where an Answers `yes` doc's answers are, read whole (trimmed, any case
   key in the sections whose block locator is one of the names (any case, runs of whitespace as
   one), then, past any spaces, nothing, a character that is no letter or digit (`Marking scheme
   (continued)`, `Marking scheme: Q2`, `Marking scheme, part 2`) or `Q` and a digit (`Marking
-  scheme Q1`), whatever page reference the locator carries (`Marking scheme p.2`); `Key
-  formulas` under `sections: Key` is no key section (key_section()). A deck's solution slides are
+  scheme Q1`), whatever page reference the locator or the name carries (`Marking scheme p.2`;
+  `Answers p.4` and `Answers` under `sections: Answers p.4`); `Key formulas` under `sections: Key`
+  is no key section (key_section()). A deck's solution slides are
   named by fragment (`sections: #/5, #/6`; `#/5/0` is part of `#/5`). A row whose File ends in
   .pdf fails SECTIONS KEY ON A PAGED DOC, and a named section with no block in any of the doc's
   home solutions files (below) fails KEY SECTION NOT FOUND.
@@ -486,13 +487,16 @@ def block_home(m, rows, homes):
 
 def key_section(loc, names):
     """Whether a locator is key material under a `sections:` key's names (read_key()), whatever
-    page reference it carries (its page lists, LOC_PAGES, are dropped first: `Marking scheme p.2`):
-    a name (any case, runs of whitespace as one), then, past any spaces, nothing, a character that
-    is no letter or digit (`Marking scheme (continued)`, `: Q2`, `- Q2`, `, part 2`, a deck's
-    child slide `#/5/0` under `#/5`), or `Q` and a digit (`Marking scheme Q1`). Another name that
-    starts with a key name (`Key formulas` under `sections: Key`, `Marking scheme 2`) is not."""
+    page reference either carries (the page lists, LOC_PAGES, are dropped from both first, so
+    `Marking scheme p.2` is under `Marking scheme`, and `Answers p.4` and `Answers` are under
+    `sections: Answers p.4`): a name (any case, runs of whitespace as one), then, past any spaces,
+    nothing, a character that is no letter or digit (`Marking scheme (continued)`, `: Q2`, `- Q2`,
+    `, part 2`, a deck's child slide `#/5/0` under `#/5`), or `Q` and a digit (`Marking scheme
+    Q1`). Another name that starts with a key name (`Key formulas` under `sections: Key`, `Marking
+    scheme 2`) is not. A name that is only a page reference is read as written."""
     loc = " ".join(LOC_PAGES.sub(" ", loc).split())
     for written in names.values():
+        written = " ".join(LOC_PAGES.sub(" ", written).split()) or written
         m = re.match(re.escape(written), loc, re.I)
         if not m:
             continue
