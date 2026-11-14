@@ -258,6 +258,9 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     Fix to design: a scratch tree that isn't a worktree of the shared git dir (a `--shared` clone
     under `.lane-trial/`, say), or a narrow sandbox-off step for the add alone. Lanes skill and
     docs/lanes.md say how a lane asks for ready meanwhile.
+  - **CJ1** (medium, 2026-11-13; private: sandbox-audit FINDINGS, row CJ1): a read deny names one
+    exact path where copies of that file sit beside it. Fix and probe in the row. Not picked yet;
+    `settings.json` and its test, a lane after Nov 16 (lane practices changes both).
   - **Mocks skill upgrades** (2026-11-13, a lane in another repo, session 4b3a30d1, from Hayden's
     asks on a type mock): a magnifier (1x/2x/3x, CSS `zoom`) in the render's corner, off by
     default, named as a third home for a setting besides the top row and QUESTIONS; drag to pan
