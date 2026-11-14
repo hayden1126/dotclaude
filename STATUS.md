@@ -255,6 +255,8 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     '.git/worktrees/tree12': Read-only file system". Claude Code's sandbox now write-allows only
     the session's own entry under `.git/worktrees`, and the skill says a trial runs only
     sandboxed, so no lane can run one. Last trial that worked: demo-av at fafbe34 (2026-11-10).
+    Hits every repo with lanes: capella-studio's lane roles met it too (that repo's lead, session
+    68d09c2f, 2026-11-14), and skipped its trial with CI as the gate.
     Fix to design: a scratch tree that isn't a worktree of the shared git dir (a `--shared` clone
     under `.lane-trial/`, say), or a narrow sandbox-off step for the add alone. Lanes skill and
     docs/lanes.md say how a lane asks for ready meanwhile.
