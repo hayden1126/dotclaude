@@ -24,6 +24,7 @@
   --mark: #ececef; --mark-ink: #18181b; color-scheme: dark;
 }
 * { box-sizing: border-box; }
+[hidden] { display: none !important; }
 body { margin: 0; background: var(--bg); color: var(--ink); font: 14px/1.45 var(--font); padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); padding-block: 0 40px; }
 body::before { content: ""; position: fixed; inset: 0 0 auto; height: env(safe-area-inset-top, 0px); z-index: 10; background: var(--bg); }
 h1 { font-size: 15px; line-height: 20px; font-weight: 650; margin: 0; white-space: nowrap; }
@@ -36,12 +37,18 @@ h1 { font-size: 15px; line-height: 20px; font-weight: 650; margin: 0; white-spac
 .m-seg button[aria-pressed="true"] { background: var(--mark); color: var(--mark-ink); }
 button:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
 .m-main { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--m-gap); margin-top: 10px; align-items: start; }
-.m-stage { min-width: 0; }
+.m-stage { min-width: 0; position: relative; }
 .m-frame { overflow: auto; border-radius: 10px; box-shadow: 0 0 0 1px var(--line); background: var(--card); max-width: 100%; }
 /* A transform shrinks the paint, not the layout box, so the scaled iframe's full size would still be
-   scrollable overflow. #scaler takes the scaled size and clips; #frame then scrolls only at 100%. */
+   scrollable overflow. #scaler takes the scaled size and clips; #frame takes the room and scrolls. */
 .m-scaler { overflow: clip; }
 .m-scaler iframe { display: block; border: 0; background: var(--card); transform-origin: 0 0; }
+/* The corner sits on the frame's bottom-left, outside the iframe, so it keeps one size at any zoom.
+   scale() sets its top and its widest. */
+.m-corner { position: absolute; left: 8px; top: 0; z-index: 1; display: flex; flex-wrap: wrap-reverse; gap: 6px; align-items: flex-end; transform: translateY(-100%); }
+.m-corner .m-seg { box-shadow: 0 1px 4px rgb(0 0 0 / .2), 0 0 0 1px var(--line); }
+.m-corner .m-seg button { font-size: 12px; min-height: 24px; padding: 2px 8px; }
+.m-corner .m-ctl > span { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
 .m-panel { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
 .m-caption { margin: 0; color: var(--muted); font-size: 12.5px; }
 .m-box { background: var(--card); border-radius: 12px; padding: 12px 14px; box-shadow: 0 0 0 1px var(--line); }
@@ -49,6 +56,12 @@ button:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
 .m-box p { margin: 0 0 8px; color: var(--muted); font-size: 12.5px; }
 .m-box p:last-child { margin-bottom: 0; }
 .m-box .m-seg button { font-size: 12px; }
+.m-where { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; margin: 0 0 8px; color: var(--muted); font-size: 12px; }
+.m-where button { font: inherit; border: 1px solid var(--line); background: none; color: var(--ink); padding: 1px 8px; border-radius: 99px; cursor: pointer; }
+.m-where button[aria-pressed="true"] { background: var(--chip); font-weight: 600; }
+.m-copy { font: inherit; font-size: 12px; font-weight: 600; border: 0; background: var(--mark); color: var(--mark-ink); padding: 5px 12px; border-radius: 7px; cursor: pointer; }
+.m-copied { margin-left: 8px; color: var(--muted); font-size: 12px; }
+.m-choices textarea { display: block; width: 100%; margin-top: 8px; resize: vertical; font: 12px/1.4 ui-monospace, monospace; color: var(--ink); background: var(--bg); border: 1px solid var(--line); border-radius: 7px; padding: 6px 8px; }
 #questions { display: contents; }
 @media (min-width: 1101px) {
   html { overflow: hidden; }
@@ -80,51 +93,79 @@ button:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
 <div class="m-main">
   <div class="m-stage">
     <div class="m-frame" id="frame"><div class="m-scaler" id="scaler"><iframe id="app" title="The mock's render"></iframe></div></div>
+    <div class="m-corner" id="corner" role="toolbar" aria-label="Zoom and render controls"></div>
   </div>
   <aside class="m-panel">
     <p class="m-caption" id="caption"></p>
     <div id="questions"></div>
+    <div class="m-box m-choices" id="choices" hidden>
+      <h2>Your choices</h2>
+      <p>Every answer above as plain text, to paste into a message.</p>
+      <button type="button" class="m-copy" id="copy">Copy choices</button><span class="m-copied" id="copied" role="status"></span>
+      <textarea id="copy-text" readonly hidden aria-label="Your choices as text"></textarea>
+    </div>
     <div class="m-box"><h2>About this mock</h2><p id="about"></p></div>
   </aside>
 </div>
 <script>
 /* ==== MOCK CONFIG: edit this block and the <title>, which the top row shows. ==== */
-// FRAMES: the Size buttons. MODES: the Mode buttons; one entry hides the group. CONTROLS: extra button groups beside Size, Mode and Zoom. QUESTIONS: one
-// box each in the panel; options are optional and switch the render live. ABOUT: HTML for the panel's foot.
+// FRAMES: the Size buttons. MODES: the Mode buttons; one entry hides the group. SCREENS (optional): the
+// Screen buttons; one entry or none hides the group. CONTROLS: extra button groups beside Size and Mode;
+// `corner: true` draws a group in the render's corner, beside the zoom, instead. QUESTIONS: one box each
+// in the panel; options are optional and switch the render live; `screens` (optional) lists the SCREENS
+// a question shows on: picking an option jumps there, and the box gets a "Shows on" row. ABOUT: HTML
+// for the panel's foot.
 // render(state) returns the full HTML for the frame. It gets state.frame (a FRAMES entry), state.mode
-// (a MODES entry), state.zoom, one state[label] per CONTROLS group, and state.answers[i], the option
-// picked for QUESTIONS[i]. Its media queries see the frame's width, not the window's.
+// (a MODES entry), state.screen (a SCREENS entry), state.zoom, one state[label] per CONTROLS group, and
+// state.answers[i], the option picked for QUESTIONS[i]. Its media queries see the frame's width, not the
+// window's.
 const FRAMES = [
   { label: "Laptop", width: 1440, height: 900 },
   { label: "iPad", width: 1024, height: 768 },
   { label: "Phone", width: 390, height: 844 },
 ];
 const MODES = ["Light", "Dark"];
+const SCREENS = ["Orders", "Customers"];
 const CONTROLS = [
-  { label: "Density", options: ["Comfortable", "Compact"] },
+  { label: "Density", options: ["Comfortable", "Compact"], corner: true },
 ];
 const QUESTIONS = [
-  { title: "How should an order's status read?", detail: "Pills stand out in a long list; plain text keeps the row quiet.", options: ["Pill", "Plain text"] },
+  { title: "How should an order's status read?", detail: "Pills stand out in a long list; plain text keeps the row quiet.", options: ["Pill", "Plain text"], screens: ["Orders"] },
   { title: "Is the summary strip worth its height?", detail: "It answers the first question most people bring to this page, but it pushes the list down on a laptop.", options: ["Keep it", "Drop it"] },
+  { title: "Should a customer's last order show in the list?", detail: "It tells a regular from a one-off buyer at a glance, but it is one more column on a narrow screen.", options: ["Show it", "Leave it out"], screens: ["Customers"] },
   { title: "Which order should the list open with?", detail: "Newest first suits a support desk. Oldest unshipped first suits the people packing boxes." },
   { title: "Should a phone lose the customer's name?", detail: "The card has room for three lines. The total and the status are fixed, so the third line is the choice." },
   { title: "Does the side menu need labels on an iPad?", detail: "Under 720 px of width the menu goes away. Between 720 and 1,100 px it could shrink to icons instead of keeping its labels." },
   { title: "What should an empty list say?", detail: "A new shop sees this page before its first sale. It could point to the import step or stay blank." },
   { title: "Who can refund from this page?", detail: "A refund button in the row is one click away for everyone who can open the page. It may belong one level down." },
 ];
-const ABOUT = "A stand-in orders page with made-up data. Switch the size, mode and density in the top row, and try each question's options. Nothing here is saved.";
+const ABOUT = "A stand-in shop admin with made-up data. Switch the screen, size and mode in the top row, and the zoom and density in the render's corner. Try each question's options: some jump to the screen they change. Nothing here is saved.";
 
 function render(state) {
   const dark = state.mode === "Dark", compact = state.Density === "Compact";
   const pills = state.answers[0] === "Pill", summary = state.answers[1] === "Keep it";
+  const lastOrder = state.answers[2] === "Show it";
   const orders = [
     ["#1048", "Ada Moreno", "12 Nov", "$84.00", "Shipped"], ["#1047", "Tom Becker", "12 Nov", "$19.50", "Packing"],
     ["#1046", "Lena Fischer", "11 Nov", "$132.00", "Shipped"], ["#1045", "Sam Okafor", "11 Nov", "$47.25", "Refunded"],
     ["#1044", "Noor Haddad", "10 Nov", "$66.00", "Shipped"], ["#1043", "Iris Lund", "10 Nov", "$210.75", "Packing"],
   ];
+  const customers = [
+    ["Ada Moreno", "ada@example.com", 7, "$612.40", "12 Nov"], ["Tom Becker", "tom@example.com", 1, "$19.50", "12 Nov"],
+    ["Lena Fischer", "lena@example.com", 4, "$388.00", "11 Nov"], ["Sam Okafor", "sam@example.com", 2, "$95.25", "11 Nov"],
+    ["Noor Haddad", "noor@example.com", 12, "$1,204.90", "10 Nov"], ["Iris Lund", "iris@example.com", 3, "$402.75", "10 Nov"],
+  ];
   const status = (s) => `<span class="${pills ? "pill" : ""} s-${s.toLowerCase()}">${s}</span>`;
   const rows = orders.map(([id, who, date, total, s]) => `<tr><td class="id">${id}</td><td class="who">${who}</td><td class="date">${date}</td><td class="total">${total}</td><td class="status">${status(s)}</td></tr>`).join("");
+  const people = customers.map(([name, mail, count, spent, last]) => `<tr><td class="name">${name}</td><td class="mail">${mail}</td><td class="count">${count}</td><td class="spent">${spent}</td>${lastOrder ? `<td class="last">${last}</td>` : ""}</tr>`).join("");
   const stat = (label, value) => `<div class="stat"><span>${label}</span><b>${value}</b></div>`;
+  const nav = ["Orders", "Products", "Customers", "Settings"].map((n) => `<a${n === state.screen ? ' class="on"' : ""}>${n}</a>`).join("");
+  const page = state.screen === "Customers"
+    ? `<h1>Customers</h1>
+<table class="people"><thead><tr><th>Name</th><th>Email</th><th>Orders</th><th>Spent</th>${lastOrder ? "<th>Last order</th>" : ""}</tr></thead><tbody>${people}</tbody></table>`
+    : `<h1>Orders</h1>
+${summary ? `<div class="stats">${stat("Today", "$103.50")}${stat("To pack", "2")}${stat("This week", "$559.50")}</div>` : ""}
+<table><thead><tr><th>Order</th><th>Customer</th><th>Date</th><th>Total</th><th>Status</th></tr></thead><tbody>${rows}</tbody></table>`;
   return `<!doctype html><html lang="en"><head><meta charset="utf-8"><style>
 :root { color-scheme: ${dark ? "dark" : "light"}; --bg: ${dark ? "#141416" : "#fbfbfc"}; --card: ${dark ? "#1e1e22" : "#ffffff"}; --ink: ${dark ? "#ececef" : "#1d1d20"}; --muted: ${dark ? "#a4a4ae" : "#5d5d66"}; --line: ${dark ? "#333338" : "#e3e3e8"}; --pad: ${compact ? "7px" : "13px"}; }
 * { box-sizing: border-box; }
@@ -143,7 +184,8 @@ h1 { font-size: 22px; margin: 0 0 16px; }
 table { width: 100%; border-collapse: collapse; background: var(--card); border: 1px solid var(--line); }
 th, td { padding: var(--pad) 14px; text-align: left; border-bottom: 1px solid var(--line); }
 th { color: var(--muted); font-size: 12px; font-weight: 600; }
-.total { font-variant-numeric: tabular-nums; }
+.total, .count, .spent { font-variant-numeric: tabular-nums; }
+.mail { color: var(--muted); }
 .pill { padding: 2px 8px; border-radius: 99px; background: var(--line); font-size: 12px; font-weight: 600; }
 .s-refunded { color: var(--muted); }
 @media (max-width: 720px) {
@@ -153,47 +195,105 @@ th { color: var(--muted); font-size: 12px; font-weight: 600; }
   .stats { gap: 8px; }
   .stat { padding: 8px 10px; }
   .stat b { font-size: 16px; }
-  thead, .date { display: none; }
+  thead, .date, .count { display: none; }
   table, tbody { display: block; border: 0; background: none; }
   tr { display: grid; grid-template-columns: minmax(0, 1fr) max-content; gap: 2px 12px; margin-bottom: 8px; padding: var(--pad) 12px; background: var(--card); border: 1px solid var(--line); border-radius: 10px; }
   td { padding: 0; border: 0; }
-  .who { grid-row: 2; color: var(--muted); }
-  .status { grid-row: 2; grid-column: 2; }
+  .who, .mail { grid-row: 2; color: var(--muted); }
+  .status, .last { grid-row: 2; grid-column: 2; }
 }
 </style></head><body>
-<nav><b>Corner Shop</b><a class="on">Orders</a><a>Products</a><a>Customers</a><a>Settings</a></nav>
-<main><h1>Orders</h1>
-${summary ? `<div class="stats">${stat("Today", "$103.50")}${stat("To pack", "2")}${stat("This week", "$559.50")}</div>` : ""}
-<table><thead><tr><th>Order</th><th>Customer</th><th>Date</th><th>Total</th><th>Status</th></tr></thead><tbody>${rows}</tbody></table>
+<nav><b>Corner Shop</b>${nav}</nav>
+<main>${page}
 </main></body></html>`;
 }
 /* ==== END OF MOCK CONFIG. Everything below is the layout; leave it alone. ==== */
+// One function scope, so no name the config declares can clash with the shell's.
+(() => {
 
 const WIDE = "(min-width: 1101px)";
 const FIT_STEPS = ["m-fit-1", "m-fit-2", "m-fit-3"];
-const state = { frame: FRAMES[0], mode: MODES[0], zoom: "Fit", answers: QUESTIONS.map((q) => q.options?.[0]) };
-for (const c of CONTROLS) state[c.label] = c.options[0];
+const ZOOMS = ["Fit", "100%", "200%", "300%"];
+// A drag on the render pans the frame once it moves this far. It never starts on what the render made
+// clickable, so its clicks, focus and drags still work: a control by its tag or role, anything marked
+// data-no-pan, and anything whose own cursor says it reacts (pointer, grab, a resize handle).
+const PAN_START = 4;
+const NO_PAN = ["a", "button", "input", "select", "textarea", "label", "summary", "[contenteditable]",
+  "[onclick]", "[data-no-pan]",
+  ...["button", "link", "tab", "switch", "checkbox", "radio", "slider", "option", "menuitem",
+    "menuitemcheckbox", "menuitemradio", "treeitem"].map((role) => `[role=${role}]`)].join(", ");
+const PLAIN_CURSORS = ["auto", "default", "text"];
+// Stacked and zoomed, the frame keeps this much of the window for the top row and a margin.
+const STACKED_ZOOM_MARGIN = 26;
+const RESERVED = ["frame", "mode", "zoom", "screen", "answers"];
+
+// Every config mistake the shell can name. The page still builds without the bad parts, then the
+// script throws them at its end, so a check sees a script error on a page it can measure.
+function configProblems() {
+  const problems = [];
+  const screenList = typeof SCREENS === "undefined" ? [] : SCREENS;
+  if (!Array.isArray(screenList) || !screenList.every((s) => typeof s === "string" && s)) {
+    problems.push("SCREENS must be a list of names");
+  }
+  CONTROLS.forEach((c, i) => {
+    const name = `CONTROLS[${i}]` + (typeof c?.label === "string" ? ` ("${c.label}")` : "");
+    if (typeof c?.label !== "string" || !c.label) problems.push(`${name} needs a label`);
+    else if (RESERVED.includes(c.label)) problems.push(`${name}: "${c.label}" is a name the shell uses; pick another label`);
+    else if (!Array.isArray(c.options) || !c.options.length || !c.options.every((o) => typeof o === "string" || Number.isFinite(o))) {
+      problems.push(`${name} needs options, a list of names or numbers`);
+    } else if (c.corner !== undefined && typeof c.corner !== "boolean") problems.push(`${name}: corner must be true or false`);
+  });
+  QUESTIONS.forEach((q, i) => {
+    if (q.screens === undefined) return;
+    const name = `QUESTIONS[${i}] ("${q.title}")`;
+    if (!Array.isArray(q.screens) || !q.screens.length) problems.push(`${name}: screens must be a list of SCREENS entries`);
+    else if (!screenList.length) problems.push(`${name} has screens, but the config has no SCREENS`);
+    else for (const s of q.screens) if (!screenList.includes(s)) problems.push(`${name}: screens names "${s}", which is not in SCREENS`);
+  });
+  return problems;
+}
+
+const shellProblems = configProblems();
+const shellScreens = typeof SCREENS !== "undefined" && Array.isArray(SCREENS) ? SCREENS.filter((s) => typeof s === "string") : [];
+const shellControls = CONTROLS.filter((c) => typeof c?.label === "string" && c.label && !RESERVED.includes(c.label)
+  && Array.isArray(c.options) && c.options.length);
+const shellWhere = (q) => (Array.isArray(q.screens) ? q.screens.filter((s) => shellScreens.includes(s)) : []);
+
+const state = { frame: FRAMES[0], mode: MODES[0], screen: shellScreens[0], zoom: "Fit", answers: QUESTIONS.map((q) => q.options?.[0]) };
+for (const c of shellControls) state[c.label] = c.options[0];
 
 const topRow = document.querySelector(".m-top"), main = document.querySelector(".m-main");
 const frameEl = document.getElementById("frame"), scaler = document.getElementById("scaler");
-const app = document.getElementById("app");
+const app = document.getElementById("app"), cornerEl = document.getElementById("corner");
 
-// A group of buttons with aria-pressed; onPick runs after the pressed state moves.
-function segment(options, current, onPick) {
+// Every button group and what it shows: update() presses buttons from state, so a jump from a
+// question or a Shows on click moves the top row too.
+const shellGroups = [];
+
+// A group of buttons with aria-pressed; onPick changes state, then update() redraws and presses.
+function segment(options, current, onPick, className = "m-seg") {
   const seg = document.createElement("div");
-  seg.className = "m-seg";
+  seg.className = className;
   options.forEach((option) => {
     const b = document.createElement("button");
     b.type = "button";
     b.textContent = option;
-    b.setAttribute("aria-pressed", String(option === current));
+    b.mockOption = option;
     b.addEventListener("click", () => {
-      for (const other of seg.children) other.setAttribute("aria-pressed", String(other === b));
       onPick(option);
+      update();
     });
     seg.append(b);
   });
+  shellGroups.push([seg, current]);
   return seg;
+}
+
+function syncPressed() {
+  for (const [seg, current] of shellGroups) {
+    const now = current();
+    for (const b of seg.querySelectorAll("button")) b.setAttribute("aria-pressed", String(b.mockOption === now));
+  }
 }
 
 function controlGroup(label, seg) {
@@ -202,15 +302,78 @@ function controlGroup(label, seg) {
   const name = document.createElement("span");
   name.textContent = label;
   group.append(name, seg);
-  document.getElementById("bar").append(group);
+  return group;
+}
+
+// The render's scroll positions, kept across re-renders of the same view (frame and screen): the page's
+// and each scrolled element's, such as an app shell's <main>. #frame keeps its own scroll across a
+// srcdoc swap; the render's document and its elements start at the top on each load.
+let shownView = null, savedScroll = null, restoring = false;
+const viewKey = () => `${state.frame.label}\n${state.screen ?? ""}`;
+
+// Where an element sits, from its nearest id or the root, so a reload finds the same scroller. Each
+// step keeps its tag and class, so when an answer adds or drops an earlier sibling, the shifted path
+// finds nothing rather than an element of another kind. Two alike siblings can still trade places;
+// a scroller with an id is found wherever it moves.
+function scrollPath(el) {
+  const steps = [];
+  for (; el.parentElement && !el.id; el = el.parentElement) steps.unshift([[...el.parentElement.children].indexOf(el), el.tagName, el.getAttribute("class")]);
+  return JSON.stringify([el.parentElement ? el.id : null, steps]);
+}
+
+function scrollTarget(doc, path) {
+  const [id, steps] = JSON.parse(path);
+  let el = id ? doc.getElementById(id) : doc.documentElement;
+  for (const [i, tag, cls] of steps) {
+    el = el?.children[i];
+    if (el?.tagName !== tag || el.getAttribute("class") !== cls) return null;
+  }
+  return el;
 }
 
 function update() {
+  const view = viewKey();
+  if (view !== shownView) {
+    shownView = view;
+    const doc = app.contentDocument;
+    for (const path of Object.keys(savedScroll?.inner ?? {})) {
+      const el = doc && scrollTarget(doc, path);
+      if (el) el.scrollLeft = el.scrollTop = 0;
+    }
+    savedScroll = null;
+    frameEl.scrollTo(0, 0);
+    app.contentWindow?.scrollTo(0, 0);
+  }
   const html = render(state);
   if (app.srcdoc !== html) app.srcdoc = html;
   app.width = state.frame.width;
   app.height = state.frame.height;
+  syncPressed();
+  const text = document.getElementById("copy-text");
+  if (!text.hidden) text.value = choicesText();
   refit();
+}
+
+function choicesText() {
+  const lines = QUESTIONS.flatMap((q, i) => (q.options ? [`${i + 1}. ${q.title}: ${state.answers[i]}`] : []));
+  return [document.title, ...lines].join("\n");
+}
+
+function copyChoices() {
+  const text = choicesText(), note = document.getElementById("copied"), area = document.getElementById("copy-text");
+  const fallback = () => {
+    area.value = text;
+    area.rows = text.split("\n").length;
+    area.hidden = false;
+    area.focus();
+    area.select();
+    note.textContent = "Press Ctrl+C to copy.";
+  };
+  if (!navigator.clipboard?.writeText) return fallback();
+  navigator.clipboard.writeText(text).then(() => {
+    area.hidden = true;
+    note.textContent = "Copied.";
+  }, fallback);
 }
 
 function buildPanel() {
@@ -223,25 +386,49 @@ function buildPanel() {
     const detail = document.createElement("p");
     detail.textContent = q.detail;
     box.append(title, detail);
-    if (q.options) box.append(segment(q.options, state.answers[i], (option) => { state.answers[i] = option; update(); }));
+    const shows = shellWhere(q);
+    if (shows.length) {
+      const row = segment(shows, () => state.screen, (screen) => { state.screen = screen; }, "m-where");
+      const label = document.createElement("span");
+      label.textContent = "Shows on:";
+      row.prepend(label);
+      box.append(row);
+    }
+    if (q.options) {
+      box.append(segment(q.options, () => state.answers[i], (option) => {
+        if (state.answers[i] === option) return;
+        state.answers[i] = option;
+        if (shows.length && !shows.includes(state.screen)) state.screen = shows[0];
+      }));
+    }
     holder.append(box);
   });
+  document.getElementById("choices").hidden = !QUESTIONS.some((q) => q.options);
+  document.getElementById("copy").addEventListener("click", copyChoices);
   document.getElementById("about").innerHTML = ABOUT;
 }
 
 function buildControls() {
   document.getElementById("title").textContent = document.title;
-  const size = segment(FRAMES.map((f) => f.label), state.frame.label, (label) => {
+  const bar = document.getElementById("bar");
+  if (shellScreens.length > 1) {
+    const screen = segment(shellScreens, () => state.screen, (s) => { state.screen = s; });
+    screen.id = "c-screen";
+    bar.append(controlGroup("Screen", screen));
+  }
+  const size = segment(FRAMES.map((f) => f.label), () => state.frame.label, (label) => {
     state.frame = FRAMES.find((f) => f.label === label);
-    update();
   });
   size.id = "c-frame";
-  controlGroup("Size", size);
-  if (MODES.length > 1) controlGroup("Mode", segment(MODES, state.mode, (mode) => { state.mode = mode; update(); }));
-  for (const c of CONTROLS) controlGroup(c.label, segment(c.options, state[c.label], (option) => { state[c.label] = option; update(); }));
-  const zoom = segment(["Fit", "100%"], state.zoom, (option) => { state.zoom = option; update(); });
+  bar.append(controlGroup("Size", size));
+  if (MODES.length > 1) bar.append(controlGroup("Mode", segment(MODES, () => state.mode, (mode) => { state.mode = mode; })));
+  const zoom = segment(ZOOMS, () => state.zoom, (option) => { state.zoom = option; });
   zoom.id = "c-zoom";
-  controlGroup("Zoom", zoom);
+  cornerEl.append(controlGroup("Zoom", zoom));
+  for (const c of shellControls) {
+    const group = controlGroup(c.label, segment(c.options, () => state[c.label], (option) => { state[c.label] = option; }));
+    (c.corner ? cornerEl : bar).append(group);
+  }
 }
 
 // One line, nothing past the row's right edge.
@@ -260,6 +447,7 @@ function fitTop() {
   }
 }
 
+// Two sizes: the scaler is the render times the zoom, the frame is the room it has, and scrolls.
 function scale() {
   const f = state.frame;
   const css = getComputedStyle(document.documentElement);
@@ -267,13 +455,18 @@ function scale() {
   const wide = matchMedia(WIDE).matches, fit = state.zoom === "Fit";
   // The 1 px pays for the frame's size rounding up below.
   const widthLeft = (wide ? main.clientWidth - panelMin - gap : frameEl.parentElement.clientWidth) - 1;
-  const heightLeft = wide ? main.clientHeight - 1 : Infinity;
-  const k = fit ? Math.min(1, widthLeft / f.width, heightLeft / f.height) : 1;
-  const width = Math.ceil(f.width * k) + "px", height = Math.ceil(f.height * k) + "px";
+  const heightLeft = wide ? main.clientHeight - 1 : fit ? Infinity : innerHeight - topRow.offsetHeight - STACKED_ZOOM_MARGIN;
+  const k = fit ? Math.min(1, widthLeft / f.width, heightLeft / f.height) : parseInt(state.zoom, 10) / 100;
+  const width = Math.ceil(f.width * k), height = Math.ceil(f.height * k);
   app.style.transform = `scale(${k})`;
-  scaler.style.width = frameEl.style.width = width;
-  scaler.style.height = frameEl.style.height = height;
+  scaler.style.width = width + "px";
+  scaler.style.height = height + "px";
+  frameEl.style.width = Math.min(width, widthLeft + 1) + "px";
+  frameEl.style.height = Math.min(height, heightLeft + 1) + "px";
+  cornerEl.style.top = frameEl.offsetTop + frameEl.clientHeight - 8 + "px";
+  cornerEl.style.maxWidth = Math.max(0, frameEl.clientWidth - 16) + "px";
   document.getElementById("caption").textContent = `${f.label}, ${f.width} x ${f.height}, shown at ${Math.round(k * 100)}%.`;
+  setGrab();
 }
 
 // fitTop first: the row's height sets what scale() has left.
@@ -282,12 +475,113 @@ function refit() {
   scale();
 }
 
+// Drag to pan, on the render's own document (srcdoc is same-origin). Screen coordinates, since the
+// render moves under the pointer as the frame scrolls.
+let shellPan = null, swallowClick = false;
+const panSheets = new WeakMap();
+const canPan = () => frameEl.scrollWidth > frameEl.clientWidth + 1 || frameEl.scrollHeight > frameEl.clientHeight + 1;
+
+// A constructed sheet sets the cursor, so the render's DOM, which the check compares, never changes.
+function setGrab() {
+  const sheet = app.contentDocument && panSheets.get(app.contentDocument);
+  if (!sheet) return;
+  sheet.replaceSync(shellPan?.moving ? ":root, :root * { cursor: grabbing !important; user-select: none !important; }"
+    : canPan() ? ":root { cursor: grab; }" : "");
+}
+
+function panMove(e) {
+  if (!shellPan) return;
+  if (!(e.buttons & 1)) return panEnd();
+  const dx = e.screenX - shellPan.x, dy = e.screenY - shellPan.y;
+  if (!shellPan.moving) {
+    if (Math.hypot(dx, dy) < PAN_START) return;
+    shellPan.moving = true;
+    app.contentWindow?.getSelection()?.removeAllRanges();
+    setGrab();
+  }
+  frameEl.scrollLeft = shellPan.left - dx;
+  frameEl.scrollTop = shellPan.top - dy;
+}
+
+// A pan ends without a click on what it started over; the flag clears before any later click.
+function panEnd() {
+  if (shellPan?.moving) {
+    swallowClick = true;
+    setTimeout(() => { swallowClick = false; });
+  }
+  shellPan = null;
+  setGrab();
+}
+
+// The shell's grab cursor sits on :root and every element inherits it, so it is switched off while
+// the author's own cursor is read.
+function startsPan(doc, target) {
+  if (!target?.closest || target.closest(NO_PAN)) return false;
+  const sheet = panSheets.get(doc);
+  sheet.disabled = true;
+  const cursor = doc.defaultView.getComputedStyle(target).cursor;
+  sheet.disabled = false;
+  return PLAIN_CURSORS.includes(cursor);
+}
+
+function attachPan(doc) {
+  const sheet = new doc.defaultView.CSSStyleSheet();
+  doc.adoptedStyleSheets = [...doc.adoptedStyleSheets, sheet];
+  panSheets.set(doc, sheet);
+  doc.addEventListener("pointerdown", (e) => {
+    if (e.button !== 0 || !canPan() || !startsPan(doc, e.target)) return;
+    shellPan = { x: e.screenX, y: e.screenY, left: frameEl.scrollLeft, top: frameEl.scrollTop, moving: false };
+  });
+  doc.addEventListener("pointermove", panMove);
+  doc.addEventListener("pointerup", panEnd);
+  doc.addEventListener("pointercancel", panEnd);
+  doc.addEventListener("dragstart", (e) => { if (shellPan) e.preventDefault(); });
+  doc.addEventListener("click", (e) => {
+    if (!swallowClick) return;
+    swallowClick = false;
+    e.preventDefault();
+    e.stopPropagation();
+  }, true);
+}
+
+app.addEventListener("load", () => {
+  const doc = app.contentDocument, win = app.contentWindow;
+  if (!doc) return;
+  if (savedScroll?.view === viewKey()) {
+    // The scroll events a restore fires come a frame later; they would save a position the shorter
+    // render cut short, over the one the viewer left.
+    restoring = true;
+    requestAnimationFrame(() => requestAnimationFrame(() => { restoring = false; }));
+    const { left, top, inner } = savedScroll;
+    win.scrollTo(left, top);
+    for (const [path, [x, y]] of Object.entries(inner)) {
+      const el = scrollTarget(doc, path);
+      if (el) { el.scrollLeft = x; el.scrollTop = y; }
+    }
+  }
+  // Element scrolls don't bubble, so this listens in the capture phase. The view is read at each
+  // scroll, not at load: a Size click that leaves the HTML alone keeps this page.
+  doc.addEventListener("scroll", (e) => {
+    if (restoring) return;
+    const view = viewKey();
+    if (savedScroll?.view !== view) savedScroll = { view, left: 0, top: 0, inner: {} };
+    if (e.target === doc) Object.assign(savedScroll, { left: win.scrollX, top: win.scrollY });
+    else if (e.target.nodeType === 1) savedScroll.inner[scrollPath(e.target)] = [e.target.scrollLeft, e.target.scrollTop];
+  }, { capture: true, passive: true });
+  attachPan(doc);
+  setGrab();
+});
+document.addEventListener("pointermove", panMove);
+document.addEventListener("pointerup", panEnd);
+
 buildControls();
 buildPanel();
 update();
 addEventListener("resize", refit);
 new ResizeObserver(refit).observe(document.querySelector(".m-main"));
 document.fonts.ready.then(refit);
+if (shellProblems.length) throw new Error(`Mock config: ${shellProblems.join("; ")}`);
+})();
 </script>
 </body>
 </html>

@@ -6,7 +6,8 @@ lists, so no assertion passes by being unable to fail. A static test ties every
 assertion name in the check to a mutant. Every edit is matched
 against the template in a browser-free test, so renaming a rule fails loudly
 instead of turning a mutant into a pass. Browser cases skip with the reason
-printed to stderr when no chrome-headless-shell is found.
+printed to stderr when no chrome-headless-shell is found. fixtures/previous-template.html is
+the template from before the corner zoom: a mock built from it must keep passing.
 """
 import importlib.util
 import os
@@ -20,6 +21,8 @@ import unittest
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 TEMPLATE = ROOT / "skills/mocks/template/mock.html"
 CHECK = ROOT / "skills/mocks/scripts/layout_check.py"
+# The template as it shipped before the corner zoom: mocks built from it must keep passing.
+PREVIOUS_TEMPLATE = ROOT / "tests/mocks/fixtures/previous-template.html"
 
 spec = importlib.util.spec_from_file_location("layout_check", CHECK)
 layout_check = importlib.util.module_from_spec(spec)
@@ -52,7 +55,10 @@ GUTTER_RULE = "@media (width < 1101px) { html { scrollbar-gutter: stable; } }"
 STACKED_COLUMNS = ".m-main { display: grid; grid-template-columns: minmax(0, 1fr);"
 STACKED_WIDTH = ": frameEl.parentElement.clientWidth) - 1;"
 RENDER_END = "</main></body></html>`;"
-FRAME_HEIGHT = "scaler.style.height = frameEl.style.height = height;"
+FRAME_HEIGHT = 'frameEl.style.height = Math.min(height, heightLeft + 1) + "px";'
+SCALER_HEIGHT = 'scaler.style.height = height + "px";'
+ZOOM_SCALE = "parseInt(state.zoom, 10) / 100"
+CUSTOMERS_SCREENS = 'screens: ["Customers"] }'
 MODES_LINE = 'const MODES = ["Light", "Dark"];'
 FRAME_OVERFLOW = ".m-frame { overflow: auto;"
 DENSITY_READ = 'compact = state.Density === "Compact"'
@@ -151,6 +157,24 @@ MUTANTS = {
     "zoom_cannot_scroll": {
         "edits": [(FRAME_OVERFLOW, ".m-frame { overflow: clip;")],
         "kind": "zoom 100% scrolls",
+        "also": {"zoom 200% reaches 2x"},
+    },
+    # 200% that draws at 100%: the frame can't scroll past the render's own size.
+    "zoom_200_stays_1x": {
+        "edits": [(ZOOM_SCALE, f"Math.min(1, {ZOOM_SCALE})")],
+        "kind": "zoom 200% reaches 2x",
+        "also": set(),
+    },
+    # 200% whose scroll room is right but whose render still paints at 1x.
+    "zoom_200_paints_1x": {
+        "edits": [("app.style.transform = `scale(${k})`;", "app.style.transform = `scale(${Math.min(1, k)})`;")],
+        "kind": "zoom 200% reaches 2x",
+        "also": set(),
+    },
+    # A question's screens names a screen SCREENS lacks: the shell throws once the page is built.
+    "screens_typo": {
+        "edits": [(CUSTOMERS_SCREENS, 'screens: ["Customer"] }')],
+        "kind": "no script errors",
         "also": set(),
     },
     "render_script_throws": {
@@ -160,9 +184,10 @@ MUTANTS = {
         "also": set(),
     },
     "frame_clips_render": {
-        "edits": [(FRAME_HEIGHT, 'scaler.style.height = frameEl.style.height = Math.ceil(f.height * k / 2) + "px";')],
+        "edits": [(SCALER_HEIGHT, 'scaler.style.height = Math.ceil(height / 2) + "px";'),
+                  (FRAME_HEIGHT, 'frameEl.style.height = Math.ceil(height / 2) + "px";')],
         "kind": "render fit",
-        "also": {"zoom 100% scrolls"},
+        "also": {"zoom 100% scrolls", "zoom 200% reaches 2x"},
     },
     "stacked_two_columns": {
         "edits": [(STACKED_COLUMNS, ".m-main { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);")],
@@ -289,6 +314,13 @@ class CleanPages(TemporaryPages):
         scrolled = [l for l in lines if l["kind"] == "questions scroll" and l["got"].startswith("scrolled ")]
         small = {l["scope"].split()[1] for l in scrolled}
         self.assertLessEqual({"1280x680", "1101x700"}, small, "the template's questions must overflow here")
+
+    def test_a_mock_from_the_previous_template_still_passes(self):
+        # Mocks built before the corner zoom have Fit and 100% in the top row and no 200%.
+        result = run_check(PREVIOUS_TEMPLATE)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(result.stdout.splitlines()[-1], "LAYOUT_OK")
+        self.assertNotIn("zoom 200%", result.stdout)
 
     def test_every_wide_assertion_runs_for_every_frame(self):
         lines = parsed(run_check(self.page()).stdout)
@@ -458,6 +490,15 @@ class Mutants(TemporaryPages):
     def test_zoom_cannot_scroll(self):
         self.assert_mutant_fails("zoom_cannot_scroll")
 
+    def test_zoom_200_stays_1x(self):
+        self.assert_mutant_fails("zoom_200_stays_1x")
+
+    def test_zoom_200_paints_1x(self):
+        self.assert_mutant_fails("zoom_200_paints_1x")
+
+    def test_screens_typo(self):
+        self.assert_mutant_fails("screens_typo")
+
     def test_render_script_throws(self):
         self.assert_mutant_fails("render_script_throws")
 
@@ -490,10 +531,17 @@ class LivePage(TemporaryPages):
         steps = ["m-fit-1", "m-fit-2", "m-fit-3"]
         # Wide enough that every step fires between 1,905 and 1,101 px, and step 3 still fits at 1,101.
         short_group = '  { label: "Short", options: ["One", "Two", "Three"] },\n'
-        page = self.page([(CONTROLS_OPEN, CONTROLS_OPEN + extra_groups(1) + short_group)])
+        pair_group = '  { label: "Pair", options: ["Comfortable", "Compact"] },\n'
+        page = self.page([(CONTROLS_OPEN, CONTROLS_OPEN + extra_groups(1) + short_group + pair_group)])
         tab = self.open(page, 1905, 800)
+        # The row's fit, measured here, not read from the shell, whose names are private to it: one
+        # line, nothing past the row's right edge.
         state = """(() => {
           const top = document.querySelector(".m-top");
+          const rowFits = () => {
+            const groups = [...top.querySelectorAll(".m-ctl")], first = groups[0];
+            return top.scrollWidth <= top.clientWidth && groups.every((g) => g.offsetTop < first.offsetTop + first.offsetHeight);
+          };
           const on = [...top.classList].filter((c) => c.startsWith("m-fit-")).sort();
           const fits = rowFits();
           let neededLast = true;
