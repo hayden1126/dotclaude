@@ -2831,6 +2831,418 @@ class L3r(BashBase):
         self.add(use("t-old", "Agent", prompt="[practices:review] the old, bare marker"))
         self.assertIsNotNone(self.pre("gh pr ready", session_id="s-bare"))
 
+    def review(self, rev="HEAD"):
+        self.add(use(f"t-rev-{next(self.ids)}", "Agent", prompt=f"{self.marker(rev)} demo ..."))
+
+    def off_history(self, parent, **files):
+        """A commit with these files (None removes one) on top of parent, on no branch, through
+        the index alone, so neither HEAD nor the worktree moves."""
+        blob = os.path.join(self.tmp, "blob")
+        self.sh("read-tree", parent)
+        for rel, content in files.items():
+            if content is None:
+                self.sh("update-index", "--force-remove", rel.replace("__", "/"))
+                continue
+            with open(blob, "w") as f:
+                f.write(content)
+            oid = self.sh("hash-object", "-w", blob)
+            self.sh("update-index", "--add", "--cacheinfo",
+                    f"100644,{oid},{rel.replace('__', '/')}")
+        side = self.sh("commit-tree", self.sh("write-tree"), "-p", parent,
+                       "-m", f"side {next(self.ids)}")
+        self.sh("read-tree", "HEAD")
+        return side
+
+    def merged(self, tree_of, *parents):
+        """HEAD becomes a merge of parents holding tree_of's tree."""
+        tree = self.sh("rev-parse", f"{tree_of}^{{tree}}")
+        args = [x for p in parents for x in ("-p", p)]
+        self.sh("update-ref", "HEAD", self.sh("commit-tree", tree, *args, "-m", "merge"))
+        self.sh("read-tree", "HEAD")
+
+    def test_a_later_commit_outside_the_watched_files_keeps_the_clearance(self):
+        self.review()
+        self.commit(**{"STATUS.md": "carried\n", "lib__v.ts": "2\n"})
+        self.assertIsNone(self.pre("gh pr ready", session_id="s-carry"))
+        self.assertIn("l3r-reuse", self.log())
+        self.assertNotIn("l3r", (self.start("startup") or {}).get("systemMessage", ""))
+
+    def test_a_watched_change_after_a_review_asks_for_the_delta_alone(self):
+        prior = self.sh("rev-parse", "HEAD")
+        self.review()
+        self.commit(**{"app__api__y__route.ts": "export const y = 1\n", "lib__v.ts": "2\n"})
+        head = self.sh("rev-parse", "HEAD")
+        reason = self.pre("gh pr ready", session_id="s-delta")
+        self.assertIn(f"{self.marker()} Review only what changed", reason)
+        self.assertIn(f"since its last review at {prior[:12]}", reason)
+        self.assertIn(f"at the head ({head[:12]})", reason)
+        self.assertIn("app/api/y/route.ts", reason)
+        self.assertNotIn("app/api/x/route.ts", reason)
+        self.assertIn("such as Sonnet", reason)
+        self.assertIsNone(self.pre("gh pr ready", session_id="s-delta"))  # the resend
+        self.review()
+        self.commit(**{"STATUS.md": "carried\n"})  # the delta's review clears in turn
+        self.assertIsNone(self.pre("gh pr ready", session_id="s-chain"))
+
+    def test_a_first_review_still_asks_for_the_whole_branch(self):
+        reason = self.pre("gh pr ready", session_id="s-whole")
+        self.assertIn("Review the changes of main", reason)
+        self.assertNotIn("such as Sonnet", reason)
+
+    def test_a_review_of_a_commit_off_the_heads_history_clears_nothing(self):
+        # The forged clearance: a marker naming a commit that holds the same watched file, but
+        # that the head doesn't descend from. A rebase leaves the old head the same way.
+        side = self.off_history(self.base, **{"app__api__x__route.ts": "export const x = 1\n"})
+        self.review(side)
+        self.add(use("t-nowhere", "Agent", prompt="[practices:review:0123456789ab] demo ..."))
+        reason = self.pre("gh pr ready", session_id="s-forged")
+        self.assertIn(f"{self.marker()} Review the changes of main", reason)
+        self.assertIn("app/api/x/route.ts", reason)
+
+    def test_a_marker_outside_an_agent_prompt_keeps_no_clearance(self):
+        self.add(text(f"{self.marker()} in prose"),
+                 use("t-b", "Bash", command=f"echo '{self.marker()}'"))
+        self.commit(**{"STATUS.md": "carried\n"})
+        self.assertIn("Review the changes of main", self.pre("gh pr ready", session_id="s-prose"))
+
+    def test_the_nearest_reviewed_ancestor_sets_the_delta(self):
+        first = self.sh("rev-parse", "HEAD")
+        self.commit(**{"app__api__y__route.ts": "export const y = 1\n"})
+        second = self.sh("rev-parse", "HEAD")
+        self.commit(**{"app__api__z__route.ts": "export const z = 1\n"})
+        for n, order in enumerate(((first, second), (second, first))):
+            with self.subTest(n=n):  # neither order of the markers decides
+                self.rows([])
+                for rev in order:
+                    self.review(rev)
+                reason = self.pre("gh pr ready", session_id=f"s-near-{n}")
+                self.assertIn(f"last review at {second[:12]}", reason)
+                self.assertNotIn("app/api/y/route.ts", reason)
+
+    def test_main_merged_in_after_a_review_is_no_delta(self):
+        lane = self.sh("rev-parse", "HEAD")
+        self.review()
+        main = self.off_history(self.base, **{"app__api__m__route.ts": "export const m = 1\n"})
+        self.sh("update-ref", "refs/remotes/origin/main", main)
+        both = self.off_history(lane, **{"app__api__m__route.ts": "export const m = 1\n"})
+        self.merged(both, lane, main)
+        self.assertIsNone(self.pre("gh pr ready", session_id="s-main"))
+
+    def test_a_conflict_resolved_by_hand_after_a_review_is_delta(self):
+        lane = self.sh("rev-parse", "HEAD")
+        self.review()
+        main = self.off_history(self.base, **{"app__api__x__route.ts": "export const x = 2\n",
+                                              "app__api__m__route.ts": "export const m = 1\n"})
+        self.sh("update-ref", "refs/remotes/origin/main", main)
+        both = self.off_history(lane, **{"app__api__x__route.ts": "export const x = 3\n",
+                                         "app__api__m__route.ts": "export const m = 1\n"})
+        self.merged(both, lane, main)
+        reason = self.pre("gh pr ready", session_id="s-conflict")
+        self.assertIn("Review only what changed", reason)
+        self.assertIn("app/api/x/route.ts", reason)
+        self.assertNotIn("app/api/m/route.ts", reason)
+
+    def test_a_merge_keeping_ours_over_mains_fix_is_delta(self):
+        # Review round 1, high: the file equals the reviewed head, but the PR's change to it now
+        # undoes what main fixed, which no review saw.
+        lane = self.sh("rev-parse", "HEAD")
+        self.review()
+        main = self.off_history(self.base, **{"app__api__x__route.ts": "export const x = 2\n"})
+        self.sh("update-ref", "refs/remotes/origin/main", main)
+        self.merged(lane, lane, main)
+        reason = self.pre("gh pr ready", session_id="s-ours")
+        self.assertIn("Review only what changed", reason)
+        self.assertIn("app/api/x/route.ts", reason)
+        # Review round 2, medium: the head's tree equals the reviewed tree, so a brief naming only
+        # that range would show the reviewer nothing. The base's end is where the change is.
+        self.assertIn(f"on the base ({main[:12]})", reason)
+
+    def test_a_review_before_the_merge_base_clears_no_revert_of_a_later_fix(self):
+        self.sh("update-ref", "HEAD", self.base)
+        self.sh("read-tree", "--reset", "-u", "HEAD")
+        self.commit(**{"app__api__x__route.ts": "export const x = 1\n"})
+        old = self.sh("rev-parse", "HEAD")  # on main, later fixed there
+        self.commit(**{"app__api__x__route.ts": "export const x = 2\n"})
+        fixed = self.sh("rev-parse", "HEAD")
+        self.sh("update-ref", "refs/remotes/origin/main", fixed)
+        self.commit(**{"app__api__x__route.ts": "export const x = 1\n"})  # the branch reverts it
+        self.review(old)
+        self.assertIn("app/api/x/route.ts", self.pre("gh pr ready", session_id="s-revert"))
+
+    def test_a_watched_file_gone_after_a_review_is_delta(self):
+        # Review round 1, medium: deleted, moved or made a link, it left the touched set, and
+        # the branch's other watched files kept the clearance.
+        self.commit(**{"app__api__w__route.ts": "export const w = 1\n"})
+        self.review()
+        reviewed = self.sh("rev-parse", "HEAD")
+        x = os.path.join(self.proj, "app", "api", "x", "route.ts")
+
+        def link():
+            os.remove(x)
+            os.symlink("/etc/hostname", x)
+
+        def moved():
+            os.rename(x, os.path.join(self.proj, "lib", "x.txt"))
+
+        for n, change in enumerate((lambda: os.remove(x), moved, link)):
+            with self.subTest(n=n):
+                self.sh("reset", "-q", "--hard", reviewed)
+                change()
+                self.commit()
+                reason = self.pre("gh pr ready", session_id=f"s-gone-{n}")
+                self.assertIn("Review only what changed", reason)
+                self.assertIn("app/api/x/route.ts", reason)
+                self.assertNotIn("app/api/w/route.ts", reason)
+
+    def test_a_watched_file_the_base_removed_is_no_delta(self):
+        w = {"app__api__w__route.ts": "export const w = 1\n"}
+        start = self.off_history(self.base, **w)
+        self.sh("update-ref", "refs/remotes/origin/main", start)
+        lane = self.off_history(start, **{"app__api__x__route.ts": "export const x = 1\n"})
+        self.sh("update-ref", "HEAD", lane)
+        self.sh("read-tree", "--reset", "-u", "HEAD")
+        self.review()
+        main = self.off_history(start, **{"app__api__w__route.ts": None})
+        self.sh("update-ref", "refs/remotes/origin/main", main)
+        self.merged(self.off_history(lane, **{"app__api__w__route.ts": None}), lane, main)
+        self.assertIsNone(self.pre("gh pr ready", session_id="s-mine"))
+
+    def on_top_of_a_shared_file(self):
+        """HEAD becomes a branch off a base holding w: it changes w and adds x, and is reviewed.
+        Returns (the base commit, the reviewed commit)."""
+        start = self.off_history(self.base, **{"app__api__w__route.ts": "export const w = 0\n"})
+        self.sh("update-ref", "refs/remotes/origin/main", start)
+        lane = self.off_history(start, **{"app__api__w__route.ts": "export const w = 1\n",
+                                          "app__api__x__route.ts": "export const x = 1\n"})
+        self.sh("update-ref", "HEAD", lane)
+        self.sh("read-tree", "--reset", "-u", "HEAD")
+        self.review()
+        return start, lane
+
+    def test_a_change_dropped_back_to_the_base_is_delta(self):
+        # Review round 2, high: the file left the PR's diff, so no file looked touched.
+        self.on_top_of_a_shared_file()
+        self.commit(**{"app__api__w__route.ts": "export const w = 0\n"})
+        reason = self.pre("gh pr ready", session_id="s-back")
+        self.assertIn("app/api/w/route.ts", reason)
+        self.assertNotIn("app/api/x/route.ts", reason)
+
+    def test_a_file_the_base_edited_and_the_branch_deleted_is_delta(self):
+        start, lane = self.on_top_of_a_shared_file()
+        main = self.off_history(start, **{"app__api__w__route.ts": "export const w = 2\n"})
+        self.sh("update-ref", "refs/remotes/origin/main", main)
+        self.merged(self.off_history(lane, **{"app__api__w__route.ts": None}), lane, main)
+        reason = self.pre("gh pr ready", session_id="s-del")
+        self.assertIn("app/api/w/route.ts", reason)
+        self.assertNotIn("app/api/x/route.ts", reason)
+
+    def test_a_base_file_the_branch_deleted_after_a_review_is_delta(self):
+        # Only the base's end of the pair holds this file, so that blob must be read.
+        start = self.off_history(self.base, **{"app__api__w__route.ts": "export const w = 0\n"})
+        self.sh("update-ref", "refs/remotes/origin/main", start)
+        lane = self.off_history(start, **{"app__api__x__route.ts": "export const x = 1\n"})
+        self.sh("update-ref", "HEAD", lane)
+        self.sh("read-tree", "--reset", "-u", "HEAD")
+        self.review()
+        self.sh("rm", "-q", "app/api/w/route.ts")
+        self.commit()
+        reason = self.pre("gh pr ready", session_id="s-basefile")
+        self.assertIn("app/api/w/route.ts", reason)
+        self.assertNotIn("app/api/x/route.ts", reason)
+
+    def test_a_file_watched_only_by_its_old_content_is_delta_when_gone(self):
+        # Its path fires nothing, so only reading the base's blob finds it.
+        start = self.off_history(self.base, **{"lib__act.ts": '"use server"\n'})
+        self.sh("update-ref", "refs/remotes/origin/main", start)
+        lane = self.off_history(start, **{"app__api__x__route.ts": "export const x = 1\n"})
+        self.sh("update-ref", "HEAD", lane)
+        self.sh("read-tree", "--reset", "-u", "HEAD")
+        self.review()
+        self.sh("rm", "-q", "lib/act.ts")
+        self.commit()
+        self.assertIn("lib/act.ts", self.pre("gh pr ready", session_id="s-content"))
+
+    def test_a_size_cap_on_the_second_read_quiets_no_touched_file(self):
+        # Review round 3, medium: the delta reads up to four blobs a file under the head pass's
+        # cap, so a file that fired there could read as empty here.
+        big = "x" * 60 + "\n"
+        self.commit(**{"a__big.txt": big})
+        self.review()
+        self.commit(**{"a__big.txt": "y" * 60 + "\n", "z__act.ts": '"use server"\n'})
+        with mock.patch.dict(os.environ, self.env, clear=True), \
+                mock.patch.object(PC, "START", time.monotonic()), \
+                mock.patch.object(PC, "BYTES_MAX", 130):  # in-process: run_hook's child can't see it
+            out = PC.pre_tool_use(self.event("gh pr ready", "PreToolUse", "b-cap", session_id="s-cap"))
+        PC.CRUMB.clear()
+        self.assertIn("z/act.ts", json.dumps(out))
+
+    def test_a_link_at_a_watched_path_retargeted_after_a_review_is_delta(self):
+        d = os.path.join(self.proj, "app", "api", "l")
+        os.makedirs(d)
+        os.symlink("one", os.path.join(d, "route.ts"))
+        self.commit()
+        self.review()
+        os.remove(os.path.join(d, "route.ts"))
+        os.symlink("two", os.path.join(d, "route.ts"))
+        self.commit()
+        self.assertIn("app/api/l/route.ts", self.pre("gh pr ready", session_id="s-link"))
+
+    def test_a_pr_that_only_removes_a_watched_file_waits_for_a_review(self):
+        # Review round 4, medium: with no review to compare, nothing looked touched.
+        start = self.off_history(self.base, **{"app__api__w__route.ts": "export const w = 0\n",
+                                               "lib__act.ts": '"use server"\n'})
+        self.sh("update-ref", "refs/remotes/origin/main", start)
+        for n, gone in enumerate(("app__api__w__route.ts", "lib__act.ts")):
+            with self.subTest(gone=gone):
+                self.sh("update-ref", "HEAD", self.off_history(start, **{gone: None}))
+                self.sh("read-tree", "--reset", "-u", "HEAD")
+                reason = self.pre("gh pr ready", session_id=f"s-rm-{n}")
+                self.assertIn(gone.replace("__", "/"), reason)
+
+    def test_a_spent_budget_keeps_what_the_head_pass_found(self):
+        # Review round 4, medium: a Budget raised on the way to the delta dropped the deny.
+        self.review()
+        self.commit(**{"app__api__y__route.ts": "export const y = 1\n"})
+        for n, name in enumerate(("review_marks", "last_review", "review_delta")):
+            with self.subTest(name=name), mock.patch.dict(os.environ, self.env, clear=True), \
+                    mock.patch.object(PC, "START", time.monotonic()), \
+                    mock.patch.object(PC, name, side_effect=PC.Budget("x")):
+                out = PC.pre_tool_use(self.event("gh pr ready", "PreToolUse", f"b-spent-{n}",
+                                                 session_id=f"s-spent-{n}"))
+            PC.CRUMB.clear()
+            self.assertIn("app/api/y/route.ts", json.dumps(out))
+            self.assertIn("Review the changes of main", json.dumps(out))
+
+    def test_a_skill_that_fires_only_on_the_old_content_stays_in_the_brief(self):
+        # Review round 4, low: the path fired for one skill, so the file went unread for another.
+        self.skill("extra", 'skill = "extra"\ngate = ["Confirm the new address."]\n[[event]]\n'
+                   'id = "contact"\ncontent = [\'\'\'bumpQuota\\(\'\'\']\nlines = ["Confirm it."]\n')
+        self.commit(**{"app__api__x__route.ts": "bumpQuota(a)\n"})
+        self.review()
+        self.commit(**{"app__api__x__route.ts": "export const x = 2\n"})
+        reason = self.pre("gh pr ready", session_id="s-two")
+        self.assertIn("demo (", reason)
+        self.assertIn("extra (", reason)
+
+    def test_a_link_at_a_watched_path_removed_after_a_review_is_delta(self):
+        d = os.path.join(self.proj, "app", "api", "l")
+        os.makedirs(d)
+        os.symlink("one", os.path.join(d, "route.ts"))
+        self.commit()
+        self.review()
+        os.remove(os.path.join(d, "route.ts"))
+        self.commit()
+        self.assertIn("app/api/l/route.ts", self.pre("gh pr ready", session_id="s-unlink"))
+
+    def base_with_action(self):
+        """origin/main holds lib/act.ts, a file only its content watches; HEAD is a branch off it
+        that adds a route. Returns the base commit."""
+        start = self.off_history(self.base, **{"lib__act.ts": '"use server"\n'})
+        self.sh("update-ref", "refs/remotes/origin/main", start)
+        lane = self.off_history(start, **{"app__api__x__route.ts": "export const x = 1\n"})
+        self.sh("update-ref", "HEAD", lane)
+        self.sh("read-tree", "--reset", "-u", "HEAD")
+        return start
+
+    def test_watched_content_stripped_after_a_review_is_delta(self):
+        # Review round 5, medium: only the head's blob was read, and it no longer fires.
+        self.base_with_action()
+        self.review()
+        self.commit(**{"lib__act.ts": "x\n"})
+        self.assertIn("lib/act.ts", self.pre("gh pr ready", session_id="s-strip"))
+
+    def test_watched_content_stripped_by_a_pr_waits_for_a_review(self):
+        self.base_with_action()
+        self.commit(**{"lib__act.ts": "x\n"})
+        self.assertIn("lib/act.ts", self.pre("gh pr ready", session_id="s-strip2"))
+
+    def test_a_deleted_base_file_restored_after_a_review_is_delta(self):
+        # Review round 5, medium: at the review it was deleted, so that side has no new blob, and
+        # at the head it's in no diff.
+        w = {"app__api__w__route.ts": "export const w = 0\n"}
+        start = self.off_history(self.base, **w)
+        self.sh("update-ref", "refs/remotes/origin/main", start)
+        lane = self.off_history(start, **{"app__api__w__route.ts": None,
+                                          "app__api__x__route.ts": "export const x = 1\n"})
+        self.sh("update-ref", "HEAD", lane)
+        self.sh("read-tree", "--reset", "-u", "HEAD")
+        self.review()
+        self.commit(**w)
+        reason = self.pre("gh pr ready", session_id="s-back2")
+        self.assertIn("app/api/w/route.ts", reason)
+        self.assertNotIn("app/api/x/route.ts", reason)
+
+    def test_a_big_removal_leaves_the_size_cap_to_the_old_blobs(self):
+        # Review round 5, low: removed blobs took the cap in path order, ahead of new code.
+        self.commit(**{"a__big.txt": "x" * 60 + "\n"})
+        self.sh("update-ref", "refs/remotes/origin/main", self.sh("rev-parse", "HEAD"))
+        self.sh("rm", "-q", "a/big.txt")
+        self.commit(**{"z__act.ts": '"use server"\n'})
+        with mock.patch.dict(os.environ, self.env, clear=True), \
+                mock.patch.object(PC, "START", time.monotonic()), \
+                mock.patch.object(PC, "BYTES_MAX", 65):
+            out = PC.pre_tool_use(self.event("gh pr ready", "PreToolUse", "b-rm", session_id="s-rm"))
+        PC.CRUMB.clear()
+        self.assertIn("z/act.ts", json.dumps(out))
+
+    def test_a_links_target_is_not_read_as_code(self):
+        self.sh("update-ref", "refs/remotes/origin/main", self.sh("rev-parse", "HEAD"))
+        os.symlink('"use server"', os.path.join(self.proj, "lib", "l.ts"))
+        self.commit()
+        self.assertIsNone(self.pre("gh pr ready", session_id="s-target"))
+
+    def test_a_review_of_the_head_clears_it_past_the_mark_cap(self):
+        older = []
+        for i in range(PC.REVIEW_MARKS_MAX + 1):
+            older.append(self.sh("rev-parse", "HEAD"))
+            self.commit(**{f"app__api__c{i}__route.ts": "export const c = 1\n"})
+        self.review()
+        for rev in older:  # newer in the transcript, so the head's mark falls past the cap
+            self.review(rev)
+        self.assertIsNone(self.pre("gh pr ready", session_id="s-cap-marks"))
+
+    def test_the_only_watched_file_gone_after_a_review_is_delta(self):
+        # Review round 2, low: no touched file left, so the delta never ran.
+        self.review()
+        self.sh("rm", "-q", "app/api/x/route.ts")
+        self.commit()
+        self.assertIn("app/api/x/route.ts", self.pre("gh pr ready", session_id="s-only"))
+
+    def test_a_review_of_history_apart_from_the_base_shows_nothing(self):
+        lane = self.sh("rev-parse", "HEAD")
+        # The lane's own tree, so only the guard, not a differing file, keeps the deny.
+        root = self.sh("commit-tree", self.sh("rev-parse", f"{lane}^{{tree}}"), "-m", "apart")
+        self.merged(lane, lane, root)
+        self.review(root)
+        reason = self.pre("gh pr ready", session_id="s-apart")
+        self.assertIn("app/api/x/route.ts", reason)
+
+    def test_a_delta_brief_names_every_file_it_clears(self):
+        # Review round 1, medium: it said "the files listed below" and listed eight.
+        self.review()
+        self.commit(**{f"app__api__n{i}__route.ts": "export const n = 1\n" for i in range(12)})
+        reason = self.pre("gh pr ready", session_id="s-many")
+        self.assertNotIn(" more:", reason)
+        for i in range(12):
+            self.assertIn(f"app/api/n{i}/route.ts", reason)
+
+    def test_the_brief_asks_the_reviewer_to_disprove_its_findings(self):
+        for sid, reason in (("s-full", self.pre("gh pr ready", session_id="s-full")),):
+            self.assertIn("Try to disprove each finding", reason, sid)
+            self.assertIn("needs validation", reason, sid)
+        self.review()
+        self.commit(**{"app__api__y__route.ts": "export const y = 1\n"})
+        self.assertIn("Try to disprove each finding", self.pre("gh pr ready", session_id="s-d"))
+
+    def test_a_subagent_keeps_the_parents_clearance(self):
+        agent = "a0123456789abcdef"
+        d = os.path.join(self.transcript[:-len(".jsonl")], "subagents")
+        os.makedirs(d)
+        self.rows([], path=os.path.join(d, f"agent-{agent}.jsonl"))
+        self.review()
+        self.commit(**{"STATUS.md": "carried\n"})
+        self.assertIsNone(self.pre("gh pr ready", agent_id=agent, session_id="s-sub"))
+
     def test_a_named_branch_is_judged_and_a_pr_number_says_what_was(self):
         # Review round 1: L3r judged local HEAD whatever PR the call named.
         self.sh("branch", "clean", self.base)  # a branch with nothing a skill owns

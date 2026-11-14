@@ -752,7 +752,9 @@ need nothing extra.
   - **L3r:** `gh pr ready` (or `gh pr create` without `--draft`) is denied once unless this session
     ran a reviewer agent whose brief carries the head commit's `[practices:review:<sha12>]`
     marker, so a review clears only the commit it judged. The deny holds the marker and the gate
-    lines of every skill whose events the branch touched, ready to paste into that brief.
+    lines of every skill whose events the branch touched, ready to paste into that brief. A review
+    of an ancestor commit carries over: a later head with no change to a watched file keeps the
+    clearance, and a watched change asks for a review of that delta alone, which git works out.
   - **L4:** after a compaction, it re-injects the loaded skills' must-hold lines and asks Claude
     Code to reload the skill listing (`reloadSkills`).
   - **SEC-64:** a Bash call that adds a named package (`npm`, `pnpm`, `yarn` or `bun` add or
