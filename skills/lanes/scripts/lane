@@ -1633,6 +1633,58 @@ def holds_slot(repo: Repo, lane: dict, live: list[dict] | None) -> bool:
     return bool(sessions_in(live, os.path.realpath(lane["path"])))
 
 
+def waiting_turn(repo: Repo, base: str, ref: str, branch: str, prs) -> bool | None:
+    """Whether the lane only waits its merge turn: an open PR on its branch, and HEAD the commit
+    some remote-tracking ref for that branch holds (pushed, as of the last fetch or push, to any
+    remote: a fork's, or one whose name holds a `/`). Local refs only: the board makes no
+    network call for this. None when gh couldn't list the PRs."""
+    if prs is None:
+        return None  # unknown: gh couldn't list PRs
+    if not branch or not prs.label.get(branch, "").endswith(" open"):
+        return False
+    head = git(["rev-parse", "--verify", "-q", "--end-of-options", f"{ref}^{{commit}}"],
+               repo.toplevel)
+    refs = git(["for-each-ref", "--format=%(objectname) %(refname)", "refs/remotes/"],
+               repo.toplevel)
+    if head.returncode != 0 or refs.returncode != 0:
+        return False
+    sha = head.stdout.strip()
+    for line in refs.stdout.splitlines():
+        obj, _, name = line.partition(" ")
+        if obj == sha and name.endswith("/" + branch):
+            return True
+    return False
+
+
+def stalled_why(repo: Repo, lane: dict, base: str, ref: str, branch: str, prs,
+                here: list[dict], gone: bool) -> str | None:
+    """The record's next step when the lane is stalled, else None. Stalled: live sessions, all
+    idle, each whose last Stop the stop-check hook found with nothing to wait on (its record's
+    why is "block": no Waiting on you or `Waiting on <who>:` line, no waited-on task, no message
+    to the lead or a lane, no pass, not Hayden's own turn); a Next item (lanelib.first_item: a
+    `Keep open:` line is no step); an empty Asks for Hayden; and not only waiting its merge turn
+    (waiting_turn), which `park me` answers instead. Anything unknown (no hook record, gh down)
+    is not stalled. gone: parked or stale."""
+    if gone or not here or any(status_of(s) != "idle" for s in here):
+        return None
+    if any((lanelib.stop_check(s.get("sessionId")) or {}).get("why") != "block" for s in here):
+        return None
+    text, _ = record_text(repo, lane)
+    item = lanelib.first_item(lanelib.next_block(text or ""))
+    if not item or lanelib.section(text, "Asks for Hayden", "Asks"):
+        return None
+    if waiting_turn(repo, base, ref, branch, prs) is not False:
+        return None
+    return item
+
+
+def session_unanswered(session: dict) -> bool:
+    """Whether the live session's transcript ends on a prompt it never answered."""
+    sid = session.get("sessionId")
+    path = lanelib.transcript_for(sid, lanelib.stop_record(sid))
+    return bool(path) and lanelib.unanswered(path, time.time())  # wall clock: entry timestamps
+
+
 def board(repo: Repo) -> list[dict]:
     """Each lane's record plus its derived state: nothing here is stored."""
     cfg = repo.config()
@@ -1712,6 +1764,17 @@ def board(repo: Repo) -> list[dict]:
             flags.append("orphan")
         if stopped:
             flags.append("stopped")
+        # Idle with nothing to wake it (lane stop-check): derived from the record, the stop
+        # record and the transcript, so a sandboxed board (live None) shows neither.
+        row["stalled_why"] = (None if live is None else
+                              stalled_why(repo, lane, base, ref, guess, prs, here,
+                                          stale or bool(row["parked"])))
+        if row["stalled_why"]:
+            flags.append("stalled")
+        row["unanswered"] = [] if live is None else [
+            s.get("sessionId") for s in here if status_of(s) == "idle" and session_unanswered(s)]
+        if row["unanswered"]:
+            flags.append("unanswered")
         row["merges"] = merges_of(repo, prs, lane, guess)
         row["handoff_why"] = handoff_why(repo, lane, ref, row["merges"])
         if row["handoff_why"]:
@@ -2070,15 +2133,45 @@ def cmd_note(args) -> None:
     say(f"noted in {path}")
 
 
+def chat_asks(lane: dict, files: list[dict]) -> tuple[str | None, list[str]]:
+    """(session id, items): the Waiting on you items the stop-check hook recorded at the last
+    Stop of the lane's newest session not marked ended, by that record's time. The candidates
+    come from lane.json's sessions[], which sandboxed Bash can write, so each must also be
+    placed in the lane by Claude Code's own records (lanelib.lane_sid). The next Stop's record
+    replaces it. Runs sandboxed: it reads files only."""
+    best = None
+    for entry in lane.get("sessions", []) if isinstance(lane.get("sessions"), list) else []:
+        sid = entry.get("session_id") if isinstance(entry, dict) else None
+        if not isinstance(sid, str) or entry.get("endedAt"):
+            continue
+        rec = lanelib.stop_check(sid)
+        at = rec.get("time") if isinstance(rec, dict) else None
+        if isinstance(at, (int, float)) and (best is None or at > best[0]) \
+                and lanelib.lane_sid(sid, lane["path"], files):
+            best = (at, sid, rec)
+    if best is None:
+        return None, []
+    waits = best[2].get("waits")
+    # "replace": a lone surrogate (stop_check makes one "?", an older record may not) would
+    # raise when printed
+    return best[1], [w.encode("utf-8", "replace").decode("utf-8") for w in waits
+                     if isinstance(w, str)] if isinstance(waits, list) else []
+
+
 def cmd_asks(args) -> None:
     repo = lanes_repo()
     found = False
+    files = lanelib.session_files()
     for lane in repo.lanes():
         text, _ = record_text(repo, lane)
         body = lanelib.section(text or "", "Asks for Hayden", "Asks")
         for line in (body or "").splitlines():
             found = True
             say(f"{lane['id']}: {line.strip()}")
+        sid, items = chat_asks(lane, files)
+        for item in items:
+            found = True
+            say(shown(f"{lane['id']}: - {item} (chat, session {sid})"))
     if not found:
         say("no open asks")
 
