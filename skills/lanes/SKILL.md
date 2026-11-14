@@ -131,6 +131,10 @@ an unregistered worktree: `lane whoami` tells you which.
       `git add PLAN.md`) and, if anything is staged, commit it alone as
       `STATUS: the lead's notes through <sha>`.
 
+   The PR body carries the `long-runs` skill's `Skipped:` block, or `Skipped: nothing` when every
+   check ran: write it with the body, since `gh pr ready` is refused without the line (the
+   practices hook, rule SKIPPED-LINE).
+
    Before the ask for ready, run `lane trial --run "<suite>" ...` from the lane, one `--run` per
    suite your Done when names, in the background (it takes as long as the suites, longer when
    one fails). It merges origin/main and every other live lane's commits onto your HEAD in a
@@ -189,12 +193,17 @@ an unregistered worktree: `lane whoami` tells you which.
    finishes its handoff. Just before `handoff-check`, it runs a bare `lane ls --check`, which
    exits 1 and names the reason when its row shows `handoff?`: it fixes that and reruns it. A
    refusal, or a reason it can't fix, goes in its record's State, and it goes on. Then, as its
-   last act (the lead's `lane done` ends its session), it sends the lead `merged #N`, to what a
+   turn's last act, it sends the lead `merged #N`, to what a
    bare `lane addr lead` prints. It says nothing more about the merge to Hayden and never
    proposes `lane done`: the lead runs the rest (The lead, step 7).
    When `lane addr lead` refuses (no lead running, several sessions and none picked, or the
    lead stopped), it tells Hayden once that #N merged, with the refusal's way to pick the lead
    or the stopped lead's window if it gives one.
+   The lead's `lane done` ends a lane with no `Keep open:` line. A lane with one would stop
+   idle, so when the lead's "#N chain done: run /pass" arrives it runs the `pass` skill, and its
+   fresh session starts on the lead's reinstall. If another message drops the pass (a `[pass]`
+   notice), it runs the skill again once that message is dealt with. After a refusal no message
+   will come: it runs the skill straight after telling Hayden.
 7. **Close:** `lane done <id>` refuses an unmerged branch, a lane made by `lane new` with no
    commits past its base, and, while its worktree exists, a lane whose record's Next has a
    `Keep open:` line (one inside a comment counts too) or whose record has an unclosed `<!--` or a stray `-->` (it names the line), live session or not (pass `--abandon` to close any of them anyway; it
@@ -371,6 +380,12 @@ inherits the lead from it.
       - **Any other lane:** "main moved to `<sha>`: leave it until your turn, unless your work
         needs something it gained". A parked one gets no message, and its `rebase` flag waits
         for its turn.
+      - **Merged with `Keep open:` in its Next:** one message, the chain's last to that lane:
+        any line above it gets, then "#N chain done: run /pass". Two messages would race, since
+        one landing during the pass drops it. It goes after step 3's reinstall, so the lane's
+        fresh session starts on the new install. A chain stopped before step 3 names the stall,
+        adds "hold your pass", and sends the pass line once the reinstall has run. A stop after
+        step 3 sends it with the stall named; one citing DA15/DA16 sends nothing.
 
       A pushed branch merges main rather than rebasing, which would need a force push.
    7. `lane done <id>` once the hand-back gate (step 5) passes, unless the lane's Next has a
@@ -438,6 +453,7 @@ what").
 | `lane park` of a lane waiting its merge turn | the lead | on the lane's `park me`, no ask: `lane open` undoes it |
 | `lane open` of a parked lane at its merge turn | the lead | no ask (step 7.6): it opens in plan mode, so Hayden approves its plan first |
 | More PRs to come on the lane | the lane | `Keep open: <why>` at the top of its Next |
+| A `Keep open:` lane's pass after its merge | the lane | on the lead's "#N chain done: run /pass" (The lead, step 7.6), no ask |
 | An act past the lane's worktree (an install from it, a cap slot), or a step the lead must run | the lead | the lane messages the lead first (Lifecycle, step 3); the lead asks Hayden only when it needs his ok |
 
 - A lane never proposes `lane done`: only the lead can run it. The lead never restates a lane's

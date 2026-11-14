@@ -175,6 +175,15 @@ Each level reads commits, never the index or the working tree:
         the commit it judged; the reason carries each skill's gate lines and the marker in one
         block to paste into a reviewer brief. The line-scoped and commit-time rules also run
         over every commit in the range.
+  skipped  The same two calls are refused, not denied once, until the PR body has a `Skipped:`
+        line (`Skipped: nothing` passes; rule id SKIPPED-LINE for the off switch). A `ready` reads
+        the body with `gh pr view`, outside the repo and with a bare environment, started first
+        and read last so its network wait spends no scan budget; a create reads its own command
+        or its --body-file. What can't be read is allowed and logged as
+        skipped-line. It shares L3r's one deny, because when two hooks deny one call Claude Code
+        shows only the reason of the last to finish (2.1.319, measured), and L3r's fires once.
+        It proves the line is there, not that it is true, and a ready on GitHub's site never
+        reaches it.
 A scan runs every rule whose `at` has "commit" (L3r: or `scope = "line"`): `when` on each
 commit's added lines (lines its blob has that the parent's doesn't, by count and without a
 trailing \\r: a moved line isn't new, nor is a CRLF rewrite) of regular files matching `paths`,
@@ -247,6 +256,7 @@ import sys
 import time
 
 START = time.monotonic()
+PROCESS_START = START  # two_passes resets START; the 5 s kill counts from here
 try:
     import tomllib
 except ImportError:  # python3 < 3.11: reported by the startup health check
@@ -259,6 +269,7 @@ try:  # tests only: a tiny budget proves the skip path without a slow pattern. O
         BUDGET = float(os.environ.get("PRACTICES_TEST_BUDGET") or BUDGET)
 except ValueError:
     pass
+GH_PATHS = ("/usr/bin/gh", "/usr/local/bin/gh", "/opt/homebrew/bin/gh")
 CONTENT_MAX = 256 << 10
 FILE_MAX = 1 << 20  # bytes of the current file read to apply an Edit; scans still cap at CONTENT_MAX
 LINE_MAX = 4000
@@ -2563,6 +2574,220 @@ def review_block(touched, mb, head, branch, shown=8):
             "check won't stop the resend.\n\n" + "\n\n".join(parts))
 
 
+# The Skipped line: a PR marked ready, or opened as one, says what didn't run.
+
+SKIPPED_ID = "SKIPPED-LINE"
+SKIPPED_LINE = re.compile(r"^[ \t]*(?:[-*+][ \t]+)?(?:\*\*|__)?Skipped(?:\*\*|__)?:(.*)$", re.M)
+GH_SHARE = 1.5  # of BUDGET, from the process's start, so both passes fit settings.json's 5 s kill
+REPO_NAME = re.compile(r"[A-Za-z0-9][\w.-]*/[\w.][\w.-]*", re.A)
+PR_SELECTOR = re.compile(r"\w[\w./-]*", re.A)
+PR_URL = re.compile(r"https://github\.com/([^/\s]+/[^/\s]+)/pull/(\d+)(?:[/?#]\S*)?")
+ORIGIN_URL = re.compile(r"(?:https://(?:[^/@\s]+@)?|ssh://git@|git@)github\.com[:/]"
+                        r"([^/\s]+/[^/\s]+?)(?:\.git)?/?")
+HEREDOC_BODY = re.compile(r"(?:--body[= ]|-b[ =]?)\s*\"?\$\(\s*cat\s+<<-?\s*(['\"\\\\]?)([\w.-]+)")
+EXPANSION = re.compile(r"\$[A-Za-z_{(]")  # known limit: a single-quoted `$X` reads as one, and goes unchecked
+SKIPPED_REASON = (
+    "[practices:skipped] This PR's body has no `Skipped:` line, so it can't be marked ready. Add "
+    "this block to the body (`gh pr edit <n> --body-file <file>`, or the --body of `gh pr "
+    "create`). Make that change in a Bash call of its own, since this check reads the body "
+    "before a command runs and a refusal cancels all of it, then resend:\n\nSkipped: <what didn't run, or `nothing`>\nSafe because: <why>\n"
+    "Caught by: <what would catch a problem>\n\nWhen every check ran, `Skipped: nothing` is "
+    "enough. This check refuses every resend until the line is there.")
+
+
+def has_skipped_line(text):
+    """Whether a line of text starts `Skipped:` (a bullet or bold allowed) with something after it."""
+    return any(m.group(1).strip().lstrip("*_").strip() for m in SKIPPED_LINE.finditer(text))
+
+
+def body_unseen(command, bodies):
+    """Whether a --body is built by an expansion, so this check can't read it. A heredoc written
+    out in the command can be read, unless its delimiter is unquoted and its own text expands
+    something."""
+    heredoc = HEREDOC_BODY.search(command)
+    if heredoc:
+        end = re.compile(r"\n[ \t]*" + re.escape(heredoc.group(2)) + r"\b").search(command, heredoc.end())
+        text = command[heredoc.end():end.start() if end else len(command)]
+        return not heredoc.group(1) and bool(EXPANSION.search(text))
+    return any(EXPANSION.search(b) or "%SUBST%" in b or "%ANSI%" in b for b in bodies)
+
+
+def flag_values(args, short, long_):
+    """Each value given to a gh option, in order, in any of its spellings."""
+    for k, a in enumerate(args):
+        if a in (short, long_):
+            if k + 1 < len(args):
+                yield args[k + 1]
+        elif a.startswith(long_ + "="):
+            yield a.split("=", 1)[1]
+        elif a.startswith(short) and not a.startswith("--") and len(a) > 2:
+            yield a[2:].removeprefix("=")  # gh's flag parser takes -b=value as well as -bvalue
+
+
+def base_repo_name(repo):
+    """The owner/name gh would use on github.com, or None: the remote `gh repo set-default`
+    marked, else upstream, github, origin, in gh's order. Read from the config file as text, so
+    no program that config names runs."""
+    try:
+        text = read_plain(os.path.join(repo.common_dir, "config"), CONFIG_MAX).decode(
+            "utf-8", "replace")
+    except OSError:
+        return None
+    remotes, current = {}, None
+    for line in text.splitlines():  # by line: a regex over a repo-written file can go quadratic
+        line = line.strip()
+        if line.startswith("["):
+            head = re.fullmatch(r'\[remote "([^"]+)"\]', line)
+            current = remotes.setdefault(head.group(1), {}) if head else None
+        elif current is not None:
+            key, _, value = line.partition("=")
+            current.setdefault(key.strip(), value.strip())
+    marked = [r["gh-resolved"] for r in remotes.values() if "gh-resolved" in r]
+    if marked and marked[0] != "base":  # `set-default` on another repo stores its name
+        return marked[0]
+    order = [n for n, r in remotes.items() if r.get("gh-resolved") == "base"]
+    for name in (*order, "upstream", "github", "origin"):
+        match = ORIGIN_URL.fullmatch(remotes.get(name, {}).get("url", ""))
+        if match:  # gh skips a remote on another host
+            return match.group(1)
+    return None
+
+
+def gh_repo_prefix(event, args):
+    """The GH_REPO=... set on this gh call itself, from the command parser, or None."""
+    bash_words = load_bash_words()
+    try:
+        for words in bash_words.segments(command_of(event)):
+            name, found, prefix = bash_words.command_words(words, {"gh"})
+            if name == "gh" and found == args:
+                return dict(prefix).get("GH_REPO")
+    except (ValueError, IndexError, RecursionError):
+        pass
+    return None
+
+
+def start_body_read(event, args, cwd, pr, bounds):
+    """A running `gh pr view` of the PR a `ready` call names, or None (logged) when it can't be
+    named. It starts here and is read last, so its network wait doesn't spend the budget of the
+    checks that run beside it. gh runs outside the repo (cwd /, a --repo and a selector, so it
+    never reads local git) with a bare environment, since a project's settings can set a hook's;
+    both names are checked first, so neither can be read as an option. Known limit: where gh's
+    token lives in a keyring, or GH_CONFIG_DIR or XDG_CONFIG_HOME moves its config, this gh fails
+    and every ready goes unchecked, logged."""
+    import subprocess  # noqa: PLC0415 (only the Bash levels pay for it)
+    target, name = pr["pr"] or pr["branch"], None
+    if pr["pr"] and pr["pr"].startswith("http"):
+        url = PR_URL.fullmatch(pr["pr"])
+        if not url:
+            log("skipped-line", "the PR's URL isn't one this check reads, so it went unchecked")
+            return None
+        name, target = url.groups()
+    repos = list(flag_values(args, "-R", "--repo"))
+    if repos and name is None:
+        name = repos[-1]
+    name = name or gh_repo_prefix(event, args)
+    if name is None or target is None:
+        repo = open_repo({"cwd": cwd, "git_dir": None, "work_tree": None}, "skipped-line", bounds)
+        if repo is None:
+            return None
+        name = name or base_repo_name(repo)
+        if target is None:
+            target = repo.run("rev-parse", "--abbrev-ref", "HEAD").decode(
+                "utf-8", "surrogateescape").strip()
+    target = (target or "").lstrip("#")
+    if not (name and REPO_NAME.fullmatch(name) and PR_SELECTOR.fullmatch(target)):
+        log("skipped-line", "no GitHub repo and PR could be named, so the PR went unchecked")
+        return None
+    gh, home = next((g for g in GH_PATHS if os.path.isfile(g)), None), passwd_home()
+    if not gh or not home:
+        log("skipped-line", "no system gh or no home dir, so the PR went unchecked")
+        return None
+    try:
+        return subprocess.Popen(
+            [gh, "pr", "view", target, "--repo", name, "--json", "body"], cwd="/",
+            env={"HOME": home, "PATH": "/usr/bin:/bin", "LC_ALL": "C.UTF-8"},
+            stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+    except OSError as e:
+        log("skipped-line", f"gh didn't start ({type(e).__name__}), so the PR went unchecked")
+        return None
+
+
+def create_has_line(event, args, cwd):
+    """Whether a `gh pr create`'s body has the Skipped line: read from the command's own text
+    (a heredoc body too), its --body, or its --body-file. None (logged) when the file can't be
+    read. The file may sit anywhere: gh reads the same path outside the sandbox and posts it, so
+    this answer tells the session nothing it couldn't learn. read_plain refuses anything but a
+    regular file, so a FIFO can't block it."""
+    command, bodies = command_of(event), list(flag_values(args, "-b", "--body"))
+    if any(has_skipped_line(t) for t in (command, *bodies)):
+        return True
+    files = list(flag_values(args, "-F", "--body-file"))
+    if not files:
+        if body_unseen(command, bodies):
+            log("skipped-line", "a --body built by an expansion, so the PR went unchecked")
+            return None
+        return False
+    path = os.path.join(cwd, files[-1]) if cwd else None
+    if files[-1] == "-" or path is None:
+        log("skipped-line", "a --body-file this check can't read, so the PR went unchecked")
+        return None
+    try:
+        return has_skipped_line(read_plain(path, FILE_MAX).decode("utf-8", "replace"))
+    except OSError as e:
+        log("skipped-line", f"a --body-file didn't read ({type(e).__name__}), so the PR went "
+            "unchecked")
+        return None
+
+
+def skipped_checks(event, ghs, cfg, bounds):
+    """One entry per PR call: a running gh, or whether the body has the line (None: unknown)."""
+    if is_off(cfg, ENGINE, SKIPPED_ID):
+        return []
+    out = []
+    for args, cwd in ghs:
+        if "--help" in args or "-h" in args or "--dry-run" in args:
+            continue
+        if "--web" in args or "-w" in args:
+            log("skipped-line", "a PR body typed in the browser, so the PR went unchecked")
+            continue
+        try:
+            out.append(start_body_read(event, args, cwd, pr_ready(args), bounds)
+                       if without_repo(args)[1] == "ready"
+                       else create_has_line(event, args, cwd))
+        except (Budget, GitError) as e:
+            log("skipped-line", f"{type(e).__name__}, so the PR went unchecked")
+    return out
+
+
+def body_has_line(proc):
+    """Whether the body a running gh returns has the line; None (logged) on any failure, since
+    this stops accidents and a GitHub outage shouldn't stop work."""
+    import subprocess  # noqa: PLC0415 (only the Bash levels pay for it)
+    try:
+        out, _ = proc.communicate(
+            timeout=max(0.0, PROCESS_START + GH_SHARE * BUDGET - time.monotonic()))
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        proc.communicate()
+        log("skipped-line", "gh timed out, so the PR went unchecked")
+        return None
+    try:
+        body = json.loads(out)["body"] if proc.returncode == 0 else None
+    except (ValueError, KeyError, TypeError):
+        body = None
+    if not isinstance(body, str):
+        log("skipped-line", f"gh exited {proc.returncode} with no PR body, so the PR went unchecked")
+        return None
+    return has_skipped_line(body)
+
+
+def skipped_reasons(checks):
+    """The refusal, once, when any PR call's body lacks the line. It keeps no deny key: only the
+    line clears it, so every resend is refused too."""
+    found = [body_has_line(c) if hasattr(c, "communicate") else c for c in checks]
+    return [SKIPPED_REASON] if False in found else []
+
+
 # ---------------------------------------------------------------- SEC-64, the install check
 
 SEC64 = {"id": "SEC-64", "say": (
@@ -3169,9 +3394,10 @@ def bash_pre(event):
                 "still scans the commits already made that no remote has, and stops the resend "
                 "once for any finding in them; what the new commit adds is only told after it "
                 "is made.")
-    reasons, keys, cut_keys = [], [], []
+    reasons, keys, cut_keys, checks = [], [], [], []
     try:
         bounds = bounds_of(project)
+        checks = skipped_checks(event, ghs, cfg, bounds)
         if commits:
             record_heads(event, commits, bounds)
         if pushes or ghs:
@@ -3213,15 +3439,16 @@ def bash_pre(event):
                         if reasons:
                             reasons.append(LEFT_NOTE)
     except Budget as e:
-        log("budget-spent", f"after {BUDGET}s, in the Bash check's {e}; the call was allowed")
-        return None
+        log("budget-spent", f"after {BUDGET}s, in the Bash check's {e}; the rest went unchecked")
+        reasons = []
     except GitError as e:
         log("git-skipped", f"Bash check: {e}")
-        return None
+        reasons = []
     # A cut scan's key rides on any deny of this call, so its resend passes that range unscanned.
-    if not reasons or not state_add(event, keys + cut_keys):  # an unkept key: allow, logged
-        return None
-    return deny("\n\n".join(reasons))
+    if reasons and not state_add(event, keys + cut_keys):  # an unkept key: allow, logged
+        reasons = []
+    reasons += skipped_reasons(checks)  # needs no key, so it stands when the others are dropped
+    return deny("\n\n".join(reasons)) if reasons else None
 
 
 def deny(reason):
@@ -3361,6 +3588,7 @@ def health(event):
     prune(os.path.join(d, "denies"), now)
     prune(os.path.join(d, "heads"), now)
     prune(os.path.join(d, "sessions"), now)
+    prune(os.path.join(d, "long-runs"), now)  # hooks/long_runs_check.py's state
     if not problems:
         return None
     return {"systemMessage": "practices hooks: " + "; ".join(problems)}

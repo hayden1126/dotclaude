@@ -289,7 +289,8 @@ sees it.
 | `hooks/session-summary.sh` | Stop hook: regenerates the session's short (`<=32`-char) tab label via a direct Haiku Messages-API call (`hooks/haiku.py`: Claude subscription OAuth token, stdlib urllib, no API key/jq), detached so it never blocks; caches it to `<config-dir>/session-summaries/<session_id>.title.txt` for `session-title.sh` | symlink `~/.claude/hooks/session-summary.sh` |
 | `hooks/overwrite-guard.sh` | PreToolUse(Write) hook: denies a Write over a file this session hasn't read, or one that cuts a file of 1 KB or more to under a fifth; a shim over `hooks/overwrite_guard.py`; fails open | symlink `~/.claude/hooks/overwrite-guard.sh` and `overwrite_guard.py` |
 | `hooks/ask-check.sh` | PreToolUse(AskUserQuestion) hook: denies a risky ask once, before the dialog, with a 6-point checklist as the reason, and lets the resend through; a shim over `hooks/ask_check.py`; fails open | symlink `~/.claude/hooks/ask-check.sh` and `ask_check.py` |
-| `hooks/practices-check.sh` | PreToolUse(Edit, Write, MultiEdit, Bash), PostToolUse(Bash) and SessionStart hook: the engine for the practices skills' `events.toml` files. It denies an edit once until its skill is loaded, denies once on a bad pattern, and re-injects the skills' must-hold lines after compaction. At a commit it reports what the new commits add that a rule flags, it denies a `git push` once while unpushed commits hold findings, and it denies `gh pr ready` once until a reviewer ran with the touched skills' lines. It denies a package install once per new package until its install scripts are read or turned off (SEC-64). A shim over `hooks/practices_check.py`; the Bash entries sit behind a shell prefilter; fails open but reports errors at session start | symlink `~/.claude/hooks/practices-check.sh`, `practices_check.py` and `bash_words.py` |
+| `hooks/practices-check.sh` | PreToolUse(Edit, Write, MultiEdit, Bash), PostToolUse(Bash) and SessionStart hook: the engine for the practices skills' `events.toml` files. It denies an edit once until its skill is loaded, denies once on a bad pattern, and re-injects the skills' must-hold lines after compaction. At a commit it reports what the new commits add that a rule flags, it denies a `git push` once while unpushed commits hold findings, and it denies `gh pr ready` once until a reviewer ran with the touched skills' lines. It refuses `gh pr ready` and a non-draft `gh pr create` every time until the PR body has a `Skipped:` line (`Skipped: nothing` passes), read with `gh pr view`. It denies a package install once per new package until its install scripts are read or turned off (SEC-64). A shim over `hooks/practices_check.py`; the Bash entries sit behind a shell prefilter; fails open but reports errors at session start | symlink `~/.claude/hooks/practices-check.sh`, `practices_check.py` and `bash_words.py` |
+| `hooks/long-runs-check.sh` | PreToolUse(Bash) hook: denies a heavy gate once per session and compaction window until the `long-runs` skill is loaded. Heavy gates are `lane trial`, `lane lock suite` or `gate`, a repo's `[long_runs] gates` in `.claude/practices/config.toml`, and a second different whole test suite. A shim over `hooks/long_runs_check.py`, behind a shell prefilter; fails open | symlink `~/.claude/hooks/long-runs-check.sh` and `long_runs_check.py` |
 | `hooks/lane-identity.sh` | SessionStart/Stop/SessionEnd hook: tells a lane session its identity and registers it, prints one board line in a lanes repo's main checkout and relinks the lead record on a proven resume, /clear or /pass of the lead, mirrors a lane's record; a shim over `hooks/lane_identity.py`; fails open | symlink `~/.claude/hooks/lane-identity.sh` and `lane_identity.py` |
 | `hooks/lane-guard.sh` | PreToolUse(Edit/Write/MultiEdit) hook: denies writes to another lane's record or the lanes CLI's data, and relative identity in status files; a shim over `hooks/lane_guard.py`; fails open | symlink `~/.claude/hooks/lane-guard.sh` and `lane_guard.py` |
 | `hooks/delete-guard.sh` | PreToolUse(Bash) hook, sandbox-off commands only: denies a delete whose path uses a variable the command didn't set, a command substitution that would widen it if empty, or a top-level or home tree; a shim over `hooks/delete_guard.py`, which reads commands with `hooks/bash_words.py`; fails open | symlink `~/.claude/hooks/delete-guard.sh`, `delete_guard.py` and `bash_words.py` |
@@ -737,7 +738,7 @@ need nothing extra.
   `events.toml` naming the edits that are its event (a route handler, a server action, a data
   export) and a few high-precision bad patterns. The engine reads every installed skill's file,
   installed skills first and a project's after them, so a project's file can only add rules. It acts at
-  five levels, plus one rule of its own on installs:
+  five levels, plus two rules of its own, on installs and on PR bodies:
   - **L1:** an edit that is a skill's event is denied once until the skill is loaded in this
     context (a Skill call, or a Read of its SKILL.md since the last compaction). The deny carries
     the event's lines, and the resend passes.
@@ -753,6 +754,12 @@ need nothing extra.
     ran a reviewer agent whose brief carries the head commit's `[practices:review:<sha12>]`
     marker, so a review clears only the commit it judged. The deny holds the marker and the gate
     lines of every skill whose events the branch touched, ready to paste into that brief.
+  - **SKIPPED-LINE:** the same two calls are refused every time, not once, until the PR body has a
+    `Skipped:` line (`Skipped: nothing` passes), the block the `long-runs` skill describes. A
+    `ready` reads the body with `gh pr view`, run from `/` with a bare environment; a create reads
+    its own `--body` or `--body-file`. A body it can't read (an expansion, `--web`, gh failing or
+    taking over 3 s) passes, logged. It shares L3r's one deny, because when two hooks deny one call
+    Claude Code shows only the reason of the last to finish, and L3r's fires once.
   - **L4:** after a compaction, it re-injects the loaded skills' must-hold lines and asks Claude
     Code to reload the skill listing (`reloadSkills`).
   - **SEC-64:** a Bash call that adds a named package (`npm`, `pnpm`, `yarn` or `bun` add or
@@ -793,6 +800,16 @@ need nothing extra.
   session start names the error, and a deny whose resend couldn't pass (its state write failed,
   with no transcript to fall back on) is dropped and logged rather than repeated.
   Errors go to `$XDG_STATE_HOME/dotclaude/practices/errors.log`.
+- **PreToolUse(`Bash`): `long-runs-check.sh`** (in this repo). Sessions skip the `long-runs` skill
+  before heavy runs, so this denies once per session and compaction window until it is loaded, on
+  `lane trial`, `lane lock suite` or `gate`, a repo's own `[long_runs] gates` (argv prefixes, never
+  patterns) in `.claude/practices/config.toml`, or a second different whole test suite. A rerun
+  never counts, nor does a narrowed run (one file, `::`, `-k`, a name filter) or a look at the
+  runner (`--version`, `--collect-only`). `lane lock install` and subagents never fire it. A
+  replay over 45 days of real sessions put it at 36% of sessions that ran a gate or PR command.
+  It yields on any call the practices hook could deny, for the same two-denies reason.
+  `practices-gate off` covers it (rule id LONG-RUNS), it fails open, and its state sits beside the
+  practices engine's.
 - **PreToolUse(`Bash`): `delete-guard.sh`** (in this repo), for commands run with
   `dangerouslyDisableSandbox` only (the settings command skips Python for every other call).
   Inside the sandbox a delete reaches only the working directory and `$TMPDIR`; outside it reaches

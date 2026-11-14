@@ -86,6 +86,32 @@ class Templates(unittest.TestCase):
             self.assertIn("Keep open:", text, doc)
             self.assertIn("merged #N", text, doc)
 
+    def test_a_keep_open_lane_passes_on_the_leads_message(self):
+        # `lane done` refuses a Keep open lane, so nothing ended its session and it stopped idle.
+        # The pass waits for the lead's message: CLAUDE.md loads at session start, so a pass
+        # before the lead's reinstall starts on the old install, and a message landing during a
+        # pass's wait drops it.
+        message = '"#N chain done: run /pass"'
+        for doc, phrases in (
+                (("skills", "handoff", "SKILL.md"),
+                 (message, "as that turn's last act", "run the `pass` skill",
+                  "Send the lead `merged #N` once", "doesn't repeat step 3", "`[pass]` notice")),
+                (("skills", "lanes", "SKILL.md"),
+                 (message, "Merged with `Keep open:` in its Next", "as its turn's last act",
+                  "runs the `pass` skill", "one message, the chain's last to that lane",
+                  "hold your pass", "`[pass]` notice")),
+                (("skills", "pass", "SKILL.md"), (message,)),
+                (("docs", "lanes.md"), (message, "after the reinstall"))):
+            with open(os.path.join(REPO, *doc)) as f:
+                text = " ".join(f.read().split())
+            for phrase in phrases:
+                self.assertIn(phrase, text, doc)
+        with open(os.path.join(REPO, "skills", "handoff", "SKILL.md")) as f:
+            self.assertNotIn("as the session's last act", f.read())
+        with open(os.path.join(REPO, "skills", "lanes", "SKILL.md")) as f:
+            text = " ".join(f.read().split())
+        self.assertNotIn("as its last act (the lead's `lane done` ends its session)", text)
+
     def test_the_lead_chain_carries_the_leads_notes_and_names_a_released_hold(self):
         # Hayden readies and merges a draft in one step, so the lead's notes ride every push, not
         # only the ready step; and a PR merged out of order releases the next lane's install,

@@ -196,6 +196,12 @@ it too. No doc said which window owns which ask.
 - A lane with more PRs to come starts its Next with `Keep open: <why>`, and `lane done` refuses
   it (a commented-out flag too), as it does a record with an unclosed `<!--`. `--abandon` closes
   it anyway and stays an ask rule (Hayden, 2026-10-14).
+- A merged lane with `Keep open:` runs the `pass` skill on the lead's "#N chain done: run /pass",
+  so it doesn't stop idle (Hayden, 2026-11-08). The message goes after the reinstall: CLAUDE.md
+  loads only at session start, so a pass straight after `merged #N` could start on the old
+  install, and a message landing during a pass's wait would drop the pass, so the lead's lines
+  to that lane go in one message and a dropped pass is run again. With no lead to answer, the
+  lane passes straight after telling Hayden.
 - Lanes report their own state and asks, never the lead's messages.
 - Before an act whose effect leaves its worktree (an install from the lane, a cap slot), and
   with anything the lead must run, a lane messages the lead, never Hayden (Hayden, 2026-10-19).
@@ -359,7 +365,9 @@ about 8 hours on a blocker fixed in another window 4 minutes later, while lane p
 merge that never needed the reinstall. So a stopped chain still sends step 6's messages, saying what
 stalled, and arms a wake on the blocker ("The lead", step 7, in `skills/lanes/SKILL.md`). A stop at
 step 1 reports the merge as unproven, since a lane's `merged #N` can be wrong, and a DA15/DA16
-refusal tells no lane to merge until Hayden rules: the shared git dir is the thing in doubt.
+refusal tells no lane to merge until Hayden rules: the shared git dir is the thing in doubt. A merged
+`Keep open:` lane hears "hold your pass" from a chain stopped before the reinstall, and the pass line
+once it has run; after the reinstall, the pass line comes with the stall named.
 
 ## One lead per main checkout (lane two-sessions, 2026-10-14)
 

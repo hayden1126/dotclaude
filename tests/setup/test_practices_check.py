@@ -2621,7 +2621,7 @@ class Push(BashBase):
         d = os.path.join(self.state, "dotclaude", "practices")
         os.makedirs(d)
         open(os.path.join(d, "denies"), "w").close()  # the state dir can't be made
-        for command in ("git push", "git commit -m x && git push", "gh pr create --title x"):
+        for command in ("git push", "git commit -m x && git push", "gh pr create --title x --body 'Skipped: nothing'"):
             with self.subTest(command=command):
                 self.assertIsNone(self.pre(command))
         self.assertIn("state-error", self.log())
@@ -2750,8 +2750,21 @@ class Push(BashBase):
         self.assertIsNone(self.pre(command, session_id="s-chain"))
 
 
+def hook_with_gh(case, event, stdin, paths):
+    """The engine with GH_PATHS replaced, so a test never reaches the real gh or GitHub."""
+    driver = DRIVER.replace("m.passwd_home = lambda: sys.argv[2]", f"m.GH_PATHS = {paths!r}")
+    p = subprocess.run([sys.executable, "-I", "-c", driver, ENGINE, "-"],
+                       input=stdin if stdin is not None else json.dumps(event),
+                       capture_output=True, text=True, env=case.env, timeout=30)
+    case.assertEqual(p.returncode, 0, p.stderr)
+    return json.loads(p.stdout) if p.stdout.strip() else None
+
+
 class L3r(BashBase):
     """gh pr ready, and gh pr create without --draft, wait for a briefed reviewer."""
+
+    def run_hook(self, event, stdin=None):
+        return hook_with_gh(self, event, stdin, ())
 
     def setUp(self):
         super().setUp()
@@ -2779,7 +2792,7 @@ class L3r(BashBase):
         self.assertIn("budget-spent", self.log())
 
     def test_denies_once_with_the_block_to_paste_and_the_resend_passes(self):
-        reason = self.pre("gh pr create --title x --body y")
+        reason = self.pre("gh pr create --title x --body 'Skipped: nothing'")
         self.assertTrue(reason.startswith("[practices:L3r]"), reason)
         self.assertIn(self.marker() + " Review the changes of main", reason)
         self.assertIn("demo (" + os.path.join(self.proj, ".claude", "skills", "demo", "SKILL.md")
@@ -2787,7 +2800,7 @@ class L3r(BashBase):
         self.assertNotIn("lib/u.ts", reason)
         self.assertIn("- An id from the request body is never trusted.", reason)
         self.assertIn("resend", reason)
-        self.assertIsNone(self.pre("gh pr create --title x --body y"))
+        self.assertIsNone(self.pre("gh pr create --title x --body 'Skipped: nothing'"))
 
     def test_a_repo_flag_before_the_subcommand_is_dropped(self):
         # Review round 2, low 2: `gh -R o/r pr ready 12` needed pr and ready at fixed places.
@@ -2835,8 +2848,8 @@ class L3r(BashBase):
         # Review round 1: L3r judged local HEAD whatever PR the call named.
         self.sh("branch", "clean", self.base)  # a branch with nothing a skill owns
         self.assertIsNone(self.pre("gh pr ready clean", session_id="s-clean"))
-        self.assertIsNone(self.pre("gh pr create --head clean --title t", session_id="s-c2"))
-        self.assertIsNone(self.pre("gh pr create -H me:clean --title t", session_id="s-c3"))
+        self.assertIsNone(self.pre("gh pr create --head clean --title t --body 'Skipped: nothing'", session_id="s-c2"))
+        self.assertIsNone(self.pre("gh pr create -H me:clean --title t --body 'Skipped: nothing'", session_id="s-c3"))
         self.sh("branch", "feat", self.base)
         self.sh("update-ref", "refs/remotes/origin/feat", self.sh("rev-parse", "HEAD"))
         reason = self.pre("gh pr ready feat", session_id="s-feat")  # origin/feat wins
@@ -2871,8 +2884,8 @@ class L3r(BashBase):
         self.sh("update-ref", "refs/remotes/origin/master", self.base)
         self.assertIsNotNone(self.pre("gh pr ready", session_id="s1"))
         self.sh("update-ref", "refs/remotes/origin/dev", self.sh("rev-parse", "HEAD"))
-        self.assertIsNone(self.pre("gh pr create --base dev", session_id="s2"))
-        self.assertIsNotNone(self.pre("gh pr create -B master", session_id="s2"))
+        self.assertIsNone(self.pre("gh pr create --base dev --body 'Skipped: nothing'", session_id="s2"))
+        self.assertIsNotNone(self.pre("gh pr create -B master --body 'Skipped: nothing'", session_id="s2"))
         self.sh("symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/dev")
         self.assertIsNone(self.pre("gh pr ready", session_id="s4"))
 
@@ -2885,6 +2898,326 @@ class L3r(BashBase):
         self.assertIn("KEY-1 (keys) at k.ts:1", reason)
         self.assertNotIn("TOKEN_", reason)
         self.assertIsNone(self.pre("gh pr ready"))
+
+
+class SkippedLine(BashBase):
+    """A PR marked ready, or opened as one, must say what didn't run: refused until its body has
+    a Skipped line. gh here is a stub, which records how the hook ran it."""
+
+    REFUSED = "[practices:skipped]"
+
+    def setUp(self):
+        super().setUp()
+        self.base = self.commit(**{"README": "x\n"})
+        self.sh("update-ref", "refs/remotes/origin/main", self.base)
+        self.commit(**{"lib__u.ts": "1\n"})
+        self.sh("remote", "add", "origin", "https://github.com/o/r.git")
+        self.stub = os.path.join(self.tmp, "stub")
+        os.makedirs(self.stub)
+        gh = os.path.join(self.stub, "gh")
+        with open(gh, "w") as f:
+            f.write('#!/bin/bash\nd=$(dirname "$0")\n'
+                    'printf \'%s\\n\' "$PWD" > "$d/cwd"\nprintf \'%s\\n\' "$*" > "$d/args"\n'
+                    '/usr/bin/env > "$d/env"\n[ -f "$d/slow" ] && exec /bin/sleep 20\n'
+                    '[ -f "$d/fail" ] && exit 1\n/bin/cat "$d/out"\n')
+        os.chmod(gh, 0o755)
+        self.gh = gh
+        self.body("no such line\n")
+        self.n = iter(range(1, 1 << 30))
+
+    def run_hook(self, event, stdin=None):
+        return hook_with_gh(self, event, stdin, (self.gh,))
+
+    def body(self, text):
+        with open(os.path.join(self.stub, "out"), "w") as f:
+            json.dump({"body": text}, f)
+
+    def ran(self):
+        path = os.path.join(self.stub, "args")
+        if not os.path.exists(path):
+            return None
+        with open(path) as f:
+            out = f.read().strip()
+        os.remove(path)
+        return out
+
+    def stub_file(self, name):
+        with open(os.path.join(self.stub, name)) as f:
+            return f.read()
+
+    def flag(self, name):
+        open(os.path.join(self.stub, name), "w").close()
+
+    def ready(self, command="gh pr ready 12"):
+        return self.pre(command, session_id=f"s-{next(self.n)}")
+
+    def test_refused_with_what_to_add_every_time_until_the_line_is_there(self):
+        for _ in range(2):  # a refusal, not a deny-once: the resend is refused too
+            reason = self.pre("gh pr ready 12")
+            self.assertTrue(reason.startswith(self.REFUSED), reason)
+            self.assertIn("Skipped: ", reason)
+            self.assertIn("Safe because:", reason)
+            self.assertIn("Caught by:", reason)
+            self.assertIn("gh pr edit", reason)
+            self.assertIn("a Bash call of its own", reason)
+        self.body("## Verification\nSkipped: nothing\n")
+        self.assertIsNone(self.pre("gh pr ready 12"))
+
+    def test_a_fix_chained_with_the_ready_is_refused_and_told_why(self):
+        reason = self.ready("gh pr edit 12 --body 'Skipped: nothing' && gh pr ready 12")
+        self.assertIn(self.REFUSED, reason)
+        self.assertIn("a Bash call of its own", reason)
+
+    def test_which_lines_count(self):
+        for text in ("Skipped: nothing", "Skipped: the browser sweep\nSafe because: x",
+                     "intro\n  Skipped: x\n", "- Skipped: x", "* **Skipped:** the sweep",
+                     "**Skipped**: x", "__Skipped:__ x", "a\r\nSkipped: x\r\nb"):
+            with self.subTest(text=text):
+                self.body(text)
+                self.assertIsNone(self.ready())
+        for text in ("", "Skipped:", "Skipped:   \nnext", "**Skipped:**\nnext", "- Skipped:",
+                     "Nothing Skipped: x", "skipped: x", "Skipped x"):
+            with self.subTest(text=text):
+                self.body(text)
+                self.assertIn(self.REFUSED, self.ready())
+
+    def test_how_gh_runs(self):
+        self.env.update(GH_REPO="evil/repo", GH_CONFIG_DIR="/evil", GIT_DIR="/evil")
+        self.ready()
+        self.assertEqual(self.ran(), "pr view 12 --repo o/r --json body")
+        self.assertEqual(self.stub_file("cwd").strip(), "/")
+        seen = self.stub_file("env")
+        for name in ("GH_REPO", "GH_CONFIG_DIR", "GIT_DIR"):
+            self.assertNotIn(name + "=", seen)
+
+    def test_which_pr_it_reads(self):
+        for command, want in (
+                ("gh pr ready", "pr view main --repo o/r --json body"),
+                ("gh pr ready '#7'", "pr view 7 --repo o/r --json body"),
+                ("gh pr ready feat/x", "pr view feat/x --repo o/r --json body"),
+                ("gh pr ready https://github.com/a/b/pull/9", "pr view 9 --repo a/b --json body"),
+                ("gh -R a/b pr ready 3", "pr view 3 --repo a/b --json body"),
+                ("gh pr ready 3 --repo a/b", "pr view 3 --repo a/b --json body"),
+                ("gh pr ready 3 --repo=a/b", "pr view 3 --repo a/b --json body"),
+                ("gh pr ready 3 -R=a/b", "pr view 3 --repo a/b --json body"),
+                ("GH_REPO=a/b gh pr ready 3", "pr view 3 --repo a/b --json body"),
+                ("GH_REPO=a/b gh pr ready 3 --repo c/d", "pr view 3 --repo c/d --json body"),
+                ("GH_REPO=x/y gh pr view 5 && gh pr ready 3", "pr view 3 --repo o/r --json body"),
+                ("GH_REPO=a/b; gh pr ready 3", "pr view 3 --repo o/r --json body"),
+                ("env GH_REPO=a/b gh pr ready 3", "pr view 3 --repo a/b --json body")):
+            with self.subTest(command=command):
+                self.ready(command)
+                self.assertEqual(self.ran(), want)
+
+    def test_origin_url_spellings(self):
+        for url in ("git@github.com:o/r.git", "ssh://git@github.com/o/r.git",
+                    "https://github.com/o/r", "https://x@github.com/o/r.git"):
+            with self.subTest(url=url):
+                self.sh("remote", "set-url", "origin", url)
+                self.ready()
+                self.assertEqual(self.ran(), "pr view 12 --repo o/r --json body")
+
+    def test_a_fork_clone_reads_the_repo_gh_would(self):
+        self.sh("remote", "add", "upstream", "https://github.com/up/stream.git")
+        self.ready()
+        self.assertEqual(self.ran(), "pr view 12 --repo up/stream --json body")
+        self.sh("config", "remote.origin.gh-resolved", "base")
+        self.ready()
+        self.assertEqual(self.ran(), "pr view 12 --repo o/r --json body")
+        self.sh("config", "remote.origin.gh-resolved", "x/y")
+        self.ready()
+        self.assertEqual(self.ran(), "pr view 12 --repo x/y --json body")
+
+    def test_a_remote_on_another_host_is_passed_over(self):
+        self.sh("remote", "add", "upstream", "https://gitlab.com/up/stream.git")
+        self.ready()
+        self.assertEqual(self.ran(), "pr view 12 --repo o/r --json body")
+
+    def test_what_it_cannot_read_is_allowed_and_logged(self):
+        self.flag("fail")
+        self.assertIsNone(self.ready())
+        self.assertIn("skipped-line", self.log())
+        os.remove(os.path.join(self.stub, "fail"))
+        with open(os.path.join(self.stub, "out"), "w") as f:
+            f.write("not json")
+        self.assertIsNone(self.ready())
+
+    def test_a_gh_that_hangs_is_killed_and_the_call_allowed(self):
+        self.flag("slow")
+        self.env["PRACTICES_TEST_BUDGET"] = "0.2"
+        began = time.monotonic()
+        self.assertIsNone(self.ready())
+        self.assertLess(time.monotonic() - began, 5)
+        self.assertIn("skipped-line", self.log())
+
+    def test_a_bad_name_never_reaches_gh(self):
+        for command in ("gh pr ready 'a;b'", "gh pr ready 3 --repo 'a/b c'",
+                        "gh pr ready --repo -x 3", 'gh pr ready "$PR"'):
+            with self.subTest(command=command):
+                self.assertIsNone(self.ready(command))
+                self.assertIsNone(self.ran())
+
+    def test_an_origin_it_cannot_name_is_allowed(self):
+        for url in ("https://gitlab.com/o/r.git", "https://github.example.com/o/r.git",
+                    "/srv/git/r.git", "https://github.com/-x/r.git"):
+            with self.subTest(url=url):
+                self.sh("remote", "set-url", "origin", url)
+                self.assertIsNone(self.ready())
+                self.assertIsNone(self.ran())
+
+    def test_create_reads_its_own_command(self):
+        for command in ("gh pr create -t x --body 'Skipped: nothing'",
+                        "gh pr create -t x -b 'Skipped: nothing'",
+                        "gh pr create -t x --body='Skipped: y'",
+                        "gh pr create -t x -b='Skipped: nothing'",
+                        "gh pr create -t x --body \"$(cat <<'EOF'\n## Why\nSkipped: nothing\nEOF\n)\""):
+            with self.subTest(command=command):
+                self.assertIsNone(self.ready(command))
+        for command in ("gh pr create -t x --body y", "gh pr create --fill",
+                        "gh pr create -t 'Skipped: x' --body y"):
+            with self.subTest(command=command):
+                self.assertIn(self.REFUSED, self.ready(command))
+        self.assertIsNone(self.ran())
+
+    def test_a_body_it_cannot_see_is_allowed_and_logged(self):
+        for command in ('gh pr create -t x --body "$(cat body.md)"', 'gh pr create -t x --body "$B"',
+                        "gh pr create -t x --web", "gh pr create -t x -w",
+                        'cat <<EOF > log\nhi\nEOF\ngh pr create -t x --body "$(cat body.md)"',
+                        'cat <<< hi; gh pr create -t x --body "$B"',
+                        "gh pr create -t x --body $'a\\nSkipped: x'",
+                        'gh pr create -t x --body "$(cat <<EOF\n$(cat notes.md)\nEOF\n)"'):
+            with self.subTest(command=command):
+                self.assertIsNone(self.ready(command))
+        self.assertIn("skipped-line", self.log())
+
+    def test_a_literal_dollar_is_a_readable_body(self):
+        self.assertIn(self.REFUSED, self.ready("gh pr create -t x --body 'costs $5, no line'"))
+
+    def test_only_the_heredocs_own_text_can_make_it_unreadable(self):
+        for command in ('gh pr create -t x --body "$(cat <<EOF\nno line\nEOF\n)" --base "$BASE"',
+                        'gh pr create -t x --body "$(cat <<\\EOF\ncosts $X\nEOF\n)"'):
+            with self.subTest(command=command):
+                self.assertIn(self.REFUSED, self.ready(command))
+
+    def test_percent_words_in_a_body_are_readable(self):
+        self.assertIn(self.REFUSED, self.ready("gh pr create -t x --body 'Set %PATH% first'"))
+
+    def test_a_quoted_heredoc_does_not_expand(self):
+        self.assertIn(self.REFUSED, self.ready(
+            "gh pr create -t x --body \"$(cat <<'EOF'\n$(not run)\nEOF\n)\""))
+
+    def test_a_heredoc_body_with_no_line_is_refused(self):
+        self.assertIn(self.REFUSED, self.ready(
+            "gh pr create -t x --body \"$(cat <<'EOF'\nno line\nEOF\n)\""))
+
+    def test_help_is_left_alone(self):
+        for command in ("gh pr create --help", "gh pr ready --help", "gh pr ready -h",
+                        "gh pr create -t x --body y --dry-run"):
+            with self.subTest(command=command):
+                self.assertIsNone(self.ready(command))
+        self.assertIsNone(self.ran())
+
+    def test_the_wait_counts_from_the_process_not_the_pass(self):
+        proc = subprocess.Popen(["/bin/sleep", "20"], stdout=subprocess.PIPE)
+        self.addCleanup(proc.wait)
+        self.addCleanup(proc.kill)
+        with mock.patch.dict(os.environ, self.env, clear=True), \
+                mock.patch.object(PC, "PROCESS_START", time.monotonic() - 100), \
+                mock.patch.object(PC, "START", time.monotonic()):
+            began = time.monotonic()
+            self.assertIsNone(PC.body_has_line(proc))
+        self.assertLess(time.monotonic() - began, 1)
+
+    def test_no_environment_variable_picks_the_binary(self):
+        with open(ENGINE) as f:
+            self.assertNotIn("PRACTICES_TEST_GH", f.read())
+
+    def test_the_line_needs_no_python_3_11_syntax(self):
+        # The module still has to import on older versions, for its startup health line.
+        self.assertNotIn("?+", PC.SKIPPED_LINE.pattern)
+
+    def test_a_config_of_blank_lines_stays_fast(self):
+        path = os.path.join(self.proj, ".git", "config")
+        with open(path, "w") as f:
+            f.write("\n" * 60000)
+        repo = mock.Mock(common_dir=os.path.join(self.proj, ".git"))
+        began = time.monotonic()
+        self.assertIsNone(PC.base_repo_name(repo))
+        self.assertLess(time.monotonic() - began, 0.5)
+
+    def test_create_reads_a_body_file_inside_the_project(self):
+        path = os.path.join(self.proj, "body.md")
+        with open(path, "w") as f:
+            f.write("Skipped: nothing\n")
+        self.assertIsNone(self.ready("gh pr create -t x --body-file body.md"))
+        self.assertIsNone(self.ready(f"gh pr create -t x -F {path}"))
+        with open(path, "w") as f:
+            f.write("no line\n")
+        self.assertIn(self.REFUSED, self.ready("gh pr create -t x --body-file=body.md"))
+
+    def test_a_body_file_outside_the_project_is_read(self):
+        # The usual form: gh pr create --body-file /tmp/...
+        outside = os.path.join(self.tmp, "outside.md")
+        with open(outside, "w") as f:
+            f.write("no line\n")
+        self.assertIn(self.REFUSED, self.ready(f"gh pr create -t x --body-file {outside}"))
+        with open(outside, "w") as f:
+            f.write("Skipped: nothing\n")
+        self.assertIsNone(self.ready(f"gh pr create -t x --body-file {outside}"))
+
+    def test_a_body_file_it_cannot_read_is_allowed_and_logged(self):
+        zero = os.path.join(self.tmp, "zero.md")
+        os.symlink("/dev/zero", zero)
+        for command in ("gh pr create -t x -F missing.md", "gh pr create -t x -F -",
+                        f"gh pr create -t x --body-file {zero}"):
+            with self.subTest(command=command):
+                self.assertIsNone(self.ready(command))
+        self.assertIn("skipped-line", self.log())
+
+    def test_draft_and_undo_are_not_touched(self):
+        for command in ("gh pr create --draft --title x", "gh pr create -d",
+                        "gh pr ready --undo 12", "gh pr view 12"):
+            with self.subTest(command=command):
+                self.assertIsNone(self.ready(command))
+        self.assertIsNone(self.ran())
+
+    def test_it_shares_one_deny_with_the_reviewer_block(self):
+        # Two hooks denying one call show one reason only, so this check lives beside L3r: the
+        # reviewer block fires once and must never be the reason that is lost.
+        self.commit(**{"app__api__x__route.ts": "export const x = 1\n"})
+        reason = self.pre("gh pr ready 12")
+        self.assertIn("[practices:L3r]", reason)
+        self.assertIn(self.REFUSED, reason)
+        again = self.pre("gh pr ready 12")
+        self.assertNotIn("[practices:L3r]", again)
+        self.assertIn(self.REFUSED, again)
+
+    def test_a_budget_spent_after_the_check_started_still_refuses(self):
+        event = self.event("gh pr create -t x --body y", "PreToolUse", "b-spent")
+        with mock.patch.dict(os.environ, self.env, clear=True), \
+                mock.patch.object(PC, "START", time.monotonic()), \
+                mock.patch.object(PC, "discover", side_effect=PC.Budget("skill discovery")):
+            out = PC.bash_pre(event)
+        self.assertIn(self.REFUSED, out["hookSpecificOutput"]["permissionDecisionReason"])
+
+
+class SkippedLineOffFile(OffFile):
+    """The practices gate's own off switch covers the Skipped-line check."""
+
+    def create(self, sid):
+        return self.run_hook({"session_id": sid, "transcript_path": self.transcript,
+                              "cwd": self.proj, "hook_event_name": "PreToolUse",
+                              "tool_name": "Bash",
+                              "tool_input": {"command": "gh pr create -t x --body y"},
+                              "tool_use_id": "b-now"})
+
+    def test_the_off_file_turns_it_off_by_rule_or_whole(self):
+        self.assertIsNotNone(self.create("on"))
+        for n, over in enumerate(({"rule": "SKIPPED-LINE", "reason": "x"},
+                                  {"rule": "engine:SKIPPED-LINE", "reason": "x"}, {})):
+            with self.subTest(over=over):
+                self.plant(self.entry(**over))
+                self.assertIsNone(self.create(f"off{n}"))
 
 
 class Budgets(BashBase):
@@ -2979,7 +3312,7 @@ class Budgets(BashBase):
         self.sh("update-ref", "refs/remotes/origin/main", self.commit(**{"seed": "1\n"}))
         self.commit(**{"a.ts": "x({ ...body })\n", "b.ts": "y({ ...body })\n",
                        "app__api__x__route.ts": "export const x = 1\n"})
-        command = "git push -u origin main && gh pr create --fill"
+        command = "git push -u origin main && gh pr create --fill --body 'Skipped: nothing'"
         real = PC.CRUMB.mark
 
         def spend_at_b(file, level, pattern):  # the budget runs out at b.ts, for good
