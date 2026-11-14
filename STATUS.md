@@ -270,9 +270,8 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     a question may declare the screens it shows on, so the shell jumps to one when it changes and
     draws a "Shows on:" row of screen buttons in its box.
     Detail and source paths: `~/scratch/mocks-upgrade/ideas-2026-11-13.md` (private). Lane mocks
-    (`feat/mocks-upgrade`, opened 2026-11-13 on Hayden's "start lane now"): first the sort into
-    universal and specific ideas and the skill's structure, for Hayden's review. Merges after
-    demo-av PR 4.
+    (`feat/mocks-upgrade`, opened 2026-11-13 on Hayden's "start lane now"): built on the structure
+    Hayden picked, draft #185, parked 2026-11-14 waiting its turn. Merges after demo-av PR 4.
   - **The skill-copy check calls `~/.claude/skills` a copy of itself when the cwd is home**
     (reported 2026-11-13 by session f5c6b8c5, cwd `~`): at session start it says "This project
     has its own copy of the installed practices skill auth-secrets: ~/.claude/skills/auth-secrets,
