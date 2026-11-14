@@ -1,6 +1,7 @@
 """README's License table names exactly the third-party license texts git tracks, so a part
 added with its license can't go unlisted, and a row can't outlive or precede its file. The demo
-recorder's scripts are copied into other repos, so each carries the root license itself."""
+recorder's scripts and the verify harness are copied into other repos, so each carries the root license
+itself."""
 import os
 import re
 import subprocess
@@ -10,7 +11,12 @@ REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)
 # Wide on purpose, over the whole path: a false match fails loudly, a miss passes silently.
 TEXT_PATH = re.compile(r"licen[cs]e|copying|copyright|notice", re.I)
 CODE = (".py", ".sh", ".js", ".mjs", ".ts")  # pass-notice.sh and this test are code, not texts
-RECORDERS = [os.path.join(REPO, "skills", "demo-video", "template", name) for name in ("record.mjs", "voice.mjs")]
+RECORDERS = {  # file copied into other repos: the comment prefix its license header uses
+    os.path.join(REPO, "skills", "demo-video", "template", "record.mjs"): "// ",
+    os.path.join(REPO, "skills", "demo-video", "template", "voice.mjs"): "// ",
+    os.path.join(REPO, "skills", "verify-app", "template", "verify.py"): "# ",
+    os.path.join(REPO, "skills", "verify-app", "template", "browser.py"): "# ",
+}
 
 
 def license_section():
@@ -59,11 +65,12 @@ class LicenseNotices(unittest.TestCase):
         self.assertIn("Copyright (c) 2026 Chun Hei Leung", text)
         self.assertIn("MIT licensed: see [LICENSE](LICENSE)", license_section())
 
-    def test_recorder_scripts_open_with_the_root_license(self):
+    def test_copied_code_opens_with_the_root_license(self):
         with open(os.path.join(REPO, "LICENSE"), encoding="utf-8") as f:
-            header = "".join(f"// {line}".rstrip() + "\n" for line in f.read().splitlines())
-        for path in RECORDERS:
-            with self.subTest(path=path), open(path, encoding="utf-8") as f:
+            lines = f.read().splitlines()
+        for path, prefix in RECORDERS.items():
+            header = "".join(f"{prefix}{line}".rstrip() + "\n" for line in lines)
+            with open(path, encoding="utf-8") as f, self.subTest(path=path):
                 self.assertTrue(f.read().startswith(header))
 
 
