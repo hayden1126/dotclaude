@@ -10,7 +10,9 @@ the check can't judge the page: the browser is missing, never answers or dies (e
 after a FAIL line), the path is no HTML file, or the page lacks a template hook or a
 plain px value, as a page not built from the template does, or one whose script
 failed before the hooks appeared. A WARN line names a control that changed nothing
-in the render; it doesn't fail. Fit is judged at the page's default Zoom. Python
+in the render; it doesn't fail. Fit is judged at the page's default Zoom. Zoom
+200% must scroll to and paint twice the render's size; a page with no 200% button,
+built from the template before the corner zoom, skips that assertion. Python
 standard library only.
 """
 from __future__ import annotations

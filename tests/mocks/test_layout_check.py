@@ -6,7 +6,8 @@ lists, so no assertion passes by being unable to fail. A static test ties every
 assertion name in the check to a mutant. Every edit is matched
 against the template in a browser-free test, so renaming a rule fails loudly
 instead of turning a mutant into a pass. Browser cases skip with the reason
-printed to stderr when no chrome-headless-shell is found.
+printed to stderr when no chrome-headless-shell is found. fixtures/previous-template.html is
+the template from before the corner zoom: a mock built from it must keep passing.
 """
 import importlib.util
 import os
