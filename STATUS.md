@@ -108,7 +108,10 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     opened 2026-11-09 on Hayden's "open lane now": a Stop hook so lane sessions stop only on
     something they wait for, and `lane ls` marking stalled lanes; it changes settings.json and
     the lanes skill, as guards does; draft #182). Guards, practices and stop-check parked 2026-11-09
-    (pushed, waiting their turn). All change README.md or may.
+    (pushed, waiting their turn). All change README.md or may. Lane daily-report (opened
+    2026-11-15 on a request Hayden made in another repo's lead window: a generic
+    since-last-run report skill; Hayden picked a generic public skill plus a private
+    per-project config) merges after mocks.
     The backlog items these lanes took keep their full text in `git show 617d244:STATUS.md`.
     **Install freeze on HAYPC, Nov 12 through Nov 15** (Hayden, 2026-11-05): no lane installs in
     that window, except fixes for lane hackathon, so the event runs what the dry run tested. The lead's
