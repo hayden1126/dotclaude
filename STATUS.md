@@ -113,9 +113,8 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     repo as a project skill (his pick in that lane's dialog, session 9a2a47a7), so it leaves
     dotclaude. Its design went to that repo's lead.
     The backlog items these lanes took keep their full text in `git show 617d244:STATUS.md`.
-    **Install freeze on HAYPC, Nov 12 through Nov 15** (Hayden, 2026-11-05): no lane installs in
-    that window, except fixes for lane hackathon, so the event runs what the dry run tested. The lead's
-    reinstall after a merge counts as an install, so no other lane merges in that window.
+    **The install freeze is over and the hackathon is off** (Hayden, 2026-11-15: "no more freeze,
+    not doing hackathon"): merges and installs resume in the order above.
     Merged and installed from main, all closed: chrome-dup (#151, 2026-10-29: one chrome-devtools
     server, the plugin's; sandbox gap fixes N1 and N3's bun part, `hooks/sandbox-caches.sh`; its
     install changed running sessions' sandbox live, [[cc-sandbox-config-reloads-live]]),
