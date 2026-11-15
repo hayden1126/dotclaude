@@ -260,6 +260,15 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     Fix to design: a scratch tree that isn't a worktree of the shared git dir (a `--shared` clone
     under `.lane-trial/`, say), or a narrow sandbox-off step for the add alone. Lanes skill and
     docs/lanes.md say how a lane asks for ready meanwhile.
+  - **No private place to list an MCP server's read tools** (capella-studio's lane roles,
+    session c35239ad, 2026-11-14): subagent-policy refused a delegated agent's calls to a client
+    MCP server's read tools as `mcp-write`, since policy.toml `[mcp] read_tools` doesn't list
+    them. That list is the only one, and dotclaude is public, so a client server's names can't
+    go in it. Fix to design: a machine-local overlay outside the repo that can only add
+    `read_tools` globs (as `settings.machine.json` does for settings), failing closed when
+    malformed, and covered by the Edit deny as enforcement config. Name each read tool, never
+    the server's wildcard. Meanwhile that lane's main thread makes the calls. Hayden's call;
+    after Nov 16.
   - **CJ1** (medium, 2026-11-13; private: sandbox-audit FINDINGS, row CJ1): a read deny names one
     exact path where copies of that file sit beside it. Fix and probe in the row. Not picked yet;
     `settings.json` and its test, a lane after Nov 16 (lane practices changes both).
