@@ -91,11 +91,11 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     - Design notes: [[dotclaude-tab-bar]], [[dotclaude-remote-paste]], `PLAN.md` ("Next: a
       device-wide mute").
   - **Live lanes** (briefs in each record). Merge order (Hayden's picks,
-    2026-11-07, 2026-11-08 and 2026-11-10): exam-prep #183 merged 2026-11-10 (692fbf9) and is
-    installed from main, under Hayden's early-merge exception (2026-11-10); the lane stays open for
-    round 2's retro (the next two exams). **Hayden lifted the freeze for it (2026-11-13, "ignore
-    freeze, finish exam-prep"):** round 2's #184 is now first in merge order and installs from its
-    branch before Nov 16, then demo-av PR 4.
+    2026-11-07, 2026-11-08 and 2026-11-10): lane exam-prep #184 (round 2's retro) merged
+    2026-11-13 (c060d9f) and is installed from main, lane closed, under Hayden's freeze lift
+    ("ignore freeze, finish exam-prep"; #183, round 1, merged 2026-11-10). Round 3's retro starts
+    in a new lane from `~/scratch/exam-prep/rounds/2/retro.md`, trials K02, K67, K68 carried in.
+    Next in merge order: lane mocks (#185), then demo-av PR 4 (Hayden, 2026-11-16: "Mocks first").
     The lead's pre-merge ./setup.sh (Hayden's OK) released demo-av's install hold, so the live
     demo-video and demo-first-scope are main's until demo-av reinstalls from its branch on his OK.
     0 demo-av PR 4 (demo content planning in `demo-first-scope`,
@@ -108,11 +108,13 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     opened 2026-11-09 on Hayden's "open lane now": a Stop hook so lane sessions stop only on
     something they wait for, and `lane ls` marking stalled lanes; it changes settings.json and
     the lanes skill, as guards does; draft #182). Guards, practices and stop-check parked 2026-11-09
-    (pushed, waiting their turn). All change README.md or may.
+    (pushed, waiting their turn). All change README.md or may. Lane daily-report (opened
+    2026-11-15) closed unmerged the same day, no commits: Hayden moved the skill into the client
+    repo as a project skill (his pick in that lane's dialog, session 9a2a47a7), so it leaves
+    dotclaude. Its design went to that repo's lead.
     The backlog items these lanes took keep their full text in `git show 617d244:STATUS.md`.
-    **Install freeze on HAYPC, Nov 12 through Nov 15** (Hayden, 2026-11-05): no lane installs in
-    that window, except fixes for lane hackathon, so the event runs what the dry run tested. The lead's
-    reinstall after a merge counts as an install, so no other lane merges in that window.
+    **The install freeze is over and the hackathon is off** (Hayden, 2026-11-15: "no more freeze,
+    not doing hackathon"): merges and installs resume in the order above.
     Merged and installed from main, all closed: chrome-dup (#151, 2026-10-29: one chrome-devtools
     server, the plugin's; sandbox gap fixes N1 and N3's bun part, `hooks/sandbox-caches.sh`; its
     install changed running sessions' sandbox live, [[cc-sandbox-config-reloads-live]]),
@@ -255,9 +257,34 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     '.git/worktrees/tree12': Read-only file system". Claude Code's sandbox now write-allows only
     the session's own entry under `.git/worktrees`, and the skill says a trial runs only
     sandboxed, so no lane can run one. Last trial that worked: demo-av at fafbe34 (2026-11-10).
+    Hits every repo with lanes: capella-studio's lane roles met it too (that repo's lead, session
+    68d09c2f, 2026-11-14), and skipped its trial with CI as the gate.
     Fix to design: a scratch tree that isn't a worktree of the shared git dir (a `--shared` clone
     under `.lane-trial/`, say), or a narrow sandbox-off step for the add alone. Lanes skill and
     docs/lanes.md say how a lane asks for ready meanwhile.
+  - **No private place to list an MCP server's read tools** (capella-studio's lane roles,
+    session c35239ad, 2026-11-14): subagent-policy refused a delegated agent's calls to a client
+    MCP server's read tools as `mcp-write`, since policy.toml `[mcp] read_tools` doesn't list
+    them. That list is the only one, and dotclaude is public, so a client server's names can't
+    go in it. Fix to design: a machine-local overlay outside the repo that can only add
+    `read_tools` globs (as `settings.machine.json` does for settings), failing closed when
+    malformed, and covered by the Edit deny as enforcement config. Name each read tool, never
+    the server's wildcard. Meanwhile that lane's main thread makes the calls. Hayden's call;
+    after Nov 16.
+  - **CJ1** (medium, 2026-11-13; private: sandbox-audit FINDINGS, row CJ1): a read deny names one
+    exact path where copies of that file sit beside it. Fix and probe in the row. Not picked yet;
+    `settings.json` and its test, a lane after Nov 16 (lane practices changes both).
+  - **Mocks skill upgrades** (2026-11-13, a lane in another repo, session 4b3a30d1, from Hayden's
+    asks on a type mock): a magnifier (1x/2x/3x, CSS `zoom`) in the render's corner, off by
+    default, named as a third home for a setting besides the top row and QUESTIONS; drag to pan
+    the zoomed render; screenshots in a mock go lossless (lossy WebP smeared small UI text);
+    an "in place" type comparison that ships rendered pictures, never font files; the test
+    harness anchors on `/* ==== MOCK CONFIG`, and layout_check's WARN names per-screen controls;
+    a question may declare the screens it shows on, so the shell jumps to one when it changes and
+    draws a "Shows on:" row of screen buttons in its box.
+    Detail and source paths: `~/scratch/mocks-upgrade/ideas-2026-11-13.md` (private). Lane mocks
+    (`feat/mocks-upgrade`, opened 2026-11-13 on Hayden's "start lane now"): built on the structure
+    Hayden picked, draft #185; next in merge order (Hayden, 2026-11-16).
   - **The skill-copy check calls `~/.claude/skills` a copy of itself when the cwd is home**
     (reported 2026-11-13 by session f5c6b8c5, cwd `~`): at session start it says "This project
     has its own copy of the installed practices skill auth-secrets: ~/.claude/skills/auth-secrets,
