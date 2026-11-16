@@ -95,13 +95,12 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     2026-11-13 (c060d9f) and is installed from main, lane closed, under Hayden's freeze lift
     ("ignore freeze, finish exam-prep"; #183, round 1, merged 2026-11-10). Round 3's retro starts
     in a new lane from `~/scratch/exam-prep/rounds/2/retro.md`, trials K02, K67, K68 carried in.
-    Next in merge order: demo-av PR 4. Lane mocks went first (Hayden, 2026-11-16: "Mocks first").
-    The lead's pre-merge ./setup.sh (Hayden's OK) released demo-av's install hold, so the live
-    demo-video and demo-first-scope are main's until demo-av reinstalls from its branch on his OK.
-    0 demo-av PR 4 (demo content planning in `demo-first-scope`,
-    captions on by default, `demo-video` no longer manual-only; merged and installed by Nov 11,
-    else after Nov 15). After Nov 15: 1 practices (Keep open, its next
-    PR; carries the lead's notes, told when), 2 verify-app (`feat/verify-app`, the
+    Next in merge order: practices. Lane mocks went first (Hayden, 2026-11-16: "Mocks first"),
+    then demo-av PR 4 merged 2026-11-16 as #180 (merge d0a9cbd: demo content planning in
+    `demo-first-scope`, captions on by default, `demo-video` no longer manual-only; no layered
+    invideo test, the connector still 404s), installed from main; lane demo-av stays open for PR 3.
+    Then: 1 practices (Hayden's scope, 2026-11-16: its data-layer PR, then client-code
+    stacked on it, then it yields to verify-app), 2 verify-app (`feat/verify-app`, the
     launch-and-check skill template, proved on shodo), 3 demo-av's music, transitions and
     footage PR (its PR 3), 4 guards (`fix/lane-guards`, opened 2026-11-08, Hayden's three picks; it
     changes `hooks/practices_check.py` as lane practices does), 5 stop-check (`fix/idle-stops`,
@@ -250,8 +249,8 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
       Also confirmed (that lane's corrected path): a browser user agent got a sign-in redirect
       or an empty JavaScript shell from some vendor docs, and a refetch without it got the
       text. So the bar includes trying a plain fetch before calling a page unreachable.
-    Lands in lane practices' next PR (Hayden, 2026-11-13: "practices lane"), after Nov 16;
-    tell the lane when it unparks.
+    Lands in its own practices PR on a later turn, not this one (Hayden, 2026-11-16, in that
+    lane's dialog); the lane has it.
   - **`lane trial` can't run sandboxed any more** (lane exam-prep, 2026-11-13, session
     f55ae58c): its scratch `git worktree add` fails with "could not create directory of
     '.git/worktrees/tree12': Read-only file system". Claude Code's sandbox now write-allows only
@@ -262,6 +261,11 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     Fix to design: a scratch tree that isn't a worktree of the shared git dir (a `--shared` clone
     under `.lane-trial/`, say), or a narrow sandbox-off step for the add alone. Lanes skill and
     docs/lanes.md say how a lane asks for ready meanwhile.
+  - **handoff-check can't excuse a leftover dir by name** (lane practices, session 5dc17b9b,
+    2026-11-16; the lead read the code): `leftovers()` runs `git status --untracked-files=all`,
+    which lists each file, and `named()` matches only a whole path, so naming an untracked dir in
+    the status doc never clears its files, contrary to `named()`'s own docstring. Fix: treat a file
+    under a named dir as named, with a test. Not picked yet; a small lane.
   - **No private place to list an MCP server's read tools** (capella-studio's lane roles,
     session c35239ad, 2026-11-14): subagent-policy refused a delegated agent's calls to a client
     MCP server's read tools as `mcp-write`, since policy.toml `[mcp] read_tools` doesn't list
@@ -293,8 +297,8 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     the project at `~`, `<project>/.claude/skills` is the installed root (`config_home()/skills`),
     so every installed skill is loaded again as a copy. Rules aren't doubled (a copy only adds
     new ids), only the false note. Fix: skip the project root when its realpath matches the
-    installed root's, plus a test with the project at the config home's parent. For lane
-    practices' next PR (it owns the file), after Nov 16.
+    installed root's, plus a test with the project at the config home's parent. Rides lane
+    practices' batch #172 on a later turn (Hayden, 2026-11-16).
   - **A reusable product-research library** (Hayden, 2026-11-13): a lane's research for an app
     plan, reusable for new apps, websites and products. Hayden owns it. Built 2026-11-13 in
     `~/scratch/product-research/` (private): a snapshot of about 30 topic files and a source log

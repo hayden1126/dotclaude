@@ -5,10 +5,11 @@
 # commit what it added that a rule flags (L3s), denies a push once per new finding in what it
 # would send, denies a PR's ready once until a reviewer ran with the gate lines (L3r), denies a
 # package install once per new package until its install scripts are read or turned off (SEC-64),
-# and after a compaction restates the loaded skills' must-hold lines (L4). Every settings.json
+# denies a Bash command once per line a rule flags in its text (L2b), and after a compaction
+# restates the loaded skills' must-hold lines (L4). Every settings.json
 # entry runs it behind `[ -f ]` and ends with `exit 0`, so a missing shim is silent, and a Bash call reaches
 # it only through a prefilter on the command (git commit or push, gh pr ready or create, a
-# package manager with an add verb), a linear grep -E. Each skill's events.toml holds its triggers; the rules and why are in
+# package manager with an add verb, a migration path word beside a rename or drop word), a linear grep -E. Each skill's events.toml holds its triggers; the rules and why are in
 # hooks/practices_check.py, and tests/setup/test_practices_check.py holds the cases.
 #
 # This shim passes the event on stdin to the module beside this script's real path, run by

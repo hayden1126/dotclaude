@@ -44,3 +44,6 @@ __pycache__/
 # Fake homes for the policy tests when they run inside Claude Code's sandbox (tests/ itself is
 # write-protected)
 /.tmp/
+
+# PGlite for the data-layer oracles: installed from the committed lockfile, never committed (27 MB)
+/tests/practices/oracle_pg/node_modules/
