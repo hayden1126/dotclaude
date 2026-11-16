@@ -267,6 +267,11 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     which lists each file, and `named()` matches only a whole path, so naming an untracked dir in
     the status doc never clears its files, contrary to `named()`'s own docstring. Fix: treat a file
     under a named dir as named, with a test. Not picked yet; a small lane.
+  - **setup.sh printed eight `SessionEnd hook [bash "$HOME/.claude/hooks/lane-identity.sh"]
+    failed: Hook cancelled` lines** (lane practices' install of #187, 2026-11-16) and exited 0.
+    setup.sh itself starts no `claude`, so something it runs does. Unjudged: whether this is new,
+    and whether a cancelled SessionEnd loses anything. Check on the next lead reinstall with the
+    full output kept.
   - **No private place to list an MCP server's read tools** (capella-studio's lane roles,
     session c35239ad, 2026-11-14): subagent-policy refused a delegated agent's calls to a client
     MCP server's read tools as `mcp-write`, since policy.toml `[mcp] read_tools` doesn't list
