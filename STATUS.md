@@ -95,7 +95,7 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     2026-11-13 (c060d9f) and is installed from main, lane closed, under Hayden's freeze lift
     ("ignore freeze, finish exam-prep"; #183, round 1, merged 2026-11-10). Round 3's retro starts
     in a new lane from `~/scratch/exam-prep/rounds/2/retro.md`, trials K02, K67, K68 carried in.
-    Next in merge order: demo-av PR 4, after Nov 15.
+    Next in merge order: lane mocks (#185), then demo-av PR 4 (Hayden, 2026-11-16: "Mocks first").
     The lead's pre-merge ./setup.sh (Hayden's OK) released demo-av's install hold, so the live
     demo-video and demo-first-scope are main's until demo-av reinstalls from its branch on his OK.
     0 demo-av PR 4 (demo content planning in `demo-first-scope`,
@@ -284,7 +284,7 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     draws a "Shows on:" row of screen buttons in its box.
     Detail and source paths: `~/scratch/mocks-upgrade/ideas-2026-11-13.md` (private). Lane mocks
     (`feat/mocks-upgrade`, opened 2026-11-13 on Hayden's "start lane now"): built on the structure
-    Hayden picked, draft #185, parked 2026-11-14 waiting its turn. Merges after demo-av PR 4.
+    Hayden picked, draft #185; next in merge order (Hayden, 2026-11-16).
   - **The skill-copy check calls `~/.claude/skills` a copy of itself when the cwd is home**
     (reported 2026-11-13 by session f5c6b8c5, cwd `~`): at session start it says "This project
     has its own copy of the installed practices skill auth-secrets: ~/.claude/skills/auth-secrets,
