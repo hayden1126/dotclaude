@@ -261,6 +261,11 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     Fix to design: a scratch tree that isn't a worktree of the shared git dir (a `--shared` clone
     under `.lane-trial/`, say), or a narrow sandbox-off step for the add alone. Lanes skill and
     docs/lanes.md say how a lane asks for ready meanwhile.
+  - **handoff-check can't excuse a leftover dir by name** (lane practices, session 5dc17b9b,
+    2026-11-16; the lead read the code): `leftovers()` runs `git status --untracked-files=all`,
+    which lists each file, and `named()` matches only a whole path, so naming an untracked dir in
+    the status doc never clears its files, contrary to `named()`'s own docstring. Fix: treat a file
+    under a named dir as named, with a test. Not picked yet; a small lane.
   - **No private place to list an MCP server's read tools** (capella-studio's lane roles,
     session c35239ad, 2026-11-14): subagent-policy refused a delegated agent's calls to a client
     MCP server's read tools as `mcp-write`, since policy.toml `[mcp] read_tools` doesn't list
