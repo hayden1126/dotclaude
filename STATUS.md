@@ -272,6 +272,12 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     failed: Hook cancelled` lines** (lane practices' install of #187, 2026-11-16) and exited 0.
     setup.sh itself starts no `claude`, so something it runs does. Not reproduced: the lead's
     reinstall after #187 (full output kept) printed none. Watch for it on a lane's install.
+  - **The claude flag inventory test fails on main** (lane verify-app, 2026-11-16; the lead
+    confirmed the subcommand in `claude plugin --help`): Claude Code 2.1.325 added
+    `claude plugin restore-set-aside`, which gives a plugin back options and secrets set aside
+    by a marketplace change, and `tests/delegation/test_settings.py`'s inventory test doesn't
+    classify it. Lead's lean: deny it to delegated agents, since it writes config and handles
+    secrets. A small lane.
   - **No private place to list an MCP server's read tools** (capella-studio's lane roles,
     session c35239ad, 2026-11-14): subagent-policy refused a delegated agent's calls to a client
     MCP server's read tools as `mcp-write`, since policy.toml `[mcp] read_tools` doesn't list
