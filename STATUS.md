@@ -95,13 +95,14 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     2026-11-13 (c060d9f) and is installed from main, lane closed, under Hayden's freeze lift
     ("ignore freeze, finish exam-prep"; #183, round 1, merged 2026-11-10). Round 3's retro starts
     in a new lane from `~/scratch/exam-prep/rounds/2/retro.md`, trials K02, K67, K68 carried in.
-    Next in merge order: practices. Lane mocks went first (Hayden, 2026-11-16: "Mocks first"),
+    Next in merge order: verify-app. Lane mocks went first (Hayden, 2026-11-16: "Mocks first"),
     then demo-av PR 4 merged 2026-11-16 as #180 (merge d0a9cbd: demo content planning in
     `demo-first-scope`, captions on by default, `demo-video` no longer manual-only; no layered
     invideo test, the connector still 404s), installed from main; lane demo-av stays open for PR 3.
     Then: 1 practices (Hayden's scope, 2026-11-16: its data-layer PR, merged 2026-11-16 as #186
-    (merge c2df114) and installed from main, then client-code, then it yields to verify-app),
-    2 verify-app (`feat/verify-app`, the
+    (merge c2df114) and installed from main, then client-code, merged 2026-11-16 as #187
+    (merge 689ea9a) and installed from main; it keeps open for batch #172 and the research gate),
+    2 verify-app (next) (`feat/verify-app`, the
     launch-and-check skill template, proved on shodo), 3 demo-av's music, transitions and
     footage PR (its PR 3), 4 guards (`fix/lane-guards`, opened 2026-11-08, Hayden's three picks; it
     changes `hooks/practices_check.py` as lane practices does), 5 stop-check (`fix/idle-stops`,
@@ -269,9 +270,8 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     under a named dir as named, with a test. Not picked yet; a small lane.
   - **setup.sh printed eight `SessionEnd hook [bash "$HOME/.claude/hooks/lane-identity.sh"]
     failed: Hook cancelled` lines** (lane practices' install of #187, 2026-11-16) and exited 0.
-    setup.sh itself starts no `claude`, so something it runs does. Unjudged: whether this is new,
-    and whether a cancelled SessionEnd loses anything. Check on the next lead reinstall with the
-    full output kept.
+    setup.sh itself starts no `claude`, so something it runs does. Not reproduced: the lead's
+    reinstall after #187 (full output kept) printed none. Watch for it on a lane's install.
   - **No private place to list an MCP server's read tools** (capella-studio's lane roles,
     session c35239ad, 2026-11-14): subagent-policy refused a delegated agent's calls to a client
     MCP server's read tools as `mcp-write`, since policy.toml `[mcp] read_tools` doesn't list
