@@ -1,0 +1,1 @@
+Add POST /api/tags, taking `{ name }`. It returns `{ tag: { id, owner_id, name } }`: the signed-in user's tag with that name, creating it if it doesn't exist yet. Tags go in a new `tags` table (id, owner_id, name).

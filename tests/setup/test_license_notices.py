@@ -14,6 +14,7 @@ CODE = (".py", ".sh", ".js", ".mjs", ".ts")  # pass-notice.sh and this test are 
 RECORDERS = {  # file copied into other repos: the comment prefix its license header uses
     os.path.join(REPO, "skills", "demo-video", "template", "record.mjs"): "// ",
     os.path.join(REPO, "skills", "demo-video", "template", "voice.mjs"): "// ",
+    os.path.join(REPO, "skills", "demo-video", "template", "captions.mjs"): "// ",
     os.path.join(REPO, "skills", "verify-app", "template", "verify.py"): "# ",
     os.path.join(REPO, "skills", "verify-app", "template", "browser.py"): "# ",
 }

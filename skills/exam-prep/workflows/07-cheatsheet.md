@@ -1,6 +1,6 @@
 # 07 Cheat sheet
 
-Baseline as of 2026-10-20; changes only via `12-retro`.
+Baseline as of 2026-11-12; changes only via `12-retro`.
 
 The sheet the student may bring into the exam: one HTML document printed to PDF, built only when
 the exam rules allow it (FB-130). It condenses the verified notes, organized by task, the way the
@@ -8,16 +8,19 @@ student will reach for it mid-question (FB-141). When PLAN.md includes a mock (`
 this stage builds the mock sheet, `cheatsheet/<exam-slug>-mock.html`: it holds nothing derived
 from the mock and is the one published. The final sheet adds the mock-derived items after the
 attempt ("The final sheet" below, which 08 runs). Without a mock there is one sheet,
-`cheatsheet/<exam-slug>.html` (FB-133).
+`cheatsheet/<exam-slug>.html` (FB-133). With no sheet allowed, this stage tags the notes page's
+Review view instead ("Tag the review" below).
 
 ## Step 1: Check the inputs
 
-- CLAUDE.md's rules allow a sheet. Quote the rule in STATUS: its size, one side or two, whether
-  it is collected and whether it must carry a name (FB-130). Not allowed: skip this stage and log
-  it (as the build's last stage, or run alone, removing the `Build running` line).
+- CLAUDE.md's rules allow a sheet. Quote the rule in STATUS: its size, one side or two, whether it
+  is collected and whether it must carry a name (FB-130). Not allowed: when PLAN.md's `Review
+  view:` line gives minutes (intake offered it, FB-143), tag the review instead, as "Tag the review"
+  below says, in place of steps 2 to 6. Otherwise skip this stage and log it (as the build's last
+  stage, or run alone, removing the `Build running` line).
 - `05-verify` is done. The sheet derives from the notes and the checker's output
   (`_build/verify/examples.out.md`) only: never from a key, the mock, or a source MANIFEST marks
-  `reserved`, and never an answer from a set it doesn't mark `yes, attempted`.
+  `reserved`, and never an official solution from a set whose own row there lacks `attempted`.
 - The profile (`~/scratch/exam-prep/profile.md`) holds the font floor, color or grayscale, the
   engine, and the "Never print" forms of the name and id (`00-intake`, question 5, FB-131). Any missing: the defaults, a 6 pt floor, colors that
   read in grayscale, HTML built here and printed by Chromium, logged in STATUS. When the engine is
@@ -37,7 +40,9 @@ attempt ("The final sheet" below, which 08 runs). Without a mock there is one sh
    does in a question (trace this, compute that, justify a label, prove), each block under its
    topic (FB-141), one line per item. Split them across the sides.
 2. Scan for gaps twice, in order (FB-136). Load the delegation skill first, and spawn from
-   `<skill>/templates/agent-briefs.md`, section "Sheet gap scan", unnamed:
+   `<skill>/templates/agent-briefs.md`, section "Sheet gap scan", unnamed, its `{{EXTRACT FILES}}`
+   slot filled with each question set's extract under `_build/extract/`, which holds no answer
+   (FB-056):
    - by content: the content variant, one agent per two or three notes sections, all at once.
      Pick from their reports (step 3) into the outline;
    - then by question type: one agent, the question-type variant (answer templates, pros and
@@ -48,6 +53,21 @@ attempt ("The final sheet" below, which 08 runs). Without a mock there is one sh
    It states its purpose first, and a number says what it is for (FB-135). Nothing points into the
    notes: the student can't open them (FB-134). When the exam asks for proofs, a proof-techniques
    block goes in (FB-079). Log each suggestion you reject, and why, in `_build/logs/sheet-gaps.md`.
+4. The figure pass (FB-145), over the outline as picked: for each block, would a drawn figure settle what
+   its text leaves the student to work out cold: a direction (which way an arrow, a shift or an
+   update goes), a shape (a curve, a tree, a region), which cells or entries a formula uses? List
+   each such block in the outline with the figure it gets, drawn from the notes' figures or the
+   checker's output, never a new value of your own. When the figure says all its text said, the
+   figure replaces the block and the text goes: the sheet never carries both.
+5. Who sees the picks before step 6's questions check. With an HTML sheet, no one: they stay in
+   `_build/sheet-outline.md` and the sheet, which reach the student only at step 6's publish or
+   print, after that check. With the student's own LaTeX, the picks go to them as suggestions for
+   the sheet they write, and the question-type scan drafts from the sets' extracts, so before
+   any pick reaches them (the outline, or a pick named in a report) the main session runs the
+   questions check on the outline alone, `python3 -I <skill>/scripts/mock_leak.py --hub . --pages
+   _build/sheet-outline.md` from `<root>`, until it prints QUESTIONS OK: a hit is reworded with
+   fresh numbers and a fresh setup (S7), and an exit 2 is fixed and rerun as step 6 says. Step
+   6's check still runs on the sheet they write.
 
 ## Step 3: Write it
 
@@ -77,10 +97,18 @@ sheet, delete side 2's `.page`. Write the blocks in these classes only (FB-139):
 - End the last side with a symbol legend for every symbol and abbreviation the sheet uses
   (FB-139).
 - SVG text prints at its size times the figure's scale (its width over the viewBox's): keep that
-  above the floor (FB-142). `check_pdf.py` measures it.
+  above the floor (FB-142). `check_pdf.py` measures it. Every axis on every figure carries its
+  label (what it measures, and its unit or direction), however obvious it looked when drawn (FB-145).
+- The index (FB-144): side 1 ends with a small `.keep` block, `Index`, at the foot of its last column (the
+  sheet's bottom right corner), one line per topic block: its name as its band shows it, then its
+  side and column (`Sums 1B`, `Walks 2A`), in the order the student would look them up. It is the
+  sheet's own map (FB-141): the student finds a block from the sheet in hand, so the cram order
+  carries no map of the sheet. Write it once step 4's fill has settled, and correct it after every
+  block moved between columns or sides; step 4.3's page images check each line against where the
+  block printed.
 - Name and id: never printed (FB-132). When the rules say the sheet is collected with a name,
-  tell the student in this stage's report, and `08-practice` puts it first under the cram
-  order's `## Tonight`.
+  tell the student in this stage's report, and `08-practice` puts it on the exam-morning card,
+  the cram order's `## Tonight` (its step 7).
 
 ## Step 4: Print and check
 
@@ -103,7 +131,8 @@ From the hub root, once per sheet:
    "notes" and on a side with room left. Compare its font list with the sheet's faces: a missing
    face falls back to a wider one (L63).
 3. `pdftoppm -r 100 -png cheatsheet/<name>.pdf _build/shots/sheet-<name>` and look at both pages:
-   an orphaned heading, a gap under a table, a cramped table, a figure that lost its labels.
+   an orphaned heading, a gap under a table, a cramped table, a figure that lost its labels, an
+   axis with none, and an index line naming a side or column its block didn't print in.
 4. Fill, aiming for each side's content to end in its last column, 0.84 to 0.96 of the way down.
    `--fs` sets both sides at once, so: lower it while any side clips; then move blocks from the
    fuller side to the emptier one; raise it, in steps of 0.1 to 0.3 pt, only while every side
@@ -118,6 +147,32 @@ says: check each claim first, and fix every copy of a fact. Then step 4 again.
 
 ## Step 6: Ship
 
+- The questions check first (FB-191), before a sheet is published or printed: `05-verify` step
+  5's command, `python3 -I <skill>/scripts/mock_leak.py --hub .`, run from `<root>` by the main
+  session, reads every page under `notes/` and the sheets directly in `cheatsheet/` (a LaTeX sheet as its
+  `.tex`; a finished exam's frozen archive, `cheatsheet/<exam-slug>/`, isn't read) and
+  prints QUESTIONS OK, or `QUESTIONS OK: no unattempted set` (an exit 2 is fixed and rerun as
+  that step says). A sheet copies only the notes, yet
+  it can still rebuild a question the student hasn't attempted: step 2's question-type scan
+  drafts a worked pattern per question type from the sets' extracts, and the final sheet's
+  mock-derived lines (FB-133) come from the attempts, not from the notes. A hit is a
+  blocker: reword the line with fresh numbers and a fresh setup (S7), then steps 4 and 5 for the
+  change, and rerun until it prints QUESTIONS OK. A LaTeX sheet is reworded in its `.tex`, the
+  file the check reads, so its PDF still holds the hit: the student recompiles it (logged in
+  STATUS until they bring the PDF, as `08-practice`'s "Changing the notes or a sheet" items 3 and
+  5 say), the check reruns on the `.tex`, and the new PDF passes step 4 again (`check_pdf.py
+  --no-layout` and its page images). Until then the commit below takes the `.tex` alone, and the
+  sheet isn't printed. Log the result in STATUS.
+- The prune list (FB-146), last: `_build/logs/sheet-prune.md`, one line per block, its name, side and
+  column, and the question type it serves (trace, compute, justify, a true or false, as the How
+  it's tested table names them), or `none found` when no question type uses it. The student cuts
+  the blocks they would not use. In every run the stage itself asks nothing (hard rule 1: run
+  alone, it is a build stage with its own `Build running` line): it adds `Sheet prune: waiting for
+  the student (_build/logs/sheet-prune.md)` to STATUS. When it ran on request with the student
+  present, the session asks once the stage has ended and its `Build running` line is out; in the
+  build, `08-practice` step 8's opening asks it. A cut is a change to a shipped sheet ("After
+  shipping"), the index corrected with it, and the room it frees goes first to the final sheet's
+  items. Log the answer, the blocks cut or `none cut`, and take the STATUS line out.
 - Publish the mock sheet (or the only sheet) privately with the Artifact tool, as `06-site` step
   6 does, and put its URL in STATUS. A LaTeX sheet isn't published: the student has it.
 - Give the print settings in the report: color or grayscale as the profile says, 100% scale with
@@ -130,7 +185,10 @@ says: check each claim first, and fix every copy of a fact. Then step 4 again.
 ## The final sheet (after the mock attempt)
 
 `08-practice` runs this once the student has taken the mock. The mock sheet held no room back
-when it was built: it fills like any sheet. So the final sheet makes room for its items.
+when it was built: it fills like any sheet. So the final sheet makes room for its items. With every
+untaken mock declined (`08-practice` step 8, "A mock declined", STATUS's `Mocks declined:` line, FB-195),
+the mock sheet is the exam sheet, and this section runs only once the student, told which untaken
+mock parts the held items would spoil, says to add them.
 
 1. Copy `<exam-slug>-mock.html` (or the student's `.tex`) to `<exam-slug>-final.html` (or
    `.tex`). A later mock's misses start from the final sheet already built, never a new copy.
@@ -140,24 +198,96 @@ when it was built: it fills like any sheet. So the final sheet makes room for it
    blank (below), then from lowering `--fs` toward the floor, then from replacing items the
    attempt showed the student doesn't need. Near a full page, new wording is no longer than what
    it replaces (FB-137).
-3. Steps 4 and 5 for it, the audit limited to what changed. `diff` the two sheets: it shows the
+3. Steps 4 and 5 for it, the audit limited to what changed, the index corrected for every block
+   moved. `diff` the two sheets: it shows the
    added items, what they replaced, the `--fs` line if it moved, any block moved between sides
    and wording cut at the floor, and nothing else.
-4. Print it; it isn't published.
+4. Step 6's questions check, which reads this sheet too; once it prints QUESTIONS OK, print the
+   sheet. It isn't published.
 
 ## After shipping
 
-- Any change to a shipped sheet, a fix or an addition: show the student the draft first (FB-137;
-  while a mock is untaken, as `08-practice` says in "Changing the notes or a sheet"); during
-  study Q&A a dispatched writer makes it (hard rule 9; `09-tutor` step 5). Then step 5's audit
-  limited to the change, step 4, and a republish of the published sheet as `06-site` step 6 says.
+- Any change to a shipped sheet, a fix or an addition, runs `08-practice`'s
+  "Changing the notes or a sheet", the one list of the published products and what a change does
+  to each: the draft shown first (FB-137), every copy of the fact changed, the rebuild and its
+  checks, the republish. During study Q&A a dispatched writer makes it (hard rule 9; `09-tutor`
+  step 5). For a sheet, that list's rebuild is step 5's audit limited to the change, then step 4.
   A fix to a fact goes into both sheets; an addition the mock prompted goes into the final sheet
   only (FB-133).
 - Space a later scope cut frees stays blank for the final sheet's items. Check which sections it
   would help, list them in STATUS, and ask the student when they are next here (FB-140).
 
+## Tag the review (no sheet allowed)
+
+When the exam allows no sheet, the student still needs a recall layer shorter than the notes
+(FB-143). It is the notes page's Review view (`_build/CHASSIS.md`): a Review / Full notes toggle
+whose Review view shows each section's Must-know list, each subsection's concise box (S34,
+untagged: every one shows), the exam-day map and the blocks the notes tag `.rv`, and hides the
+rest. It copies nothing: this stage only tags worked examples and pitfalls
+the verified notes already hold. Its budget is PLAN.md's `- Review view: <N> minutes of reading`
+line, asked at intake, and changed only when nothing is left to untag (below). `assemble.py` counts
+the view's words at 150 a minute (`READING_RATE`, an unmeasured estimate for dense study notes) and
+fails the build when they take more than N minutes, printing both numbers. The map's cram block (`08-practice` step 7) is left out of the
+count: it is a reading list into the notes, not review text. Any later rebuild can still fail on
+the minutes (a patch that lengthens a tagged block, a new Must-know line); the remedy is item 4's:
+untag from the last ranked subsection up, before anything else. Once no `.rv` tag is left (the
+Must-know lists, the concise boxes, the headings and the map count untagged, and no untagging
+removes them), untagging can't help: PLAN.md's `Review view:` line gets new minutes, logged in
+STATUS. That holds too when the untagged content alone, the boxes above all, already takes more
+than the minutes before item 2 tags anything: nothing is tagged, and the minutes are measured
+(`assemble.py` prints them) and set as below. This is the one rule for who sets them, and every
+other site points here. When the student can't be asked, the session sets the minutes the view now
+takes, rounded up, and logs that in STATUS as a judgment call for the student to confirm or change.
+The student can't be asked during an unattended build (hard rule 1: a build stage, either
+`11-next-exam` source path among them), nor in a `10-polish` pass while a mock is untaken. In a pass
+or a source path while a mock is untaken, the student looks away, so the confirm is logged `held for
+the look-back` and asked there (as `10-polish` step 6 holds a question). In the build, the
+STATUS line reads `Review view: set to <N> minutes (measured), for the student to confirm`, and
+`08-practice` step 8's opening asks it, beside its other opening offers (the student is present at
+the cram night, and the minutes give away no answer). Run alone, this stage is a build stage too,
+with its own `Build running` line, so it writes the same STATUS line and asks nothing; when it ran
+on request with the student present, the session asks once the stage has ended and its `Build
+running` line is out (as step 6's prune list). The student keeps the minutes or sets new
+ones (fewer than the measured count can't hold the view's untagged content, which they hear
+first); new ones go on PLAN.md's `Review view:` line and the view is rebuilt from item 2 here
+(more minutes tag more) through item 5. Either way, the STATUS line comes out once they answer. Otherwise (a pass once every mock is taken, a `09-tutor` patch's merge, `08-practice` step 8.4, whose page rebuild is `08-practice` step 7.4 run on its own) the main session asks the student at once.
+
+1. **Rank the subsections.** Before the cram order exists, by the backbone's How it's tested
+   weights; once it exists (`08-practice` step 7), in its rows' order. A subsection under a `Not on
+   <exam>` banner, or one a MANIFEST.md topic cut takes out, has no rank.
+2. **Tag**, in that order, in the Markdown: per subsection one worked example, `> **Worked example
+   N.K: title** {#ex-N-slug .rv}`, and the pitfall that goes with it, `> **Pitfall:** {.rv} ...`
+   (`_build/CONVERT.md`'s `.rv`), until the budget is spent. Only a block directly inside its
+   section takes the tag, never one inside a list, another callout, a `Not on <exam>` banner or an
+   `Unverified` callout, nor any block of a section whose banner comes before its first `##`
+   subsection (its first `h3` on the page: cut or unverified whole, so the view leaves it out,
+   Must-know list and all): `assemble.py` refuses
+   each. Must-know lists and concise boxes are otherwise always in the view, untagged, and count toward
+   the budget before any tag does. No text is added: a subsection with no worked example or pitfall shows only through
+   its Must-know line.
+3. **The fragments.** Make the same edit in each `_build/frag/sec<N>.html`, class `rv` on the
+   block as CONVERT.md maps it (or have the section converted again, `06-site` step 3), then
+   `06-site` step 3's `fidelity.py`, which compares the marker like an id.
+4. **Assemble and check**, `06-site` step 5, all of it. `assemble.py` enforces the budget: over
+   it, untag from the last ranked subsection up and rerun from item 3; once no `.rv` tag is left,
+   new minutes on PLAN.md's `Review view:` line, asked or set and logged as this section's opening
+   says, and rerun. `verify_page.mjs` checks and
+   shoots both views; look at the `-review` screenshots too. Since no text changes, the questions
+   check (FB-191) has nothing new to read, and there is no audit of copied text.
+5. **Republish** the notes page to its same URL, as `06-site` step 6 says, its version bumped on
+   its STATUS line as `08-practice`'s "Changing the notes or a sheet" item 5 does. Then commit and
+   hand off as step 6 does for a sheet (the `Build running` line removed in that commit when this
+   stage ends the build). A later change to the notes runs that list like any other: the view is
+   part of the notes page.
+
 ## Done when
 
 `check_pdf.py` passes on each sheet with every warning judged; the audit's findings are applied;
-the page images look right; the published sheet's URL is in STATUS (an HTML sheet); it is
-committed.
+the page images look right, every figure's axes labelled and each index line where its block
+printed; the questions check (step 6) prints QUESTIONS OK with the sheets in place, logged in
+STATUS (with LaTeX, on the outline too before any pick reached the student, step 2's item 5, and
+after a hit the recompiled PDF checked again, or its recompile waiting in STATUS); the prune list is written and its `Sheet prune:` line is in STATUS; the
+published sheet's URL is in STATUS (an HTML sheet); it is committed. Or, with no sheet allowed, the Review view when PLAN.md gives it minutes: tagged in the
+notes and the fragments, `fidelity.py`, `assemble.py` (within the minutes), `linkcheck.py --html`
+and `verify_page.mjs` passing, both views' screenshots seen, the notes page republished to its URL,
+and committed.
