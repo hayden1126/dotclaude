@@ -99,8 +99,9 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     then demo-av PR 4 merged 2026-11-16 as #180 (merge d0a9cbd: demo content planning in
     `demo-first-scope`, captions on by default, `demo-video` no longer manual-only; no layered
     invideo test, the connector still 404s), installed from main; lane demo-av stays open for PR 3.
-    Then: 1 practices (Hayden's scope, 2026-11-16: its data-layer PR, then client-code
-    stacked on it, then it yields to verify-app), 2 verify-app (`feat/verify-app`, the
+    Then: 1 practices (Hayden's scope, 2026-11-16: its data-layer PR, merged 2026-11-16 as #186
+    (merge c2df114) and installed from main, then client-code, then it yields to verify-app),
+    2 verify-app (`feat/verify-app`, the
     launch-and-check skill template, proved on shodo), 3 demo-av's music, transitions and
     footage PR (its PR 3), 4 guards (`fix/lane-guards`, opened 2026-11-08, Hayden's three picks; it
     changes `hooks/practices_check.py` as lane practices does), 5 stop-check (`fix/idle-stops`,
