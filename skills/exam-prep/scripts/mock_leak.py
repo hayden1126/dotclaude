@@ -36,9 +36,10 @@ student hasn't attempted, its answer or not.
   mock_leak.py --questions <file or dir>... [--allow <file or dir>...] --pages <page>...
 
 Each page (a notes section, a fragment, the assembled page) is compared with the text of each
-question file (a set's extract, `_build/extract/<name>.md`); a directory stands for every .md,
-.txt, .tex and .html file under it. A page is read as written (.md, .txt), with its tags, scripts,
-styles and comments dropped (.html), or with its % comments and command names dropped (.tex);
+question file (a set's extract or solutions file, `_build/extract/<name>.md` or
+`_build/solutions/<name>.md`); a directory stands for every .md, .txt, .tex and .html file under
+it. A page is read as written (.md, .txt), with its tags, scripts, styles and comments dropped
+(.html), or with its % comments and command names dropped (.tex);
 every reading keeps its line breaks, so a hit names a line. A hit is either of these:
 - 8 words in a row that the question file also holds in a row, after case, whitespace and
   punctuation are dropped (Markdown marks among them). Eight, because a shorter run is common
@@ -50,18 +51,43 @@ every reading keeps its line breaks, so a hit names a line. A hit is either of t
   digits with an optional decimal part, standing alone: x1, Q3, 10pts and p.17 hold none, and
   3 and 3.0 are the same number. Consecutive matching triples count as one hit.
 Citation brackets (`[D4 p.17]`, `[HW1 Q3a]`) are dropped from both sides first, and so are a
-question file's `Pages:`, `**Shape:**`, `**Conventions:**` and `Coverage:` lines: the extract's
-own notes, not the set's text. A run or a triple that an --allow file (a source the student may
+question file's note lines, as the extract brief writes them: `Pages:` with nothing but cites
+after it, `**Shape:**`, `**Conventions:**`, and the closing `Coverage: <range>; N blocks; K image
+only; U flagged unreadable.`: the extract's own notes, not the set's text. Any other line starting
+`Pages:` or `Coverage:` is read like the rest. A run or a triple that an --allow file (a source the student may
 read, such as a lecture's extract) also holds is boilerplate the set shares with the course, and
 doesn't count. Each hit prints the page and its line, how many words or numbers match, and the
 question file's line with its part label (the nearest heading's `[HW3 Q2c]` bracket or Q2c-style
 label), never the matched text: the main session reads it there, and a log must not spoil the
 set. The last line is QUESTIONS OK or QUESTIONS: N found. Exit 0 clean, 1 on a hit, 2 on bad
 usage (a missing file, no question file or page, a file that isn't UTF-8).
-Stdlib only."""
+
+  mock_leak.py --hub <root> [--pages <page>...]
+
+The same check on the files the hub's own homes give (extract_check.py's leak_files(), the list
+`extract_check.py --leak-files` prints): its `questions` files as --questions, its `allow` files
+as --allow, so the list never drifts from the homes the extract check computes (a deck's second
+part, a stray block's solutions file). Extracts and solutions files are read, and beside them the
+rendered text of a set (or an answers file solving one) with no page or slide coverage: a Word
+file's _build/text/<doc lower>.md or _build/text/<doc>.md, or a course page's own .html source,
+read as a page's HTML is. A PDF's _build/text/<doc>/ and a deck's source never are. With no unattempted set it prints `QUESTIONS OK: no
+unattempted set` and exits 0. Output and exit codes otherwise as --questions; bad usage too is a
+hub with no MANIFEST.md or one it can't read (a table header it doesn't know, which gives no rows,
+among them), --hub with --questions or --allow, and a doc it must read that no file holds: an
+unattempted set with no block in any extract (`no file holds <doc>, an unattempted set: no extract
+holds a block of it; extract it, then rerun`) or an answers file solving one with no block in a
+solutions file (`no file holds <doc>, the answers to an unattempted set (<set>): no solutions file
+holds a block of it; extract it, then rerun`). It can't be combined with the other forms. With no
+--pages, the pages are every file under the hub's
+notes/ that a directory stands for above, and the files directly in cheatsheet/ (each folder when
+it exists; cheatsheet/<exam-slug>/ is a finished exam's frozen archive and isn't read), so a cheat
+sheet that rebuilds an unattempted set's setup fails as a notes page does; no page is bad usage
+(`no page found`). --pages names the pages instead (the tutor checks one passage file).
+Stdlib only, plus extract_check.py from this directory (loaded by its path) for --hub."""
 import bisect
 import html
 import html.parser
+import importlib.util
 import os
 import re
 import sys
@@ -361,7 +387,22 @@ NUMBER = re.compile(r"(?<![\w.])\d+(?:\.\d+)?(?!\w)")
 CITE = re.compile(r"\[[A-Z][A-Za-z]*\d+[A-Za-z]* [^\]\n]{1,40}\]")
 # A sentence's end: ., ! or ? before a space, a blank line, the line before a heading, a block tag.
 SENTENCE_END = re.compile(r"[.!?](?=\s)|\n[ \t]*\n|\n(?=[ \t]*#)|\x1e")
-NOTE_LINE = re.compile(r"^[ \t]*(?:Pages:|\*\*Shape:\*\*|\*\*Conventions:\*\*|Coverage:).*$", re.M)
+# A question file's own note lines (the extract brief's forms), dropped whole, as a list item or
+# bare: `Pages:` with nothing after it but cites (CITE has blanked most already) and separators;
+# a `**Shape:**` or `**Conventions:**` note; the closing `Coverage: <range>; N blocks; K image only
+# (...); U flagged unreadable.` (or an older `0 UNREADABLE.` / `UNREADABLE: none.` tail), read as
+# extract_check.py's COVERAGE reads it (mirrored here, blanks only within the line, so this file needs
+# nothing beside it): any case, any range, the flagged count's detail after it. Any other line
+# starting `Pages:` or `Coverage:` is read, so question text can't hide after one.
+NOTE_LINE = re.compile(
+    r"^[ \t]*(?:[-*][ \t]+)?(?:"
+    r"Pages:(?:[ \t,;&]|and\b|\[[A-Za-z][\w.-]*[ \t][^\]\n]{1,40}\])*"
+    r"|\*\*(?:Shape|Conventions):\*\*.*"
+    r"|(?i:Coverage:[ \t].*;[ \t]*\d+[ \t]+blocks?[ \t]*;[ \t]*\d+[ \t]*\(?image[ \t]+only\b"
+    r".*;[ \t]*"
+    r"(?:\d+[ \t]+(?:flagged[ \t]+)?unreadable(?:[ \t]*\(.*\)|[ \t]*:.*)?|unreadable:[ \t]*none)"
+    r"\.?[ \t]*)"
+    r")$", re.M)
 HEADING = re.compile(r"^[ \t]*(?:#{1,6}[ \t]|(?:Question|Problem)[ \t]+\d)")
 BRACKET = re.compile(r"\[([A-Z][A-Za-z]*\d+[A-Za-z]* [^\]\n]{1,40})\]")
 QLABEL = re.compile(r"\bQ\d+[a-z0-9.]*\b")
@@ -380,12 +421,13 @@ def reading(path, raw):
     """The file's text as its reader sees it, with the same line breaks: tags, scripts, styles
     and comments dropped from HTML (a block tag ends a sentence, a phrasing tag joins its
     neighbours), % comments and command names from LaTeX, and citation brackets from both."""
-    if path.endswith((".html", ".htm")):
+    name = path.lower()
+    if name.endswith((".html", ".htm")):
         s = re.sub(r"(?is)<(script|style)\b.*?</\1\s*>|<!--.*?-->", lambda m: " \x1e" + lines_kept(m), raw)
         s = re.sub(r"<\s*/?\s*([A-Za-z][\w-]*)?[^>]*>",
                    lambda m: ("" if (m.group(1) or "").lower() in INLINE else " \x1e ") + lines_kept(m), s)
         s = html.unescape(s)
-    elif path.endswith(".tex"):
+    elif name.endswith(".tex"):
         s = re.sub(r"(?<!\\)%[^\n]*", "", raw)
         s = re.sub(r"\\[A-Za-z]+\*?|[{}]", " ", s)
     else:
@@ -438,7 +480,7 @@ def expand(paths):
     out = []
     for p in paths:
         if os.path.isdir(p):
-            out += sorted(os.path.join(d, f) for d, _, fs in os.walk(p) for f in fs if f.endswith(SUFFIXES))
+            out += sorted(os.path.join(d, f) for d, _, fs in os.walk(p) for f in fs if f.lower().endswith(SUFFIXES))
         elif os.path.isfile(p):
             out.append(p)
         else:
@@ -470,8 +512,36 @@ def runs(marks):
     return out
 
 
+QUESTIONS_USAGE = ("usage: mock_leak.py --questions <file or dir>... [--allow <file or dir>...] --pages <page>...\n"
+                   "       mock_leak.py --hub <root> [--pages <page>...]")
+# The hub's pages when --hub has no --pages: the notes and the cheat sheets.
+HUB_PAGES = ("notes", "cheatsheet")
+
+
+def hub_pages(root):
+    """--hub's default pages: notes/ whole, and only the files directly in cheatsheet/, since its
+    subfolders (cheatsheet/<exam-slug>/) are finished exams' archives, frozen, which no fix may
+    edit."""
+    notes, sheets = (os.path.join(root, d) for d in HUB_PAGES)
+    out = [notes] if os.path.isdir(notes) else []
+    if os.path.isdir(sheets):
+        out += sorted(os.path.join(sheets, f) for f in os.listdir(sheets)
+                      if f.lower().endswith(SUFFIXES) and os.path.isfile(os.path.join(sheets, f)))
+    return out
+
+
+def extract_check():
+    """extract_check.py from this script's own directory, loaded by its path: under `python3 -I`
+    that directory isn't on sys.path."""
+    here = os.path.dirname(os.path.abspath(__file__))
+    spec = importlib.util.spec_from_file_location("extract_check", os.path.join(here, "extract_check.py"))
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 def questions_main(argv):
-    lists, flag = {"--questions": [], "--allow": [], "--pages": []}, None
+    lists, flag = {"--questions": [], "--allow": [], "--pages": [], "--hub": []}, None
     for a in argv:
         if a in lists:
             flag = a
@@ -479,11 +549,48 @@ def questions_main(argv):
             raise Usage(f"unexpected argument {a}")
         else:
             lists[flag].append(a)
+    if "--hub" in argv:
+        # --pages is optional here, but a --pages naming nothing (a glob that matched no file) is refused.
+        if (len(lists["--hub"]) != 1 or lists["--questions"] or lists["--allow"]
+                or ("--pages" in argv and not lists["--pages"])):
+            raise Usage(QUESTIONS_USAGE)
+        return hub_main(lists["--hub"][0], lists["--pages"])
     if not lists["--questions"] or not lists["--pages"]:
-        raise Usage("usage: mock_leak.py --questions <file or dir>... [--allow <file or dir>...] --pages <page>...")
+        raise Usage(QUESTIONS_USAGE)
     questions, allowed, pages = (load(lists["--questions"], True), load(lists["--allow"]), load(lists["--pages"]))
     if not questions or not pages:
         raise Usage("no question file or no page found")
+    return compare(questions, allowed, pages)
+
+
+def hub_main(root, page_paths):
+    """The questions check on the files extract_check.leak_files() lists for the hub at root, for
+    the pages given, or with none every page under the hub's notes/ and cheatsheet/ (HUB_PAGES)."""
+    if not os.path.isfile(os.path.join(root, "MANIFEST.md")):
+        raise Usage(f"no MANIFEST.md in {os.path.abspath(root)}")
+    if not page_paths:
+        page_paths = hub_pages(root)
+    pages = load(page_paths)
+    if not pages:
+        raise Usage("no page found")
+    checker = extract_check()
+    try:
+        sets, listed, missing = checker.leak_files(root)
+    except (OSError, ValueError) as e:
+        raise Usage(f"can't read the hub {os.path.abspath(root)}: {e}")
+    if not sets:
+        print("QUESTIONS OK: no unattempted set")
+        return 0
+    if missing:
+        raise Usage(checker.no_text(missing))
+    paths = {kind: [os.path.normpath(os.path.join(root, p)) for k, p in listed if k == kind]
+             for kind in ("questions", "allow")}
+    return compare(load(paths["questions"], True), load(paths["allow"]), pages)
+
+
+def compare(questions, allowed, pages):
+    """Each page against the question files, less what the allowed files share: the hits and
+    the QUESTIONS line on stdout, 1 on a hit, else 0."""
     allow_sh = {sh for t in allowed for sh, _, _ in t.shingles()}
     allow_tr = {tr for t in allowed for tr, _, _, _ in t.triples()}
     q_sh, q_tr = {}, {}
@@ -513,7 +620,7 @@ def questions_main(argv):
 
 def main(argv=None):
     argv = sys.argv[1:] if argv is None else argv
-    if "--questions" in argv:
+    if "--questions" in argv or "--hub" in argv:
         try:
             return questions_main(argv)
         except Usage as e:
@@ -539,9 +646,9 @@ def main(argv=None):
         print(f"mock_leak: {e}", file=sys.stderr)
         return 2
     # Text, not HTML: a < in math would open a "tag". Markdown is read both ways and as written.
-    if page_path.endswith(".tex"):
+    if page_path.lower().endswith(".tex"):
         readings = [text_page(delatex(raw)), text_page(bare_tex(delatex(raw)))]
-    elif page_path.endswith(".md"):
+    elif page_path.lower().endswith(".md"):
         md = unquote(raw)
         readings = [text_page(demark(md)), text_page(demark(md, underscores=False)), text_page(raw)]
         # Inline HTML a renderer passes through (a <br> in a table cell, &shy;) as a browser shows it.

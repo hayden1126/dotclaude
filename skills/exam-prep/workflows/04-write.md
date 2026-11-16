@@ -1,6 +1,6 @@
 # 04 Write
 
-Baseline as of 2026-11-10; changes only via `12-retro`.
+Baseline as of 2026-11-12; changes only via `12-retro`.
 
 Writing turns the extracts into the topic notes, `notes/NN-<slug>.md`, one file per backbone
 section. The notes are the source of truth: the page, the cheat sheet and the mock all derive from
@@ -15,7 +15,14 @@ link id (FB-054); a wiring pass then joins the files single-threaded (FB-091).
   computable there is no such file: writers build the examples from their cited sources, and
   `05-verify`'s reviewers check every value against them.
 - `_build/STYLE.md`, the hub's copy of the skill's `templates/STYLE.md`, exists. Writers follow
-  all of it; S14 to S32 are the wording rules a cold reader needs (FB-030, FB-072 to FB-089).
+  all of it; S14 to S32 are the wording rules a cold reader needs (FB-030, FB-072 to FB-089), and
+  S33 (each subsection's depth label) and S34 (the concise box that opens it) are the two each
+  subsection carries before its text.
+- The backbone holds its figure shortlist (`03-backbone` step 5.4: logged in STATUS while the
+  build's `Build running` line or `11-next-exam`'s source path's stands; run alone without one,
+  or in a `10-polish` figure pass, shown to the student), and each section carries its
+  `Diagram-taught` line: `yes`, `no`, or `pre-S11` for a section written before the widened S11
+  (FB-015).
 
 ## Step 2: Plan the writers
 
@@ -43,9 +50,12 @@ lines). What every writer is held to, beyond STYLE:
   working for `05-verify`'s reviewers.
 - **Fresh numbers** (FB-071). Worked examples use the checker's data (with no checker, an instance
   built from the sources), never a homework's or a recitation's numbers.
-- **Answers.** The notes quote an answer only from a set MANIFEST marks `yes, attempted`. A set
-  the student hasn't attempted (`Answers: yes`) is read for its conventions (S32), never quoted,
-  and the mock's key never appears: it lives in `practice/`, quarantined.
+- **Answers.** The notes quote a set's official solution only once that set's own MANIFEST row
+  says `attempted` (`no, attempted YYYY-MM-DD` or `yes, attempted YYYY-MM-DD`; an answers file's
+  row stays `yes`), and, when its answers file solves several sets, once every set that file
+  solves is attempted: until then that file's own solutions file stays in the questions check
+  (`05-verify` step 5), and a hit from it is a blocker like any other. A set the student hasn't
+  attempted is read for its conventions (S32), never quoted, and the mock's key never appears: it lives in `practice/`, quarantined.
 - **Tested versus background.** Depth follows the backbone's `concise` or `full` mark and its "How
   it's tested" lines. A slide-only derivation no practice question asks for goes in a
   `> **Background:**` quote that opens with that evidence (FB-077).
@@ -60,6 +70,23 @@ lines). What every writer is held to, beyond STYLE:
   inferred with the reason; where the statement sorts them, the Must-know list's last two items
   are its `Written from memory:` and `Provided on the exam:` lines, list items like the rest (as
   paragraphs after the list, the Review view would hide them).
+- **The concise box** (S34, FB-094). Each subsection but the Must-know list opens, after its Depth line,
+  with a `> **In short:**` box of labelled bullets (Rule, Why, Steps, Example, Trap, Answer form:
+  only those that apply, in that order). Concise cuts words, never a step, a condition or the tiny
+  example (S18); every symbol in the box is defined there; the full explanation follows and says
+  everything the box does.
+- **Diagram first** (S11, FB-115). A section the backbone marks `Diagram-taught: yes` leads with its
+  figure, right after the first subsection's box, and its words annotate the figure. Each figure
+  on the section's Figures line gets a marker on its own line where it belongs, with no `<` or `>`
+  in its text: `<!-- FIG fig-N-slug: <what it shows, its data> -->` for a figure to be drawn (a
+  static one, or a step-through the main session generates), and `<!-- FIG fig-N-slug: slide image
+  of <code> <place>: <what the picture shows> -->` (such as `slide image of D5 p.23: ...`) for a
+  slide-image figure, which `CONVERT.md` turns into an `img` with its citation in the caption.
+- **No rule ids** (S16, FB-095). The student's text never carries a skill rule id, such as (S12) or
+  (FB-123): the build refuses an FB id in parentheses and a C id right after `CHASSIS`, and only
+  warns on a bare S, L, K or C id, `rule (C3)` among them, since a course writes a state (S1), a
+  lecture (L3) or the product rule (C3) the same way, and a rebuild never fails on course text
+  (FB-015).
 
 ## Step 4: Check what came back
 
@@ -70,10 +97,23 @@ The main session runs these, since delegated agents can't run scripts (L07):
    backbone broke its brief: undo that and say so in STATUS).
 2. `grep -n TODO-VERIFY notes/*.md`: copy the list into STATUS for `05-verify`.
 3. `grep -nE '\b(T[0-9]+|Tree [A-Z])\b' notes/*.md` for coined example labels (S17). Check each
-   hit against `_build/extract/`: a label the course's own sources use (T1 for a transaction in a
-   database course) is the course's term and stays (S25); rename only labels the notes invented.
+   hit against `_build/extract/` and `_build/solutions/`: a label the course's own sources use
+   (T1 for a transaction in a database course) is the course's term and stays (S25); rename only
+   labels the notes invented.
 4. `grep -n "$(printf '\342\200\224')" notes/*.md` for em dashes (S10): fix every hit.
-5. A missing or thin section goes back to its writer (SendMessage to its id) with what is missing.
+5. Each slide-image marker (`grep -n 'FIG fig-[^:]*: slide image of' notes/*.md`): the main
+   session crops that region of the cited page image (`_build/pages/<doc>/p-NNN.png`) into
+   `_build/img/<fig-id>.png` (or `.jpg`, `.webp`; 1 MB at most), the file name the marker's id,
+   for the converter to place (`CONVERT.md`'s slide-image figure). Before the first crop, add the
+   line `_build/img/` to `.gitignore` when it lacks it (a hub made before round 2, whose other
+   `_build/` files are tracked), as `08-practice`'s "Watch list" step 1 does for `_build/videos/`:
+   a crop is a render of course material (hard rule 5). This holds wherever this step runs,
+   `11-next-exam`'s "A source added to this exam" among them.
+6. Each section the backbone marks `Diagram-taught: yes` holds a FIG marker for every figure on
+   its Figures line, the first right after the first subsection's concise box; each subsection but
+   the Must-know list opens with its box (`grep -c '^> \*\*In short:\*\*' notes/*.md` against the
+   subsection count).
+7. A missing or thin section goes back to its writer (SendMessage to its id) with what is missing.
 
 ## Step 5: The wiring pass
 

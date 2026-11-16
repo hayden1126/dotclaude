@@ -9,9 +9,9 @@ thing to take from it.
 
 ## Tier 1: Traces and counts (45 min)
 
-1. [§2.2 Walks](https://claude.ai/artifact/00000000-notes#sec-2-walks) (20 min): Use: a walk count is an entry of a power of the adjacency matrix.
-2. [§1.1 Sums](https://claude.ai/artifact/00000000-notes#sec-1-sums) (15 min): Know cold: count the terms as b - a + 1 before you add.
-3. [§2.1 Basics](https://claude.ai/artifact/00000000-notes#sec-2-basics) (10 min): Know cold: the degrees sum to twice the edges.
+1. [§2.1 Basics](https://claude.ai/artifact/00000000-notes#sec-2-basics) (10 min): Know cold: the degrees sum to twice the edges.
+2. [§2.2 Walks](https://claude.ai/artifact/00000000-notes#sec-2-walks) (20 min): Use: a walk count is an entry of a power of the adjacency matrix. needs: [§2.1](https://claude.ai/artifact/00000000-notes#sec-2-basics)
+3. [§1.1 Sums](https://claude.ai/artifact/00000000-notes#sec-1-sums) (15 min): Know cold: count the terms as b - a + 1 before you add.
 
 **Then the mock:** [GRF101 Mock Exam 1](https://claude.ai/artifact/00000000-mock), timed (50
 minutes), with the mock sheet only, cheatsheet/exam1-mock.pdf. Mark it against its own key,
@@ -27,6 +27,11 @@ while you read on.
 
 ## Tonight
 
-- Write your name on the cheat sheet before you hand it in; it isn't printed on it.
-- GRF101 Midterm 1: Thursday 9:00, 50 minutes. Closed book: bring the sheet.
-- Print the final sheet (cheatsheet/exam1-final.pdf) and pack it.
+Read this again on the exam morning.
+
+- **When:** GRF101 Midterm 1, Thursday 9:00, 50 minutes (CLAUDE.md, Exam facts).
+- **Where:** Hall A, last names A to L; Hall B, M to Z (CLAUDE.md, Exam facts).
+- **Bring:** a pencil, your student card and the sheet (CLAUDE.md, Exam facts).
+- **Banned:** calculators, phones and the notes: closed book (CLAUDE.md, Exam facts).
+- **Your sheet:** print and pack cheatsheet/exam1-final.pdf (not published; printed: not yet).
+  Write your name and id on it before you hand it in; they aren't printed on it (CLAUDE.md, Exam facts).

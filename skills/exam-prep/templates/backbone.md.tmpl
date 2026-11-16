@@ -1,4 +1,4 @@
-<!-- exam-prep template backbone.md.tmpl. Baseline as of 2026-11-10; changes only via `12-retro`. Drop this line in the hub copy. -->
+<!-- exam-prep template backbone.md.tmpl. Baseline as of 2026-11-12; changes only via `12-retro`. Drop this line in the hub copy. -->
 # Backbone: {{COURSE}} {{EXAM}}: concept order, id registry, coverage
 
 The single source of truth for the writers. Every section number, title and id below is fixed
@@ -9,9 +9,13 @@ numbers from there and never compute their own. | NO CHECKER: Nothing in this co
 computable (PLAN.md's Checker line): writers build each worked example from its cited sources,
 showing the working, and `05-verify`'s reviewers redo it.}}
 
-Corrections found while reading the extracts (each re-checked on the page image and fixed in the
-extract too):
-- {{DOC p.N: the extract read X; the page reads Y (re-read at 300 dpi)}}
+Corrections found while reading the extracts and the solutions files (each re-checked on the
+page image and fixed in the file it came from too, the extract or the solutions file). Mock
+writers and the sheets' gap scan read this file, so a solutions-file correction names its doc,
+page and part only, never a value:
+- {{EXTRACT: DOC p.N: the extract read X; the page reads Y (re-read at 300 dpi)}}
+- {{SOLUTIONS FILE: DOC p.N, PART: corrected in the solutions file (re-read at 300 dpi), as in
+  `HW1S p.2, Q2a: corrected in the solutions file (re-read at 300 dpi)`}}
 
 ## Conventions
 
@@ -21,6 +25,9 @@ Each is stated once, in the subsection named here, and every other use links to 
   (`{{ID}}`); source {{CITE}}; reproduces {{the official solutions it was checked against}}.
 - Notation {{SYMBOL OR FORM}}: {{WHAT IT MEANS}}; staff source {{CITE: the staff sheet, solution or
   post that writes it so}}.
+- {{ERRATUM: an official answer that is wrong, by its doc and part only, never a value, as in
+  `Erratum: HW1S, HW1 Q2a: the official answer is wrong; the corrected value is on the part's
+  Erratum line in its solutions file`}}
 
 ## §1 {{TITLE}} (`sec-1`, file `notes/01-{{SLUG}}.md`, {{concise | full}})
 
@@ -30,8 +37,13 @@ Each is stated once, in the subsection named here, and every other use links to 
 | 1.{{N}} | Must know | `sec-1-must-know` | summary of §1 | | review checklist |
 
 - Lettered sets: `set-{{NAME}}-a` .. `-{{LAST}}`: a) {{...}}, b) {{...}} [{{CITE}}].
-- Figures: `fig-1-{{SLUG}}` Fig 1.{{K}} ({{static | step-through}}: {{what it shows, its data}})
-  [{{CITE}}].
+- Figures: `fig-1-{{SLUG}}` Fig 1.{{K}} ({{static | step-through | slide image}}: {{what it shows,
+  its data}}) [{{CITE}}].
+- Diagram-taught: {{yes | no}} ({{yes: the slides that teach it through diagrams, cited | no}}).
+  A `yes` section leads with a figure, so its Figures line names one (`coverage_check.py`). The
+  one other value is `pre-S11`, the whole line `- Diagram-taught: pre-S11`, which a reopen, or a
+  `10-polish` figure pass over other sections, gives an older section written before the widened
+  S11 that has no line: it warns until a figure pass that covers it sets `yes` or `no`.
 - Worked examples: `ex-1-{{SLUG}}` Worked example 1.{{K}}: "{{TITLE}}" (data: {{CHECKER:
   `examples.out.md`, SECTION OF IT | NO CHECKER: the sources it builds on}}; the course's Checker
   line decides, for every example alike).
@@ -40,14 +52,27 @@ Each is stated once, in the subsection named here, and every other use links to 
 
 - §{{N.M}} → §{{N.M}} ("{{the relation, in one phrase}}").
 
+## Mechanism sweep
+
+One row per candidate a section holds: each mechanism whose parts pass data, construction whose
+count or shape matters, comparison of two structures and trace of a drilled procedure, the slides'
+own diagrams among them. A kept row goes on to the shortlist; a cut one says why (redundant,
+decorative, out of scope).
+
+| Section | Candidate | Slide diagram | Kept or cut | Why |
+|---|---|---|---|---|
+| {{N.M}} | {{what it shows}} | {{CITE or "none"}} | {{kept as `fig-N-SLUG` or cut}} | {{reason}} |
+
 ## Figure shortlist
 
 Found from both directions: mechanisms the notes can't carry in prose, and the slides' own
-diagrams. Each row says why prose isn't enough.
+diagrams. Each row says why prose isn't enough. Run alone, the student sees this list before any
+figure is built; in the build it is logged in STATUS for their later review (`03-backbone` step
+5.4).
 
 | id | Section | Kind | Why a figure | Source |
 |---|---|---|---|---|
-| `fig-{{N}}-{{SLUG}}` | {{N.M}} | {{static or step-through}} | {{reason}} | {{CITE or "new"}} |
+| `fig-{{N}}-{{SLUG}}` | {{N.M}} | {{static, step-through or slide image}} | {{reason}} | {{CITE or "new"}} |
 
 ## How it's tested
 
