@@ -1,0 +1,10 @@
+@font-face {
+  font-family: "Inter";
+  src: url("https://cdn.example.com/inter.woff2") format("woff2");
+}
+
+body {
+  margin: 0;
+  color: #1a1a1a;
+  font-family: "Inter", system-ui, sans-serif;
+}

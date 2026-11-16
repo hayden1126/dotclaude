@@ -15,7 +15,7 @@ The offline proof that the oracles are right is test_oracles.py.
 
 Skills and cases: PRACTICES_SKILLS names the practices skills, explicitly. Each case has an
 owner (the skill whose bug class it plants) and a kind, target or benign (CASE_INFO). Each
-owner has one benign case. A listed skill may not exist yet (data-layer, before its first
+owner has one benign case. A listed skill may not exist yet (one listed before its first
 sweep): arm A and the offline tests don't need it, and B, C and D refuse without its SKILL.md.
 
 Arms:
@@ -120,6 +120,17 @@ Per run:
       Verdict: no migration the agent added is missing, a failed statement is broken, naming the
         file and statement, and an extension PGlite lacks is unresolved.
       Arm D: a benign PG case warms up only a PG case (warmup_case), for the registry's reason.
+  - DOM case: a case whose oracle imports oracle_dom/oracle_dom.mjs (the client-code cases). Its
+    oracle renders the agent's component with real React in a chrome-headless-shell and drives it
+    with real input, its server actions and fetches answered by stubs:
+      Packages: oracle_dom/ pins React, react-dom and TypeScript, installed with `npm ci
+        --ignore-scripts`; a run of a DOM case refuses to start without them at the pinned versions,
+        or without a Chrome (prereq_problems).
+      Chrome: find_chrome, ORACLE_CHROME_DIR (the dir holding chrome-headless-shell) or else the
+        highest-numbered Playwright build in ~/.cache/ms-playwright. grade() binds that dir
+        read-only at /chrome and sets ORACLE_CHROME to the binary there (uncontained, the host
+        path); the row records its --version as `chrome`.
+      Timeout: the oracle leads its own process group, killed whole when it overruns.
   - Session: `claude -p --output-format stream-json --verbose --model M --setting-sources
     project,local --strict-mcp-config --permission-mode acceptEdits --max-turns 60`, cwd the
     fixture, 900 s timeout per turn, env passed through unchanged. project,local drops every
@@ -287,6 +298,7 @@ import base64
 import concurrent.futures
 import contextlib
 import fcntl
+import functools
 import gzip
 import hashlib
 import http.server
@@ -320,7 +332,7 @@ LOADER = FIXTURE_SRC / "scripts" / "register.mjs"
 SKILLS_DIR = REPO / "skills"
 # The practices skills arms B, C and D install, all of them in every run. Named here rather than
 # found by their events.toml, so a skill that gains one later doesn't silently change the arms.
-PRACTICES_SKILLS = ["server-code", "auth-secrets", "dependencies", "data-layer"]
+PRACTICES_SKILLS = ["server-code", "auth-secrets", "dependencies", "data-layer", "client-code"]
 HOOK = REPO / "hooks" / "practices-check.sh"  # a shim: it runs practices_check.py beside it
 REPO_SETTINGS = REPO / "settings.json"  # arms C and D take the hook's wiring from here
 
@@ -364,6 +376,17 @@ CASE_INFO = {
     "index-live-table-bare": Case("data-layer", TARGET),
     "tag-get-or-create": Case("data-layer", TARGET),
     "tx-network": Case("data-layer", TARGET),
+    "analytics-add": Case("client-code", TARGET),
+    "signup-form": Case("client-code", TARGET),
+    "save-state": Case("client-code", TARGET),
+    "delete-row": Case("client-code", TARGET),
+    "comment-render": Case("client-code", TARGET),
+    "card-animate": Case("client-code", TARGET),
+    "fonts-brand": Case("client-code", TARGET),
+    "session-replay": Case("client-code", TARGET),
+    "analytics-add-bare": Case("client-code", TARGET),
+    "session-replay-bare": Case("client-code", TARGET),
+    "client-benign": Case("client-code", BENIGN),
 }
 CASES = list(CASE_INFO)
 
@@ -379,12 +402,14 @@ def warmup_case(case):
     which warms up with the next practices skill's benign case, so its task turn doesn't find
     the work already done. A benign case that needs a registry only warms up a registry case: a
     plain fixture has none to install its package from, so it is passed over there. A benign PG
-    case only warms up a PG case, as a fixture without its overlay has no migrations to change."""
+    case only warms up a PG case, as a fixture without its overlay has no migrations to change.
+    An owner not in PRACTICES_SKILLS yet (a skill whose cases are swept before it exists) starts
+    from the first practices skill: every row calls this, arm A's too."""
     owner, kind = CASE_INFO[case]
     if kind != BENIGN:
         return benign_case(owner)
-    i = PRACTICES_SKILLS.index(owner)
-    others = [benign_case(name) for name in PRACTICES_SKILLS[i + 1:] + PRACTICES_SKILLS[:i]]
+    i = PRACTICES_SKILLS.index(owner) if owner in PRACTICES_SKILLS else -1
+    others = [benign_case(name) for name in PRACTICES_SKILLS[i + 1:] + PRACTICES_SKILLS[:max(i, 0)]]
     return next(c for c in others if (is_registry_case(case) or not is_registry_case(c))
                 and (is_pg_case(case) or not is_pg_case(c)))
 
@@ -451,6 +476,28 @@ def prereq_problems(arms, skills=None, skills_dir=None, hook=None, settings=None
         problems += gate_off_problems(hook)
     if any(is_pg_case(case) for case in cases):
         problems += pglite_problems()
+    if any(is_dom_case(case) for case in cases):
+        problems += dom_problems()
+    return problems
+
+
+def dom_problems(env=None, home=None):
+    """Why a DOM case's oracle can't run: React, react-dom or TypeScript isn't in
+    oracle_dom/node_modules at the pinned version (case_hash covers the lockfile, never
+    node_modules), or no chrome-headless-shell is found (find_chrome)."""
+    problems = []
+    fix = f"run `npm ci --ignore-scripts` in {ORACLE_DOM_DIR}"
+    for name, pinned in json.loads((ORACLE_DOM_DIR / "package.json").read_text())["dependencies"].items():
+        try:
+            installed = json.loads((ORACLE_DOM_DIR / "node_modules" / name / "package.json").read_text()).get("version")
+        except (OSError, ValueError, AttributeError):
+            problems.append(f"DOM cases render with {name} from oracle_dom/, which isn't installed: {fix}")
+            continue
+        if installed != pinned:
+            problems.append(f"DOM cases render with {name} {pinned}, and {installed} is installed: {fix}")
+    if find_chrome(env, home) is None:
+        problems.append(f"DOM cases render in {CHROME_BINARY}, and none was found: set ORACLE_CHROME_DIR to the dir "
+                        f"that holds it, or install Playwright's (npx playwright install chromium-headless-shell)")
     return problems
 
 
@@ -556,7 +603,9 @@ def case_hash(case):
     fixture. A registry case adds what serves and grades it, which no other case uses:
     oracle_deps.mjs, registry_stubs/, the FakeRegistry source and arm D's warm-up packages. A PG
     case adds its helper and the lockfile that pins PGlite, never node_modules: the lockfile is
-    what says which version, and prereq_problems holds the install to it."""
+    what says which version, and prereq_problems holds the install to it. A DOM case adds
+    oracle_dom.mjs, oracle_dom/browser/ and its lockfile, the same way; the Chrome build goes in
+    the row (chrome), not the hash, as the Claude Code version does."""
     h = hashlib.sha256()
     parts = [("case", CASES_DIR / case), ("oracle_lib.mjs", HERE / "oracle_lib.mjs"),
              ("next_stub", STUB_SRC), ("stubs", STUBS_SRC), ("fixture", FIXTURE_SRC)]
@@ -567,6 +616,8 @@ def case_hash(case):
             parts.append(("warmup_registry", CASES_DIR / warmup / "registry"))
     if is_pg_case(case):
         parts += [("oracle_pg.mjs", ORACLE_PG), ("oracle_pg_lock", ORACLE_PG_LOCK)]
+    if is_dom_case(case):
+        parts += [("oracle_dom.mjs", ORACLE_DOM), ("oracle_dom_browser", ORACLE_DOM_BROWSER), ("oracle_dom_lock", ORACLE_DOM_LOCK)]
     for label, path in parts:
         digest = tree_hash(path) if path.is_dir() else hashlib.sha256(path.read_bytes()).hexdigest()
         h.update(f"{label} {digest}\n".encode())
@@ -739,6 +790,13 @@ ORACLE_PG_DIR = HERE / "oracle_pg"  # the Postgres PG cases are graded on, pinne
 ORACLE_PG = ORACLE_PG_DIR / "oracle_pg.mjs"  # the oracle helpers only PG cases import
 ORACLE_PG_LOCK = ORACLE_PG_DIR / "package-lock.json"
 PGLITE = "@electric-sql/pglite"
+ORACLE_DOM_DIR = HERE / "oracle_dom"  # the React and TypeScript DOM cases render with, pinned here
+ORACLE_DOM = ORACLE_DOM_DIR / "oracle_dom.mjs"  # the oracle helpers only DOM cases import
+ORACLE_DOM_BROWSER = ORACLE_DOM_DIR / "browser"  # its page script and next/* stubs
+ORACLE_DOM_LOCK = ORACLE_DOM_DIR / "package-lock.json"
+CHROME_BINARY = "chrome-headless-shell"
+CHROME_MOUNT = "/chrome"  # where the Chrome dir appears inside the grader
+PLAYWRIGHT_SHELL = re.compile(r"^chromium_headless_shell-(\d+)$")
 REGISTRY_HOST = "127.0.0.2"  # 127.0.0.1 is in the sandbox's forced NO_PROXY, so it never reaches the host
 NPM_CACHE = ".npm-cache"
 PACKAGE_NAME = re.compile(r"^[a-z0-9][a-z0-9._-]*$")
@@ -753,6 +811,43 @@ def is_registry_case(case):
 
 def is_pg_case(case):
     return (CASES_DIR / case / "setup" / "supabase" / "migrations").is_dir()
+
+
+def is_dom_case(case):
+    """A case whose oracle renders the agent's components in Chrome: it imports oracle_dom.mjs."""
+    oracle = CASES_DIR / case / "oracle.mjs"
+    return oracle.is_file() and "oracle_dom.mjs" in oracle.read_text()
+
+
+def find_chrome(env=None, home=None):
+    """The dir holding chrome-headless-shell: ORACLE_CHROME_DIR when set (None when it lacks the
+    binary, never a fallback past it), else the highest-numbered Playwright build in
+    ~/.cache/ms-playwright, else None."""
+    env = os.environ if env is None else env
+    if env.get("ORACLE_CHROME_DIR"):
+        chosen = Path(env["ORACLE_CHROME_DIR"])
+        return chosen if (chosen / CHROME_BINARY).is_file() else None
+    cache = Path(home or Path.home()) / ".cache" / "ms-playwright"
+    builds = []
+    for d in (cache.iterdir() if cache.is_dir() else ()):
+        m = PLAYWRIGHT_SHELL.match(d.name)
+        shell = d / "chrome-headless-shell-linux64"
+        if m and (shell / CHROME_BINARY).is_file():
+            builds.append((int(m.group(1)), shell))
+    return max(builds)[1] if builds else None
+
+
+@functools.cache
+def chrome_version():
+    """`chrome-headless-shell --version` for the rows, run once per process."""
+    chrome = find_chrome()
+    if chrome is None:
+        return "none"
+    try:
+        p = subprocess.run([str(chrome / CHROME_BINARY), "--version"], capture_output=True, text=True, timeout=30)
+    except (OSError, subprocess.TimeoutExpired) as e:
+        return f"unknown: {e}"
+    return p.stdout.strip() or f"unknown: exit {p.returncode}"
 
 
 def version_key(version):
@@ -1321,29 +1416,50 @@ def grade(fixture, case, run_dir, contain=True, home=None, evidence=None):
         (run_dir / "oracle.out").write_text(f"not graded: {problem}\n")
         return {"verdict": "broken", "checks": [{"name": "node_modules replaced", "ok": False, "detail": problem}]}
     install_stubs(fixture)  # the agent could have edited node_modules/next
+    oracle = CASES_DIR / case / "oracle.mjs"
+    readable = {HERE: PRACTICES_MOUNT}
+    chrome = None
+    if is_dom_case(case):
+        chrome = find_chrome()
+        if chrome is None:  # prereq_problems refuses such a run before any session
+            # practices-allow: SEC-08 the harness's own verdict file, read by the person grading
+            (run_dir / "oracle.out").write_text(f"not graded: no {CHROME_BINARY} found\n")
+            return {"verdict": "error", "checks": [{"name": "chrome", "ok": False, "detail": f"no {CHROME_BINARY} found"}]}
+        readable[chrome] = CHROME_MOUNT
     scratch = Path(tempfile.mkdtemp(prefix="practices-grade-"))
     try:
         env = grade_env(fixture, scratch, evidence)
+        if chrome:
+            env["ORACLE_CHROME"] = str(Path(CHROME_MOUNT if contain else chrome) / CHROME_BINARY)
         if contain:
             inside = Path(PRACTICES_MOUNT)
             try:
                 cmd = contained(
                     [node_binary(), "--import", (inside / LOADER.relative_to(HERE)).as_uri(),
-                     str(inside / "cases" / case / "oracle.mjs")],
-                    writable=[fixture, scratch], readable={HERE: PRACTICES_MOUNT}, cwd=fixture, real_home=home)
+                     str(inside / oracle.relative_to(HERE))],
+                    writable=[fixture, scratch], readable=readable, cwd=fixture, real_home=home)
             except ValueError as e:
                 (run_dir / "oracle.out").write_text(f"not graded: {e}\n")
                 return {"verdict": "error", "checks": [{"name": "containment", "ok": False, "detail": str(e)}]}
         else:
-            cmd = [node_binary(), "--import", LOADER.as_uri(), str(CASES_DIR / case / "oracle.mjs")]
+            cmd = [node_binary(), "--import", LOADER.as_uri(), str(oracle)]
+        # Its own session, so a Ctrl-C lets a grade in progress finish and keep its row, and so a
+        # timeout kills the whole group: a SIGKILL to node alone left what it started running
+        # uncontained (a planted child; Chrome itself exits once its DevTools pipe closes). Under
+        # bwrap the leader is bwrap, and --die-with-parent with its own pid namespace takes the
+        # rest down with it.
+        # limit: a child that calls setsid() leaves the group; only bwrap's namespace catches it.
+        p = subprocess.Popen(cmd, cwd=fixture, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                             text=True, errors="replace", start_new_session=True)
         try:
-            # its own session, so a Ctrl-C lets a grade in progress finish and keep its row
-            p = subprocess.run(cmd, cwd=fixture, env=env, capture_output=True, text=True, errors="replace",
-                               start_new_session=True,
-                               timeout=ORACLE_TIMEOUT)
-            stdout, stderr = p.stdout, p.stderr
-        except subprocess.TimeoutExpired as e:
-            stdout = e.stdout.decode(errors="replace") if isinstance(e.stdout, bytes) else (e.stdout or "")
+            stdout, stderr = p.communicate(timeout=ORACLE_TIMEOUT)
+        except subprocess.TimeoutExpired:
+            os.killpg(p.pid, signal.SIGKILL)  # p isn't reaped yet, so its pid still names this group
+            try:
+                stdout, _ = p.communicate(timeout=10)
+            except subprocess.TimeoutExpired:  # a child outside the group still holds the pipes
+                p.wait()
+                stdout = ""
             stderr = f"oracle timed out after {ORACLE_TIMEOUT} s"
     finally:
         shutil.rmtree(scratch, ignore_errors=True)
@@ -1377,8 +1493,13 @@ def agent_diff(fixture, base, text=False):
 
 
 # Words in the agent's added lines that could forge the oracle's verdict from inside its
-# process (the agent's code runs there): a tripwire, the diff review is the backstop.
-SUSPECT_WORDS = ("verdict", "stepResult", 'process.on("exit"', "process.on('exit'", "writeSync(1", "process.stdout.write")
+# process (the agent's code runs there): a tripwire, the diff review is the backstop. A DOM
+# case's oracle reads the page oracle_dom builds, so the globals its page.js and loader define
+# (and the ones they used to) are suspect too: app code has no reason to name them.
+SUSPECT_WORDS = ("verdict", "stepResult", 'process.on("exit"', "process.on('exit'", "writeSync(1", "process.stdout.write",
+                 "__oracleRecord", "__oracleLog", "__takeControls", "__actions", "__fetches", "__fonts", "__navigations",
+                 "__errors", "__quiet", "__config", "__require", "__serverAction", "__mounted", "__mount", "__setActionMode",
+                 "__addFetchRule", "__sent", "oracle.page.invalid", "oracle.actions.invalid", "oracle.log.invalid")
 
 
 def suspect_words(diff):
@@ -1416,6 +1537,9 @@ def contamination(events_by_turn, fixture, tmp=None):
                 texts += [os.path.join(inp["path"], inp[k]) for k in ("pattern", "glob") if isinstance(inp.get(k), str)]
             for text in texts:
                 for token in PATH_TOKEN.findall(text):
+                    # a prose path ends a sentence ("... in /tmp/ledgerly-app-x."), but a trailing
+                    # "/.." or "/." is the path's own parent or self, so keep it for normpath
+                    token = re.sub(r"(?<![/.])[.:!?]+$", "", token)
                     if not (".claude/skills" in token or "SKILL.md" in token or FIXTURE_PREFIX in token):
                         continue
                     full = os.path.normpath(os.path.join(fixture, os.path.expanduser(token)))
@@ -1685,6 +1809,8 @@ def run_one(case, arm, index, args, out):
         "case_hash": case_code,  # case_hash(case)
         "warmup_hash": warmup_code,  # warmup_hash(case, arm): arm D's warm-up prompt
         "harness_hash": harness_code,  # harness_hash(): run.py
+        # a DOM case's Chrome build: recorded, not fingerprinted (case_hash)
+        **({"chrome": chrome_version()} if is_dom_case(case) else {}),
         # tripwires: the bar counts such a row unresolved until a person sets "reviewed": true
         "suspect": suspect, "contaminated": contaminated,
         "hook_denials": denials_turns.get("task", 0),
