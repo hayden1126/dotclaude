@@ -3611,7 +3611,9 @@ class RunHarness(unittest.TestCase):
                  # the fixture's own test dirs (fixture/tests/helpers.ts) never count
                  use("Bash", {"command": f"ls {tmp}/ledgerly-test-abc123 && sqlite3 {tmp}/ledgerly-test-abc123/test.db .tables"}),
                  # a prompt quoted into a subagent ends its sentence on the fixture path
-                 use("Agent", {"prompt": f"Add analytics to the app in {own}."})]
+                 use("Agent", {"prompt": f"Add analytics to the app in {own}."}),
+                 # a trailing /.. is the temp dir, not the other fixture
+                 use("Bash", {"command": f"ls {tmp}/{p}other/.. {tmp}/{p}other/../"})]
         self.assertEqual(r.contamination([clean], own), [])
         self.assertEqual(r.contamination([[use("Agent", {"prompt": f"Compare with {tmp}/{p}other."})]], own),
                          [os.path.join(tmp, f"{p}other")])
