@@ -298,7 +298,7 @@ PARSE_MAX = 1 << 20  # transcript rows bigger than this are never a load or a de
 LOG_MAX = 64 << 10
 # Claude Code turns a hook string over 10,000 characters into a file path plus a 2,000-character
 # preview, and doesn't ask Claude to read the file. The four shipped skills' whole gates take about
-# 2,800 with their titles, so 6,000 holds about four more at that size; tests/setup pins that every
+# 2,550 with their titles, so 6,000 holds about five more at that size; tests/setup pins that every
 # shipped gate fits and caps each skill's gate. CONTEXT_MAX bounds the digest plus the session
 # start's notes, which share one additionalContext string.
 DIGEST_MAX = 6000
