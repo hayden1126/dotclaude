@@ -1,0 +1,151 @@
+<!-- exam-prep template videos-addon.html. Baseline as of 2026-11-12; changes only via `12-retro`.
+     What scripts/videos.py adds to the notes chassis (templates/notes-chassis.html) to make the
+     watch list, practice/videos.html: this <style> goes after the chassis's own, this <script> at
+     its FIGURE SCRIPTS marker. Everything else (rail, scroll-spy, themes, the fixed theme icon,
+     full screen, keys: CHASSIS.md C1 to C4) is the chassis's, unchanged. Colors come from the
+     chassis's tokens only, so both themes follow. -->
+<style>
+  /* ---- the By idea / By lecture toggle: the chassis's Review toggle look, under its own class
+     (verify_page.mjs reads .viewtog as the notes page's Review view) ---- */
+  .vidtog{display:inline-flex;flex:none;border:1px solid var(--hair-strong);border-radius:8px;overflow:hidden;background:var(--surface-2)}
+  .vidtog button{font:inherit;font-family:var(--f-display);font-size:.8rem;font-weight:600;border:0;background:transparent;
+    color:var(--ink-soft);padding:.35rem .6rem;min-height:40px;cursor:pointer;white-space:nowrap}
+  .vidtog button+button{border-left:1px solid var(--hair-strong)}
+  .vidtog button[aria-pressed="true"]{background:var(--accent);color:var(--bg)}
+  .rail .vidtog{display:flex;margin:1rem 0 0}
+  .rail .vidtog button{flex:1}
+  @media (max-width:480px){ .topbar .brand:has(~ .vidtog),.topbar .vidtog~.fsbtn{display:none}
+    .topbar .vidtog~.fsbtn:not([hidden])+.themebtn{margin-left:auto} }
+  #view-lecture,#toc-lec{display:none}
+  :root[data-vidview="lecture"] #view-lecture{display:block}
+  :root[data-vidview="lecture"] #toc-lec{display:block}
+  :root[data-vidview="lecture"] #view-idea,:root[data-vidview="lecture"] #toc{display:none}
+
+  /* ---- legend, intro box, notes links ---- */
+  .vlegend{list-style:none;margin:.9rem 0 0;padding:0;display:flex;flex-wrap:wrap;gap:.35rem 1.1rem;
+    font-family:var(--f-display);font-size:.82rem;color:var(--ink-soft)}
+  .vlegend li{margin:0}
+  .kchip,.flag{display:inline-block;font-family:var(--f-display);font-size:.7rem;font-weight:650;letter-spacing:.03em;
+    border-radius:999px;padding:.08rem .5rem;white-space:nowrap;vertical-align:.08em;border:1px solid}
+  .kchip.k-yours{color:var(--key-ink);background:var(--key-wash);border-color:var(--key)}
+  .kchip.k-segment{color:var(--def-ink);background:var(--def-wash);border-color:var(--def)}
+  .kchip.k-notes{color:var(--ex-ink);background:var(--ex-wash);border-color:var(--ex)}
+  .flag{color:var(--warn-ink);background:var(--warn-wash);border-color:var(--warn);font-weight:600}
+  .vintro{border:1px solid var(--hair);border-top:3px solid var(--sec-accent);border-radius:10px;
+    background:color-mix(in srgb,var(--sec-accent) 5%,var(--surface));padding:.6rem 1rem;margin:.7rem 0 1.4rem}
+  .vintro>ul{margin:0;padding-left:1.1rem}
+  .vnotes{font-family:var(--f-display);font-size:.85rem;color:var(--ink-soft);margin:.2rem 0 .8rem}
+  .vnote{font-weight:600;text-decoration:none;border-bottom:1px solid var(--accent-soft)}
+
+  /* ---- a pick: a numbered row ---- */
+  ol.picks{list-style:none;padding:0;margin:.6rem 0 1rem;counter-reset:pick}
+  li.pick{counter-increment:pick;position:relative;margin:0 0 1rem;padding:.8rem 1rem .8rem 3rem;
+    border:1px solid var(--hair);border-radius:10px;background:var(--surface)}
+  li.pick::before{content:counter(pick);position:absolute;left:.8rem;top:.85rem;width:1.5rem;height:1.5rem;border-radius:50%;
+    display:flex;align-items:center;justify-content:center;font-family:var(--f-display);font-size:.78rem;font-weight:700;
+    color:var(--sec-accent);background:var(--sec-accent-hl)}
+  li.pick:target{border-color:var(--sec-accent);box-shadow:0 0 0 2px var(--sec-accent-hl)}
+  li.pick{scroll-margin-top:calc(env(safe-area-inset-top,0px) + 4rem)}
+  .ptop{display:flex;flex-wrap:wrap;align-items:baseline;gap:.3rem .6rem}
+  a.vtitle{font-family:var(--f-display);font-weight:650;font-size:1.02rem;line-height:1.35;min-width:0;overflow-wrap:anywhere}
+  .vmeta{font-family:var(--f-display);font-size:.8rem;color:var(--ink-faint);margin:.25rem 0 .4rem;display:flex;flex-wrap:wrap;gap:.1rem .9rem}
+  .vtime{font-family:var(--f-mono)}
+  .vflags{margin:.3rem 0 .5rem;display:flex;flex-wrap:wrap;gap:.3rem}
+  .vline{display:grid;grid-template-columns:5.2rem minmax(0,1fr);gap:.6rem;margin:.35rem 0;font-size:.94rem;line-height:1.5}
+  .vlab{font-family:var(--f-display);font-size:.66rem;font-weight:700;letter-spacing:.06em;text-transform:uppercase;
+    color:var(--sec-accent);padding-top:.25rem;white-space:nowrap}
+  .vline ul{margin:0;padding-left:1.1rem}
+  .vline p{margin:0 0 .2rem}
+  .vline li{margin:.1rem 0}
+  .vsame>div{color:var(--ink-soft);font-style:italic}
+  li.pick .concise{margin:.6rem 0 .5rem}
+  @media (max-width:560px){
+    li.pick{padding-left:2.6rem;padding-right:.8rem}
+    li.pick::before{left:.6rem}
+    .vline{grid-template-columns:minmax(0,1fr);gap:0}
+    .vlab{padding-top:0}
+  }
+
+  /* ---- the by-lecture view ---- */
+  section.lect{--sec-accent:var(--accent);--sec-accent-hl:var(--accent-soft);margin-top:3rem;
+    scroll-margin-top:calc(env(safe-area-inset-top,0px) + 1rem)}
+  section.lect:first-child{margin-top:1rem}
+  section.lect>h2{font-size:1.5rem;margin:0 0 .3rem;color:var(--accent)}
+  ol.lrows{list-style:none;padding:0;margin:.6rem 0}
+  li.lrow{display:flex;flex-wrap:wrap;align-items:baseline;gap:.2rem .8rem;padding:.55rem .8rem;margin:.4rem 0;
+    border:1px solid var(--hair);border-left:3px solid var(--accent);border-radius:8px;background:var(--surface)}
+  a.ltime{font-family:var(--f-mono);font-size:.85rem;font-weight:600;white-space:nowrap}
+  .lchap{font-family:var(--f-display);font-size:.85rem;color:var(--ink-soft)}
+  a.lback{font-weight:600;min-width:0;overflow-wrap:anywhere}
+  .lsec{font-family:var(--f-display);font-size:.78rem;color:var(--ink-faint)}
+  li.lgap{font-family:var(--f-display);font-size:.8rem;color:var(--ink-faint);padding:.2rem .8rem;margin:.2rem 0;
+    border-left:3px dashed var(--hair-strong)}
+  .vfoot{margin-top:3rem;padding-top:1rem;border-top:1px solid var(--hair);font-family:var(--f-display);
+    font-size:.85rem;color:var(--ink-soft)}
+</style>
+<script>
+(function(){
+  "use strict";
+  // The By idea / By lecture switch. The chassis's script has already built the rail and its
+  // scroll-spy from the by-idea sections; the by-lecture view gets its own rail list (#toc-lec)
+  // and its own small spy, and a link to something the shown view hides switches views first.
+  var root=document.documentElement, main=document.getElementById('main');
+  var picks=[].slice.call(document.querySelectorAll('.vidtog button[data-vview]'));
+  if(!picks.length||!main) return;
+  var rail=document.getElementById('rail'), nav=rail&&rail.querySelector('nav');
+  var lects=[].slice.call(main.querySelectorAll('section.lect[id]')), lecLinks=[];
+  if(nav){
+    var ul=document.createElement('ul'); ul.className='toc'; ul.id='toc-lec';
+    lects.forEach(function(s){
+      var h=s.querySelector('h2'), li=document.createElement('li'), a=document.createElement('a');
+      li.className='grp'; a.href='#'+s.id; a.dataset.target=s.id;
+      a.textContent=h? h.textContent.replace(/\s+/g,' ').trim() : s.id;
+      a.addEventListener('click',function(){  // the drawer closes through its own backdrop
+        if(window.innerWidth<=900&&rail.classList.contains('open')){ var b=document.getElementById('backdrop'); if(b) b.click(); }
+      });
+      li.appendChild(a); ul.appendChild(li); lecLinks.push(a);
+    });
+    nav.appendChild(ul);
+  }
+  var lecture=false;
+  function shown(el){ return el.getClientRects().length>0; }
+  function spy(){
+    if(!lecture) return;
+    var best=lects.length?lects[0].id:null;
+    for(var i=0;i<lects.length;i++){ if(lects[i].getBoundingClientRect().top<=130) best=lects[i].id; else break; }
+    lecLinks.forEach(function(a){ a.classList.toggle('active',a.dataset.target===best); });
+  }
+  function setView(v){
+    lecture=v==='lecture';
+    if(lecture) root.setAttribute('data-vidview','lecture'); else root.removeAttribute('data-vidview');
+    picks.forEach(function(b){ b.setAttribute('aria-pressed',String(b.dataset.vview===v)); });
+    spy(); window.dispatchEvent(new Event('scroll'));  // the chassis's spy marks the by-idea rail again
+  }
+  function remember(v){ try{ localStorage.setItem('videos-view',v); }catch(e){} }
+  function target(hash){ var t=null; try{ t=hash.length>1&&document.getElementById(decodeURIComponent(hash.slice(1))); }catch(e){} return t||null; }
+  // a hash naming something the shown view hides: switch to the view that shows it, then go there
+  function toHidden(){
+    var t=target(location.hash); if(!t||shown(t)) return;
+    setView(lecture?'idea':'lecture'); remember(lecture?'lecture':'idea');
+    if(shown(t)) t.scrollIntoView();
+  }
+  var saved=null; try{ saved=localStorage.getItem('videos-view'); }catch(e){}
+  setView(saved==='lecture'?'lecture':'idea');
+  toHidden();
+  window.addEventListener('hashchange',toHidden);
+  window.addEventListener('scroll',spy,{passive:true});
+  picks.forEach(function(b){ b.addEventListener('click',function(){
+    var v=b.dataset.vview; if((v==='lecture')===lecture) return;
+    setView(v); remember(v);
+    window.scrollTo({top:0,behavior:'instant'});
+  }); });
+  document.addEventListener('click',function(e){
+    if(e.defaultPrevented||e.button!==0||e.ctrlKey||e.metaKey||e.shiftKey||e.altKey) return;
+    var a=e.target.closest&&e.target.closest('a[href^="#"]'); if(!a) return;
+    var id=a.getAttribute('href'), t=target(id); if(!t||shown(t)) return;
+    e.preventDefault();
+    setView(lecture?'idea':'lecture'); remember(lecture?'lecture':'idea');
+    if(location.hash===id) t.scrollIntoView(); else location.hash=id.slice(1);
+  });
+})();
+</script>
