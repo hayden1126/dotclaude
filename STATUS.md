@@ -278,7 +278,9 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     by a marketplace change, and `tests/delegation/test_settings.py`'s inventory test doesn't
     classify it. Lead's lean: deny it to delegated agents, since it writes config and handles
     secrets. A small lane.
-  - **No private place to list an MCP server's read tools** (capella-studio's lane roles,
+  - **No private place to list an MCP server's read tools** (lane policy-local, opened
+    2026-11-16: Hayden picked a private local list over public policy.toml for five lesson reads
+    another repo's lane asked for; merges after verify-app) (capella-studio's lane roles,
     session c35239ad, 2026-11-14): subagent-policy refused a delegated agent's calls to a client
     MCP server's read tools as `mcp-write`, since policy.toml `[mcp] read_tools` doesn't list
     them. That list is the only one, and dotclaude is public, so a client server's names can't
