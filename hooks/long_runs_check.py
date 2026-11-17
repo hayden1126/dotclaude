@@ -47,7 +47,8 @@ sys.modules.setdefault("practices_check", PC)
 _spec.loader.exec_module(PC)
 
 FROM_PRACTICES = ("ADD_VERBS", "AT", "PIP_HEAD", "Budget", "CMD_MAX", "CONFIG_MAX", "Transcripts",
-                  "bash_lines", "bash_project", "bash_text", "command_of", "config_home", "discover",
+                  "bash_lines", "bash_project", "bash_text", "check_budget", "command_of",
+                  "config_home", "discover",
                   "is_loaded", "is_off", "l1_window", "load_bash_words", "load_config", "log",
                   "names_a_call", "read_toml", "run_patterns", "state_dir")
 
@@ -228,16 +229,21 @@ def may_be_denied_elsewhere(cmd):
 def text_rule_flags(cmd, project, cfg):
     """Whether an installed skill's "bash" rule flags a line of this command, the practices hook's
     L2b, which denies once per line. Its own matcher runs, so the two can't drift. A line L2b
-    already denied still counts: that costs one nudge here, never L2b's reason. A spent budget or
-    a fault counts too, since a false match only skips a deny."""
+    already denied still counts: that costs one nudge here, never L2b's reason. A spent budget
+    (checked before each rule, as L2b does) or a fault counts too, since a false match only skips
+    a deny."""
     try:
         rules = [(s, r) for s in PC.discover(project, quiet=True).values() for r in s["rules"]
                  if "bash" in r.get("at", PC.AT) and not PC.is_off(cfg, s, r["id"])]
         if not rules:
             return False
         text = PC.bash_text(cmd)
-        return bool(PC.run_patterns(
-            rules, lambda item: bool(PC.bash_lines(item[1], text, cfg["helpers"])), cut=True))
+
+        def flags(item):
+            PC.check_budget("L2b")  # as L2b's own breadcrumb does, before each rule
+            return bool(PC.bash_lines(item[1], text, cfg["helpers"]))
+
+        return bool(PC.run_patterns(rules, flags, cut=True))
     except PC.Budget:
         return True
     except Exception as e:  # noqa: BLE001  fail toward the practices hook's deny
@@ -293,13 +299,11 @@ def check(event):
     suites = {suite_key(n, a, rest) for n, a in commands if n
               and (rest := suite_args(n, a)) is not None}
     heavy = any(n and is_heavy(n, a, gates) for n, a in commands)
-    if not (heavy or suites) or may_be_denied_elsewhere(cmd):
+    if not (heavy or suites):
         return None
     cfg = PC.load_config(project)
     skill_dir = os.path.join(PC.config_home(), "skills", SKILL)
     if not cfg["enabled"] or PC.is_off(cfg, {"name": SKILL}, RULE_ID) or not os.path.isdir(skill_dir):
-        return None
-    if text_rule_flags(cmd, project, cfg):
         return None
     path = state_path(event)
     state = read_state(path)
@@ -318,7 +322,10 @@ def check(event):
         if PC.is_loaded({"name": SKILL, "dir": skill_dir}, window.loads()):
             write_state(path, keep)
             return None
-    if boundary in told or not write_state(path, {**keep, "told": [*told, boundary]}):
+    # A call the practices hook may deny is left to it, only here, so its suites still count
+    # (else a later rerun of one reads as new) and the text rules run only before a deny.
+    if (boundary in told or may_be_denied_elsewhere(cmd) or text_rule_flags(cmd, project, cfg)
+            or not write_state(path, {**keep, "told": [*told, boundary]})):
         write_state(path, keep)
         return None
     return {"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny",

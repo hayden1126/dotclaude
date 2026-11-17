@@ -191,11 +191,23 @@ class TextRules(Base):
         with mock.patch.dict(os.environ, self.env, clear=True), \
                 mock.patch.object(L.PC, "bash_text", side_effect=RuntimeError("x")):
             self.assertTrue(L.text_rule_flags("lane trial --run x", self.proj, cfg))
+        # A spent budget: the real check before each rule raises, with no mock in the path.
         with mock.patch.dict(os.environ, self.env, clear=True), \
-                mock.patch.object(L.PC, "run_patterns", side_effect=L.PC.Budget("spent")):
+                mock.patch.object(L.PC, "START", time.monotonic() - 60):
             self.assertTrue(L.text_rule_flags("lane trial --run x", self.proj, cfg))
-        with mock.patch.dict(os.environ, self.env, clear=True):
+        with mock.patch.dict(os.environ, self.env, clear=True), \
+                mock.patch.object(L.PC, "START", time.monotonic()):
             self.assertFalse(L.text_rule_flags("lane trial --run x", self.proj, cfg))
+
+    def test_a_suite_beside_a_call_left_to_it_still_counts(self):
+        # Its suite is saved, so the next different suite is the second and gets the deny, and a
+        # later rerun of the first never reads as new.
+        for left in (self.FLAGGED.replace("lane trial --run x", SUITE), SUITE + " && git commit -m y"):
+            with self.subTest(left=left):
+                shutil.rmtree(self.state, ignore_errors=True)
+                self.assertIsNone(self.pre(left))
+                self.assertIn("long-runs", self.pre(OTHER))
+                self.assertIsNone(self.pre(SUITE))
 
 
 class GenericSuites(Base):

@@ -99,7 +99,9 @@ class Templates(unittest.TestCase):
                 (("skills", "lanes", "SKILL.md"),
                  (message, "Merged with `Keep open:` in its Next", "as its turn's last act",
                   "runs the `pass` skill", "one message, the chain's last to that lane",
-                  "hold your pass", "`[pass]` notice")),
+                  "hold your pass", "`[pass]` notice",
+                  "with no `Keep open:` line, sending `merged #N` again",
+                  "A `Keep open:` lane only writes the record")),
                 (("skills", "pass", "SKILL.md"), (message,)),
                 (("docs", "lanes.md"), (message, "after the reinstall"))):
             with open(os.path.join(REPO, *doc)) as f:
