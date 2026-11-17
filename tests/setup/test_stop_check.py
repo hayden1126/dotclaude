@@ -243,18 +243,6 @@ class Rules(unittest.TestCase):
         self.entries(notice(), say())
         self.assertIn("`Waiting on <who>: <what>`", self.assertBlocks(self.decide()))
 
-    def test_the_reason_keeps_a_merged_lanes_close_free(self):
-        # lane done (#189) refuses a lane whose reply after its record write holds a Waiting on
-        # you line. A blocked post-merge turn sent nothing (a send passes), so it is pointed at
-        # the skill's after-merge steps, not a restatement of them: two review rounds each found
-        # a case a restated rule got wrong (a wait line where `merged #N` was owed, 2026-11-17).
-        self.entries(notice(), say())
-        reason = self.assertBlocks(self.decide())
-        self.assertIn("holds `lane done`", reason)
-        self.assertIn("(Lifecycle step 6)", reason)
-        self.assertIn("no \"#N chain done\" yet", reason)  # a kept-open lane past its pass: no
-        self.assertNotIn("Waiting on the lead:", reason)    # wait line to end on instead
-
     def test_the_words_mid_line_are_no_list(self):
         self.entries(notice(), say())
         self.assertBlocks(self.decide("Nothing is waiting on you now."))

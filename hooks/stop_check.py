@@ -85,10 +85,6 @@ REASON = (MARKER + " This lane turn ends with nothing to wait on: no Waiting on 
           "and end your reply with a Waiting on you list.\n"
           "- If the lane is pushed and only waits its merge turn, send the lead `park me` "
           "(to what a bare `lane addr lead` prints).\n"
-          "- If your PR merged and the lead's chain for it isn't done (no \"#N chain done\" yet), "
-          "the bullets above don't apply: finish the lanes skill's after-merge steps "
-          "(Lifecycle step 6), and ask Hayden nothing in chat, since a Waiting on you list after "
-          "your record's write holds `lane done`.\n"
           "- If you wait on another lane, the lead's reply, a person or a job outside this "
           "session, end with a line `Waiting on <who>: <what>` and stop.\n"
           "- If none applies, say so in one line and stop: this check blocks once per turn.")
