@@ -3467,9 +3467,12 @@ def trial_tree(repo: Repo, tmpdir: str, commit: str) -> str:
     (gitrepository-layout(5)), so git in the tree sees the repo's objects, refs and config as in
     a linked worktree, and `lane` there finds the repo, its locks among them. tmpdir is fresh
     (mkdtemp) and each file goes in with O_EXCL and O_NOFOLLOW. The checkout drops every
-    inherited GIT_* (env={}): a GIT_DIR or GIT_INDEX_FILE would aim it elsewhere.
-    limit: gc in the repo can't see the tree's HEAD or index, so the trial's dangling commits
-    outlive a run only by gc's prune grace (2 weeks by default); a run takes minutes."""
+    inherited GIT_* (env={}): a GIT_DIR or GIT_INDEX_FILE would aim it elsewhere. A reftable
+    repo is refused before this (ref_storage_problem): its HEAD lives in a reftable stack.
+    limit: gc in the repo can't see the tree's HEAD or index, so a gc that prunes dangling
+    objects (past gc.pruneExpire, 2 weeks by default; at once with `now`) takes the trial's
+    commit: a run mid-way fails on a bad object, and a `--keep` tree older than the grace
+    reads `bad object HEAD`."""
     tree, gitdir = os.path.join(tmpdir, "tree"), os.path.join(tmpdir, "git")
     os.mkdir(gitdir)
     os.mkdir(tree)
@@ -3481,6 +3484,19 @@ def trial_tree(repo: Repo, tmpdir: str, commit: str) -> str:
             f.write(text + "\n")
     trial_git(repo, ["read-tree", "--reset", "-u", "HEAD"], env={}, cwd=tree)
     return tree
+
+
+def ref_storage_problem(repo: Repo) -> str | None:
+    """Why trial_tree can't build a tree here, else None: a repo whose refs are in reftable
+    (extensions.refStorage) keeps each worktree's HEAD in a reftable stack in its git dir, and
+    trial_tree writes HEAD as a plain file. Not probed (git 2.43 has no reftable), so refused
+    rather than tried."""
+    p = trial_git(repo, ["config", "--get", "extensions.refStorage"], ok=(0, 1))
+    value = p.stdout.strip().lower()
+    if p.returncode == 0 and value != "files":
+        return (f"`lane trial` can't build its tree in a repo whose refs are in {shown(value)} "
+                "(extensions.refStorage): its tree's own git dir holds HEAD as a plain file")
+    return None
 
 
 def clear_tree(tmpdir: str) -> None:
@@ -3869,6 +3885,8 @@ def cmd_trial(args) -> int:
                         "scratch trees by path, safe only where the sandbox bounds what a symlink "
                         "swapped in for one could reach")
     args.links = trial_links(repo, args.link)  # refused now, never after a wait for the lock
+    if why := ref_storage_problem(repo):  # likewise
+        raise LaneError(why)
     if held_by_caller(repo, TRIAL_LOCK):  # held_lock would let it in, and its sweep then clear
         raise LaneError(f"a trial can't run under a hold of the {TRIAL_LOCK} lock (inside "
                         "another trial's suite, or `lane lock suite`): an outer trial's live tree "

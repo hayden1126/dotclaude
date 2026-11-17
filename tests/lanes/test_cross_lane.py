@@ -1522,6 +1522,19 @@ class Trial(LaneWork):
         self.assertIn("what clears it", p.stdout)
         self.assertNotIn("how to remove", p.stdout)
 
+    def test_a_reftable_repo_is_refused_before_the_lock(self):
+        # Its HEAD lives in a reftable stack the tree's own git dir lacks, so it is refused
+        # rather than tried (not probed: git 2.43 has no reftable). git's answer stands in here.
+        mod = load_lane_script()
+        repo = lanelib.Repo(self.alpha, self.common)
+        self.assertIsNone(mod.ref_storage_problem(repo))  # no extensions.refStorage
+        self.git("config", "extensions.refStorage", "files")
+        self.assertIsNone(mod.ref_storage_problem(repo))
+        told = subprocess.CompletedProcess([], 0, "reftable\n", "")
+        with mock.patch.object(mod, "trial_git", return_value=told):
+            self.assertIn("refs are in reftable (extensions.refStorage)",
+                          mod.ref_storage_problem(repo))
+
     def test_a_symlinked_trial_dir_is_refused(self):
         away = os.path.join(self.tmp, "away")
         os.makedirs(away)

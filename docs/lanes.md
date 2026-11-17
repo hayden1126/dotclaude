@@ -611,8 +611,12 @@ that names `suite`.
    holds its HEAD and index and a `commondir` file naming the shared common dir
    (gitrepository-layout(5)), so git in the tree sees the repo's objects, refs and config as a
    linked worktree does, and `lane` there finds the repo and its locks; `git worktree list`
-   never shows it. gc in the repo can't see the tree's HEAD, so the trial's dangling commits
-   outlive a run only by gc's prune grace (2 weeks by default). The tree then gets set up as the
+   never shows it. gc in the repo can't see the tree's HEAD, so a gc that prunes dangling
+   objects (past `gc.pruneExpire`, 2 weeks by default, or at once with `now`) takes the trial's
+   commit: a run fails on a bad object, and a `--keep` tree older than the grace reads
+   `bad object HEAD` (probed on git 2.43, 2026-11-17). A repo whose refs are in reftable
+   (`extensions.refStorage`) keeps a tree's HEAD in a reftable stack, which this git dir lacks, so
+   the trial refuses it up front (not probed: git 2.43 has no reftable). The tree then gets set up as the
    lane's own tests ran: the lane's gitignored files
    that its `.worktreeinclude` matches are copied in (from the lane, not main, so the suites see
    the lane's copies; git's names are read with `-z`, so a non-ASCII name is never quoted), and
