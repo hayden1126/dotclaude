@@ -21,11 +21,13 @@ cause of every drift case in the 2026-09-29 evaluation (`docs/delegation.md` in 
 | Change files | `writer`, with `isolation: "worktree"` **on the Agent call** | Everything, inside its own worktree and branch. Commits, never pushes |
 | A long build, a second opinion, or anything about Codex itself | `codex-delegate run` | Pinned Sol or Terra (Astra opt-in), workspace-write sandbox, memory cap, schema report |
 
-- Use `general-purpose` only when no role fits, and say why in the brief. The three uses
+- Use `general-purpose` only when no role fits, and say why in the brief. The four uses
   that have no role today:
   - Workflow agents that read sources and write output files (vetting-sources);
   - hq cross-home dispatch, where the target is another home;
-  - messaged persona readers (staged-reader-review).
+  - messaged persona readers (staged-reader-review);
+  - reads through an MCP server's tools: Explore's and researcher's tool lists hold no MCP
+    tools, and the policy still allows only the listed reads (section 1b).
 
   Read-only work belongs to Explore, researcher or reviewer, and changes belong to writer.
   In the 2026-09-29 evaluation, all 5 general-purpose subagents that misbehaved had read-only
