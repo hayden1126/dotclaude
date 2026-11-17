@@ -216,6 +216,12 @@ repo that turns the sandbox off loses subagent Bash; the policy still applies.
     writable by group or others. The hook checks the open file's resolved path, so a symlink
     into a directory someone else owns is ignored. Ownership, not the sandbox, is the guard: a
     sandbox-off Bash call runs as Hayden, and the kernel refuses it a write to `/etc`.
+  - The path is fixed, with no override: a user can mount a filesystem (FUSE) that reports root
+    as the owner of anything, so only a path a user can't mount over is safe to trust.
+    `$DELEGATION_NO_OVERLAY` switches the overlay off, which only narrows; the tests set it so
+    a subprocess never reads the real file.
+  - Inside the sandbox root shows as uid 65534, so a sandboxed `delegation-ledger audit` (a
+    piped one, say) warns that the file isn't root-owned. The hook and a bare audit run outside.
   - Anything else makes the whole file add nothing, so it never widens past `policy.toml`: a
     file root doesn't own, a stray key, a bad entry, TOML that won't parse, a file over 64 KiB
     or one that isn't a regular file. A missing or empty file is a no-op.
@@ -224,8 +230,7 @@ repo that turns the sandbox off loses subagent Bash; the policy still applies.
     which exits 1).
   - Install it from a terminal, not a `!` line in a session, since sudo needs a tty:
     `sudo install -d -o root -g root -m 755 /etc/dotclaude && sudo install -o root -g root -m
-    644 <file> /etc/dotclaude/policy.local.toml`. `$DELEGATION_OVERLAY` points the hook at
-    another path for tests; the owner check still applies there.
+    644 <file> /etc/dotclaude/policy.local.toml`.
 - **Protected writes:** file tools and literal Bash targets are realpath-resolved, so symlinks count.
   The protected paths are:
   - `~/.claude`, the project's `.claude` (except `.claude/worktrees`) and `.mcp.json`;

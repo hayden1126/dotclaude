@@ -1066,10 +1066,10 @@ class Analyzer:
             return
         note = ""
         if status.startswith("ignored: "):
-            note = (f" (the local overlay {dc.overlay_path()} was "
+            note = (f" (the local overlay {dc.OVERLAY_PATH} was "
                     f"{status.replace(': ', ' as ', 1)})")
         self.deny("mcp-write", "manual_only", f"{tool} is not on the read-only MCP list "
-                  f"(policy.toml [mcp] or {dc.overlay_path()}){note}")
+                  f"(policy.toml [mcp] or {dc.OVERLAY_PATH}){note}")
 
     def deadline(self, tool):
         """Past the role's stop budget for this activation, deny every tool but [deadline]

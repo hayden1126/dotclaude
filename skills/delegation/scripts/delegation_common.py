@@ -172,15 +172,11 @@ def path_conflict(path, roots, contains=False):
     return None
 
 
+# The machine-local MCP overlay, outside git so this public repo never names a private server's
+# tools. The path is fixed: an override would let a user point it at a filesystem whose owners
+# the user picks (a FUSE mount reports uid 0 for whatever it likes). Tests patch it in process.
 OVERLAY_PATH = "/etc/dotclaude/policy.local.toml"
 OVERLAY_MAX_BYTES = 64 * 1024
-
-
-def overlay_path():
-    """The machine-local MCP overlay, or $DELEGATION_OVERLAY (the tests point it elsewhere). It
-    lives outside git so this public repo never names a private server's tools. The override
-    widens nothing: load_overlay trusts a file by its owner, wherever it lies."""
-    return os.environ.get("DELEGATION_OVERLAY") or OVERLAY_PATH
 
 
 def _root_only(st):
@@ -222,12 +218,15 @@ def _overlay_entry_ok(entry):
 
 
 def load_overlay():
-    """(tools, status) for the overlay at overlay_path(). It can only add [mcp] read_tools, so
-    every failure adds nothing: status is "absent" (missing, empty or /dev/null), "ok", or
-    "ignored: <reason>". The file counts only when root owns it and every directory above it
-    (_root_only, checked on the open file's resolved path, so a symlink into a directory
-    someone else owns fails). Never raises."""
-    path = overlay_path()
+    """(tools, status) for the overlay at OVERLAY_PATH. It can only add [mcp] read_tools, so
+    every failure adds nothing: status is "absent" (missing or empty, or switched off by
+    $DELEGATION_NO_OVERLAY, which only narrows, so the tests' subprocesses never read the real
+    file), "ok", or "ignored: <reason>". The file counts only when root owns it and every
+    directory above it (_root_only, checked on the open file's resolved path, so a symlink into
+    a directory someone else owns fails). Never raises."""
+    if os.environ.get("DELEGATION_NO_OVERLAY"):
+        return [], "absent"
+    path = OVERLAY_PATH
     try:
         fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK)  # a FIFO must not hang the hook
     except FileNotFoundError:
@@ -236,14 +235,12 @@ def load_overlay():
         return [], f"ignored: unreadable ({type(e).__name__}: {e})"
     try:
         st = os.fstat(fd)
-        if not stat.S_ISREG(st.st_mode):  # before fdopen, which raises on a directory
-            os.close(fd)
-            if stat.S_ISCHR(st.st_mode) and st.st_rdev == os.stat("/dev/null").st_rdev:
-                return [], "absent"
-            return [], "ignored: not a regular file"
     except OSError as e:
         os.close(fd)
         return [], f"ignored: unreadable ({type(e).__name__}: {e})"
+    if not stat.S_ISREG(st.st_mode):  # before fdopen, which raises on a directory
+        os.close(fd)
+        return [], "ignored: not a regular file"
     with os.fdopen(fd, "rb") as f:
         try:
             data = f.read(OVERLAY_MAX_BYTES + 1)

@@ -26,6 +26,7 @@ from _paths import HOOKS, REPO, SCRIPTS, load_script
 
 sp = load_script("subagent-policy")
 POLICY = sp.load_policy()
+OVERLAY_PATH = sp.dc.OVERLAY_PATH  # before Base patches it
 SCRIPT = os.path.join(SCRIPTS, "subagent-policy")
 SHIM = os.path.join(HOOKS, "subagent-policy.sh")
 with open(os.path.join(REPO, "settings.json")) as f:
@@ -67,9 +68,12 @@ class Base(unittest.TestCase):
         os.environ.pop("CLAUDE_CONFIG_DIR", None)  # the settings and sessions live in the fake home
         self.tmp = tempfile.TemporaryDirectory(prefix="sp-test-", dir=TEST_TMP)
         self.home = os.path.realpath(self.tmp.name)
-        # The MCP overlay too: never the real /etc one.
-        os.environ["DELEGATION_OVERLAY"] = os.path.join(self.home, "etc", "dotclaude",
-                                                        "policy.local.toml")
+        # The MCP overlay too, never the real /etc one: a temp path here, none in a subprocess.
+        overlay = mock.patch.object(sp.dc, "OVERLAY_PATH", os.path.join(
+            self.home, "etc", "dotclaude", "policy.local.toml"))
+        overlay.start()
+        self.addCleanup(overlay.stop)
+        os.environ["DELEGATION_NO_OVERLAY"] = "1"
         os.makedirs(os.path.join(self.home, ".claude"))
         self.write_settings({"sandbox": BASELINE["sandbox"]})
         self.proj = os.path.join(self.home, "code", "proj")
@@ -1173,13 +1177,14 @@ class Overlay(Base):
 
     def setUp(self):
         super().setUp()
+        os.environ.pop("DELEGATION_NO_OVERLAY")
         self.root_only = sp.dc._root_only
         trust = mock.patch.object(sp.dc, "_root_only", return_value=True)
         self.trust = trust.start()
         self.addCleanup(trust.stop)
 
     def overlay(self, text):
-        path = sp.dc.overlay_path()
+        path = sp.dc.OVERLAY_PATH
         os.makedirs(os.path.dirname(path), exist_ok=True)
         with open(path, "w") as f:
             f.write(text)
@@ -1201,10 +1206,31 @@ class Overlay(Base):
         self.assertEqual(tools, [], text)
         self.assertTrue(status.startswith("ignored: "), (text, status))
 
-    def test_the_path_is_fixed_in_etc(self):
-        os.environ.pop("DELEGATION_OVERLAY")
-        os.environ["XDG_CONFIG_HOME"] = self.home  # no longer consulted
-        self.assertEqual(sp.dc.overlay_path(), "/etc/dotclaude/policy.local.toml")
+    def test_the_path_is_fixed_in_etc_and_the_environment_only_switches_it_off(self):
+        # A path override would let a user pick a filesystem whose owners it reports (FUSE).
+        self.assertEqual(OVERLAY_PATH, "/etc/dotclaude/policy.local.toml")
+        self.overlay(self.GOOD)
+        elsewhere = os.path.join(self.home, "elsewhere.toml")
+        with open(elsewhere, "w") as f:
+            f.write('[mcp]\nread_tools = ["mcp__example__delete_page"]\n')
+        os.environ.update(DELEGATION_OVERLAY=elsewhere, XDG_CONFIG_HOME=self.home)
+        self.assertEqual(sp.dc.load_overlay()[0], ["mcp__example__get_page", "mcp__example__list_*"])
+        os.environ["DELEGATION_NO_OVERLAY"] = "1"
+        self.assertEqual(sp.dc.load_overlay(), ([], "absent"))
+        self.assertDenied(self.decide("mcp__example__get_page", {}), "mcp-write")
+
+    def test_the_owner_walk_passes_real_root_owned_directories(self):
+        # Every other case patches the owner check. Here only the uid is mapped: the sandbox
+        # shows root as nobody, so whoever owns / stands in for root.
+        root = os.stat("/").st_uid
+        st = os.stat("/etc/passwd")
+        if st.st_uid != root or st.st_mode & 0o22:
+            self.skipTest("/etc/passwd is not owned like /")
+        self.trust.side_effect = lambda s: self.root_only(types.SimpleNamespace(
+            st_uid=0 if s.st_uid == root else s.st_uid, st_mode=s.st_mode))
+        with mock.patch.object(sp.dc, "OVERLAY_PATH", "/etc/passwd"):
+            status = sp.dc.load_overlay()[1]
+        self.assertTrue(status.startswith("ignored: not valid TOML"), status)  # past the owners
 
     def test_the_overlay_adds_exact_names_and_globs(self):
         self.overlay(self.GOOD)
@@ -1228,8 +1254,6 @@ class Overlay(Base):
         self.overlay("")
         self.assertEqual(sp.dc.load_overlay(), ([], "absent"))
         self.assertIsNone(self.decide("mcp__notion__notion-fetch", {}))  # the base list stands
-        os.environ["DELEGATION_OVERLAY"] = os.devnull
-        self.assertEqual(sp.dc.load_overlay(), ([], "absent"))
 
     def test_a_file_root_does_not_own_is_ignored(self):
         path = self.overlay(self.GOOD)
@@ -1267,7 +1291,7 @@ class Overlay(Base):
         os.makedirs(outside)
         with open(os.path.join(outside, "o.toml"), "w") as f:
             f.write(self.GOOD)
-        path = sp.dc.overlay_path()
+        path = sp.dc.OVERLAY_PATH
         os.makedirs(os.path.dirname(path))
         os.symlink(os.path.join(outside, "o.toml"), path)
         bad = os.stat(outside)
@@ -1313,7 +1337,7 @@ class Overlay(Base):
         self.assertEqual(sp.dc.load_overlay()[1], "ok")
 
     def test_a_directory_is_refused_without_raising(self):
-        os.makedirs(sp.dc.overlay_path())
+        os.makedirs(sp.dc.OVERLAY_PATH)
         self.assertEqual(sp.dc.load_overlay(), ([], "ignored: not a regular file"))
         self.assertIn("not a regular file", self.message("mcp__example__get_page"))
 
@@ -1321,7 +1345,7 @@ class Overlay(Base):
         self.assert_adds_nothing(self.GOOD + "#" * 70000 + "\n", "too large")
 
     def test_a_fifo_is_refused_without_hanging(self):
-        path = sp.dc.overlay_path()
+        path = sp.dc.OVERLAY_PATH
         os.makedirs(os.path.dirname(path))
         os.mkfifo(path)
         t = time.monotonic()

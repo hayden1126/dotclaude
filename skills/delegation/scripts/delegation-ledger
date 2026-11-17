@@ -790,12 +790,12 @@ def overlay_audit(say):
     it widens what delegated agents may call. Returns the warning count."""
     extra, status = dc.load_overlay()
     if status == "ok":
-        say(f"info MCP overlay {dc.overlay_path()} adds {len(extra)} read tool(s): "
+        say(f"info MCP overlay {dc.OVERLAY_PATH} adds {len(extra)} read tool(s): "
             f"{', '.join(extra)}")
     elif status == "absent":
         say("ok   MCP overlay: none")
     else:
-        say(f"WARN MCP overlay {dc.overlay_path()} {status}. It adds nothing until fixed.")
+        say(f"WARN MCP overlay {dc.OVERLAY_PATH} {status}. It adds nothing until fixed.")
         return 1
     return 0
 
