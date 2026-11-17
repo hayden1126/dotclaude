@@ -23,6 +23,7 @@ import math
 import os
 import re
 import secrets
+import stat
 import subprocess
 import tempfile
 import time
@@ -171,13 +172,135 @@ def path_conflict(path, roots, contains=False):
     return None
 
 
+# The machine-local MCP overlay, outside git so this public repo never names a private server's
+# tools. The path is fixed: an override would let a user point it at a filesystem whose owners
+# the user picks (a FUSE mount reports uid 0 for whatever it likes). Tests patch it in process.
+OVERLAY_PATH = "/etc/dotclaude/policy.local.toml"
+OVERLAY_MAX_BYTES = 64 * 1024
+
+
+def _root_only(st):
+    """Owned by root and writable by root alone: no session or agent, sandboxed or not, can
+    change it. A sticky /tmp (mode 1777) fails, as it should."""
+    return st.st_uid == 0 and not st.st_mode & (stat.S_IWGRP | stat.S_IWOTH)
+
+
+def _not_root_owned(real, st):
+    """(path, stat) of the first of the file at real (st, from its open fd) and the directories
+    above it that isn't _root_only; None when all are. A writable directory anywhere above
+    would let its owner swap the file out."""
+    if not _root_only(st):
+        return real, st
+    d = real
+    while d != "/":
+        d = os.path.dirname(d)
+        dst = os.lstat(d)  # real is resolved, so a link here was swapped in since
+        if not (stat.S_ISDIR(dst.st_mode) and _root_only(dst)):
+            return d, dst
+    return None
+
+
+# An overlay entry: mcp__<server>__<tool> in a fixed alphabet whose one wildcard is `*`. With no
+# `[` (a bracket set can hide a `__` or a wildcard from any text check: `mcp__x_[__]*` is
+# `mcp__x__*` to fnmatch) and no `?`, every other character is literal to fnmatch, so each `__`
+# is a real separator, and the tool part must start with a literal character, as every [mcp]
+# entry does (`get_*`). A tool part that starts with `*` matches every tool on the server.
+# The tool part can't start with `_` either: `mcp__srv___*` would read as server srv, tool `_*`,
+# but it is `*` on a server named srv_. A known limit no spelling rule closes: Claude Code joins
+# server and tool with `__` and turns punctuation into `_`, so a server named `a (beta)` gives
+# tools `mcp__a__beta__...`, which `mcp__a__b*` matches. Glob only a server whose name no other
+# server's extends, or list exact names.
+OVERLAY_ENTRY = re.compile(r"mcp__[A-Za-z0-9_.*-]+__[A-Za-z0-9.-][A-Za-z0-9_.*-]*")
+
+
+def _overlay_entry_ok(entry):
+    return isinstance(entry, str) and OVERLAY_ENTRY.fullmatch(entry) is not None
+
+
+def load_overlay():
+    """(tools, status) for the overlay at OVERLAY_PATH. It can only add [mcp] read_tools, so
+    every failure adds nothing: status is "absent" (missing or empty, or switched off by
+    $DELEGATION_NO_OVERLAY, which only narrows, so the tests' subprocesses never read the real
+    file), "ok", or "ignored: <reason>". The file counts only when root owns it and every
+    directory above it (_root_only, checked on the open file's resolved path, so a symlink into
+    a directory someone else owns fails). Never raises."""
+    if os.environ.get("DELEGATION_NO_OVERLAY"):
+        return [], "absent"
+    path = OVERLAY_PATH
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK)  # a FIFO must not hang the hook
+    except FileNotFoundError:
+        return [], "absent"
+    except (OSError, ValueError) as e:
+        return [], f"ignored: unreadable ({type(e).__name__}: {e})"
+    try:
+        st = os.fstat(fd)
+    except OSError as e:
+        os.close(fd)
+        return [], f"ignored: unreadable ({type(e).__name__}: {e})"
+    if not stat.S_ISREG(st.st_mode):  # before fdopen, which raises on a directory
+        os.close(fd)
+        return [], "ignored: not a regular file"
+    with os.fdopen(fd, "rb") as f:
+        try:
+            data = f.read(OVERLAY_MAX_BYTES + 1)
+            real = fd_path(fd, path)
+            weak = _not_root_owned(real, st)
+        except OSError as e:
+            return [], f"ignored: unreadable ({type(e).__name__}: {e})"
+    if not data.strip():
+        return [], "absent"
+    if weak:
+        where, wst = weak
+        return [], (f"ignored: not root-owned ({where} has owner uid {wst.st_uid} and mode "
+                    f"{stat.filemode(wst.st_mode)}; root must own the file and every "
+                    "directory above it, writable by root alone)")
+    if len(data) > OVERLAY_MAX_BYTES:
+        return [], f"ignored: too large (over {OVERLAY_MAX_BYTES} bytes)"
+    try:
+        doc = tomllib.loads(data.decode("utf-8"))
+    except (UnicodeDecodeError, tomllib.TOMLDecodeError, RecursionError) as e:  # deep nesting
+        return [], f"ignored: not valid TOML ({type(e).__name__}: {e})"
+    mcp = doc.get("mcp")
+    if set(doc) != {"mcp"} or not isinstance(mcp, dict) or set(mcp) != {"read_tools"}:
+        return [], "ignored: the file may hold only [mcp] read_tools"
+    tools = mcp["read_tools"]
+    if not isinstance(tools, list) or not all(isinstance(t, str) for t in tools):
+        return [], "ignored: read_tools must be a list of strings"
+    bad = [t for t in tools if not _overlay_entry_ok(t)]
+    if bad:
+        return [], ("ignored: each entry must be mcp__<server>__<tool> in letters, digits, "
+                    "`_`, `.`, `-` and the wildcard `*`, with a tool part that starts with a "
+                    f"literal character, so none matches a whole server; refused: {bad[:5]}")
+    return list(tools), "ok"
+
+
+PROC_FD = "/proc/self/fd"
+
+
+def fd_path(fd, path):
+    """The resolved path of the file open at fd: /proc on Linux, F_GETPATH on macOS (which has
+    no /proc, where realpath would hand back the /proc path unresolved), else path's realpath,
+    which can't catch a link swapped in after the open."""
+    proc = f"{PROC_FD}/{fd}"
+    if os.path.lexists(proc):
+        return os.path.realpath(proc)
+    if hasattr(fcntl, "F_GETPATH"):
+        try:
+            got = fcntl.fcntl(fd, fcntl.F_GETPATH, bytes(1024))
+            return os.path.realpath(os.fsdecode(got.split(b"\0", 1)[0]))
+        except OSError:
+            pass
+    return os.path.realpath(path)
+
+
 def open_unprotected(path):
     """path opened for binary reading, unless the file it reaches lies under a read-protected
     path (PermissionError). Checked on the open file, so a link swapped in after an earlier check
     is caught: a waiter reads its log outside the sandbox for as long as it waits."""
     f = open(path, "rb")
     try:
-        real = os.path.realpath(f"/proc/self/fd/{f.fileno()}")
+        real = fd_path(f.fileno(), path)
     except OSError:
         real = os.path.realpath(path)
     try:

@@ -1,4 +1,5 @@
 """delegation-ledger and the shared report validator."""
+import contextlib
 import datetime
 import json
 import os
@@ -87,6 +88,7 @@ class LedgerEnv(unittest.TestCase):
         self.env.pop("CLAUDE_PID", None)
         self.env.pop("SANDBOX_RUNTIME", None)
         self.env.pop("CLAUDE_CONFIG_DIR", None)  # the sessions dir lives in the fake home
+        self.env["DELEGATION_NO_OVERLAY"] = "1"  # audit never reads the real /etc MCP overlay
         self.ledger = os.path.join(self.tmp.name, "state", "dotclaude", "delegations.jsonl")
 
     def tearDown(self):
@@ -1486,6 +1488,65 @@ class Tables(unittest.TestCase):
                                               "quiet_max", "past_silent")},
                          {"kind": "subagent", "n": 2, "read": 1, "call_max": 40,
                           "past_tool": 1, "quiet_max": 4, "past_silent": 0})
+
+
+class OverlayAudit(LedgerEnv):
+    """audit names what the machine-local MCP overlay adds, or why it adds nothing."""
+
+    GOOD = '[mcp]\nread_tools = ["mcp__example__get_page", "mcp__example__list_*"]\n'
+
+    def overlay(self, text):
+        # Resolved, since the status names the open file's resolved path (/private/var on macOS).
+        path = os.path.join(os.path.realpath(self.tmp.name), "etc", "dotclaude",
+                            "policy.local.toml")
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w") as f:
+            f.write(text)
+        return path
+
+    def overlay_lines(self, path, trust=True):
+        """ledger_mod.overlay_audit run here on path, the only way to point it there, and with
+        trust, the owner check passing a temp file (a test can't make a root-owned one):
+        (warnings, lines)."""
+        lines = []
+        with contextlib.ExitStack() as stack:
+            stack.enter_context(mock.patch.dict(os.environ))
+            os.environ.pop("DELEGATION_NO_OVERLAY", None)
+            stack.enter_context(mock.patch.object(ledger_mod.dc, "OVERLAY_PATH", path))
+            if trust:
+                stack.enter_context(mock.patch.object(ledger_mod.dc, "_root_only",
+                                                      return_value=True))
+            return ledger_mod.overlay_audit(lines.append), lines
+
+    def test_no_overlay_is_ok(self):
+        p = subprocess.run(["python3", LEDGER, "audit"], capture_output=True, text=True,
+                           env=self.env)
+        self.assertIn("ok   MCP overlay: none", p.stdout)
+        self.assertEqual(p.returncode, 0, p.stdout)
+        self.assertEqual(self.overlay_lines(os.path.join(self.tmp.name, "missing.toml")),
+                         (0, ["ok   MCP overlay: none"]))
+
+    def test_a_good_overlay_names_its_entries(self):
+        path = self.overlay(self.GOOD)
+        self.assertEqual(self.overlay_lines(path), (0, [
+            f"info MCP overlay {path} adds 2 read tool(s): mcp__example__get_page, "
+            "mcp__example__list_*"]))
+
+    def test_an_overlay_root_does_not_own_warns(self):
+        path = self.overlay(self.GOOD)
+        warn, lines = self.overlay_lines(path, trust=False)
+        self.assertEqual(warn, 1)
+        self.assertEqual(len(lines), 1)
+        self.assertTrue(lines[0].startswith(
+            f"WARN MCP overlay {path} ignored: not root-owned ({path} "), lines)
+
+    def test_an_ignored_overlay_warns(self):
+        path = self.overlay('[mcp]\nread_tools = ["mcp__example__*"]\n')
+        warn, lines = self.overlay_lines(path)
+        self.assertEqual(warn, 1)
+        self.assertEqual(len(lines), 1)
+        self.assertTrue(lines[0].startswith(f"WARN MCP overlay {path} ignored: each entry "),
+                        lines)
 
 
 class MonthlyAudit(LedgerEnv):

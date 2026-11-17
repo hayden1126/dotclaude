@@ -785,6 +785,21 @@ def report_roles(policy):
                                                        "writer"}
 
 
+def overlay_audit(say):
+    """Name what the machine-local MCP overlay adds, or why it adds nothing (dc.load_overlay):
+    it widens what delegated agents may call. Returns the warning count."""
+    extra, status = dc.load_overlay()
+    if status == "ok":
+        say(f"info MCP overlay {dc.OVERLAY_PATH} adds {len(extra)} read tool(s): "
+            f"{', '.join(extra)}")
+    elif status == "absent":
+        say("ok   MCP overlay: none")
+    else:
+        say(f"WARN MCP overlay {dc.OVERLAY_PATH} {status}. It adds nothing until fixed.")
+        return 1
+    return 0
+
+
 def cmd_audit(args):
     """Is enforcement still binding? Prints findings; exits 1 if any warning. --monthly widens
     the window to a month and adds the usage sections (see `usage`)."""
@@ -856,6 +871,7 @@ def cmd_audit(args):
     say(f"info policy denials in the last {hours:g}h: {sum(denials.values())}")
     for (atype, rule), n in denials.most_common(10):
         say(f"       {n:3}  {atype}  {rule}")
+    warn += overlay_audit(say)
     if args.monthly:
         warn += usage(every, horizon, hours, policy, say)
     try:
