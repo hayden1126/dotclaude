@@ -314,7 +314,7 @@ class SetKeyTest(unittest.TestCase):
                 self.fails("HW3 UNCHECKED Q3")
                 self.edit(wrapped, "**Shape:** prove\n**Shape:** compute\n")
         for after in ("**Conventions:** as the table of §2 says\n", "\nThe table above is traced.\n",
-                      "Solution [HW3S p.1]: the table\n", "- a traced table\n", "```\nx\n```\nthe traced table\n",
+                      "- a traced table\n", "```\nx\n```\nthe traced table\n", "Pages: [HW3 p.2]\n",
                       "### [HW3 Q8] x\ntraced table\n**Shape:** prove\n",
                       "#### [HW4 Q2] y\n**Shape:** compute\n"):
             with self.subTest(after=after):

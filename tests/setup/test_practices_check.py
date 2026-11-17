@@ -9,8 +9,9 @@ lists the uuids it kept) followed by an isCompactSummary user row; a subagent's 
 event JSON on stdin of `bash hooks/practices-check.sh`.
 
 The samples check loads every tests/setup/practices_samples/*.toml ([[sample]] kind, id, fires,
-path, content) against skills/<file stem>/events.toml, and every shipped skills/*/events.toml
-must parse, keep unique ids and pass the backtracking lint.
+path, content; kind = "bash" takes a command as content and no path) against
+skills/<file stem>/events.toml, and every shipped skills/*/events.toml must parse, keep unique ids
+and pass the backtracking lint.
 """
 import contextlib
 import glob
@@ -18,10 +19,12 @@ import hashlib
 import importlib.machinery
 import importlib.util
 import io
+import itertools
 import json
 import os
 import pwd
 import re
+import shlex
 import shutil
 import signal
 import stat
@@ -678,24 +681,25 @@ class L4(Base):
         self.rows([use("t1", "Skill", skill="lanes"), text()])
         self.assertIsNone(self.digest())
 
-    def test_a_long_digest_stays_under_2000_characters(self):
+    def test_a_long_digest_stays_under_the_cap(self):
+        self.assertLess(PC.DIGEST_MAX, 10000)  # Claude Code files a longer hook string away
         self.skill("demo", 'skill = "demo"\ngate = [' + ", ".join(
-            [json.dumps("x" * 400)] * 6) + "]\n")
+            [json.dumps("x" * 1200)] * 6) + "]\n")
         self.loaded()
         ctx = self.digest()
-        self.assertLess(len(ctx), 2000)
+        self.assertLess(len(ctx), PC.DIGEST_MAX)
         self.assertTrue(ctx.startswith("Practices skills loaded before this compaction: demo."))
 
     def test_each_loaded_skill_gets_its_share_cut_only_between_lines(self):
-        # A long gate no longer crowds out the next skill: the 2,000 characters are shared
-        # per skill, and a skill's lines are cut only between lines, never mid-line.
-        long_ = [f"Alpha line {n}: " + "a" * 150 for n in range(12)]
+        # A long gate no longer crowds out the next skill: DIGEST_MAX is shared per skill, and
+        # a skill's lines are cut only between lines, never mid-line.
+        long_ = [f"Alpha line {n}: " + "a" * 530 for n in range(12)]
         self.skill("alpha", 'skill = "alpha"\ngate = ' + json.dumps(long_) + "\n")
         self.skill("beta", 'skill = "beta"\ngate = ["Beta one.", "Beta two."]\n')
         self.rows([*load("t1", "Skill", skill="alpha"), *load("t2", "Skill", skill="beta"),
                    text()])
         ctx = self.digest()
-        self.assertLess(len(ctx), 2000)
+        self.assertLess(len(ctx), PC.DIGEST_MAX)
         self.assertIn("\n- Beta one.\n- Beta two.", ctx)
         self.assertIn(f"\n- {long_[0]}\n", ctx)
         for line in (x[2:] for x in ctx.split("\n") if x.startswith("- ")):
@@ -1490,10 +1494,14 @@ def check_samples(sample_file, skill_dir):
         except KeyError as e:
             wrong.append(f"{s['kind']} {s['id']}: no key shape {e}")
             continue
-        fn = PC.event_fires if s["kind"] == "event" else PC.rule_fires
-        got = fn(item, s["path"], PC.scan_text(content))
+        if s["kind"] == "bash":
+            got = bool(PC.bash_lines(item, PC.bash_text(content)))
+        else:
+            fn = PC.event_fires if s["kind"] == "event" else PC.rule_fires
+            got = fn(item, s["path"], PC.scan_text(content))
         if got != s["fires"]:
-            wrong.append(f"{s['kind']} {s['id']} on {s['path']}: fired={got}, want {s['fires']}")
+            wrong.append(f"{s['kind']} {s['id']} on {s.get('path', 'a Bash call')}: fired={got}, "
+                         f"want {s['fires']}")
     return wrong
 
 
@@ -1504,6 +1512,8 @@ def regexes(skill):
         yield r["id"], r["when"]
         if r.get("unless"):
             yield r["id"], r["unless"]
+        if r.get("command"):
+            yield r["id"], r["command"]
 
 
 class Shipped(unittest.TestCase):
@@ -1576,20 +1586,108 @@ class Shipped(unittest.TestCase):
                     for g in item.get("paths", []):
                         PC.re.compile(PC.glob_regex(g))
 
-    def test_a_digest_of_every_shipped_skill_keeps_a_full_line_of_each(self):
-        # As installed: each skill's SKILL.md path under ~/.claude/skills.
+    GATE_BUDGET = 1000  # characters of gate lines per skill, so no one gate takes the room
+
+    def shipped(self, home):
         skills = {}
         for f in sorted(glob.glob(os.path.join(REPO, "skills", "*", "events.toml"))):
             skill, why = PC.load_skill(os.path.dirname(f))
             self.assertIsNone(why)
-            skill["dir"] = os.path.join(os.path.expanduser("~"), ".claude", "skills",
-                                        os.path.basename(os.path.dirname(f)))
+            skill["dir"] = os.path.join(home, ".claude", "skills", skill["name"])
             skills[skill["name"]] = skill
+        return skills
+
+    def test_a_digest_of_every_shipped_skill_keeps_every_line(self):
+        # A skill over its share loses whole lines from the end, silently to the model, so the
+        # whole suite must fit, from a home longer than most.
+        skills = self.shipped("/home/a-longer-user-name")
         ctx = PC.digest(sorted(skills), skills)
-        self.assertLess(len(ctx), 2000)
+        self.assertLess(len(ctx), PC.DIGEST_MAX)
+        self.assertNotIn("more in its SKILL.md", ctx)
         for name, skill in skills.items():
+            for line in skill["gate"]:
+                with self.subTest(skill=name, line=line[:30]):
+                    self.assertIn(f"\n- {line}", ctx)
+
+    def test_each_shipped_gate_stays_inside_its_budget(self):
+        # The cap no longer forces terse gates, so this does, per skill; the whole suite fitting
+        # is pinned above, and a new skill that breaks it is a choice to make, not a silent cut.
+        for name, skill in self.shipped(os.path.expanduser("~")).items():
             with self.subTest(skill=name):
-                self.assertTrue(any(f"\n- {line}\n" in ctx + "\n" for line in skill["gate"]))
+                self.assertLessEqual(sum(map(len, skill["gate"])), self.GATE_BUDGET)
+
+    def test_a_digest_that_fit_under_2000_is_unchanged(self):
+        # The raise from 2,000 changes nothing for a digest that wasn't cut, which is every
+        # recorded eval compaction but one, so their rows still describe what the hook sends.
+        skills, compared = self.shipped(os.path.expanduser("~")), 0
+        for k in range(1, len(skills) + 1):
+            for names in itertools.combinations(sorted(skills), k):
+                with mock.patch.object(PC, "DIGEST_MAX", 2000):
+                    old = PC.digest(list(names), skills)
+                if "more in its SKILL.md" in old:
+                    continue
+                compared += 1
+                with self.subTest(names=names):
+                    self.assertEqual(PC.digest(list(names), skills), old)
+        self.assertGreaterEqual(compared, len(skills))  # every skill alone fits, at least
+
+    def test_the_session_start_notes_never_push_the_context_past_the_cap(self):
+        # A project can add any number of copies; past Claude Code's 10,000 the model would see
+        # only a preview, and the digest's lines after it would be gone.
+        self.assertLess(PC.CONTEXT_MAX, 10000)
+        self.assertLess(PC.DIGEST_MAX + 200, PC.CONTEXT_MAX)
+        digest, note = "D" * (PC.DIGEST_MAX - 1), "N" * 450
+        for first in (digest, None):
+            for n in (0, 1, 7, 40):
+                with self.subTest(first=bool(first), n=n):
+                    out = PC.fit_context(first, [f"{note}{i}" for i in range(n)])
+                    self.assertLess(len(out), PC.CONTEXT_MAX)
+                    if first:
+                        self.assertTrue(out.startswith(digest))
+                    kept = sum(1 for i in range(n) if f"{note}{i}\n" in out + "\n")
+                    if kept < n:
+                        self.assertIn(f"({n - kept} more notes", out)
+                    else:
+                        self.assertNotIn("more notes", out)
+        self.assertEqual(PC.fit_context("a", ["b", "c"]), "a\nb\nc")
+        self.assertEqual(PC.fit_context(None, ["b", "c"]), "b\nc")
+        for size in range(9300, 9500, 7):  # the tail's own length counts, at the edge too
+            with self.subTest(size=size):
+                self.assertLess(len(PC.fit_context(None, ["x" * size, "y", "z"])), PC.CONTEXT_MAX)
+
+    def test_the_session_start_output_stays_under_the_cap_with_many_copies(self):
+        # Through with_notes, so the wiring counts: both strings Claude Code caps at 10,000.
+        lines = [f"this project has its own copy of the skill s{i}; both run" for i in range(400)]
+        notes = "\n".join(f"This project has its own copy of the installed practices skill s{i}: "
+                          + "x" * 400 for i in range(40))
+        digest = {"hookSpecificOutput": {"hookEventName": "SessionStart", "reloadSkills": True,
+                                         "additionalContext": "D" * (PC.DIGEST_MAX - 1)}}
+        for start in (None, digest, {"systemMessage": "engine note"}):
+            with self.subTest(start=bool(start)), \
+                    mock.patch.object(PC, "start_notes", return_value=(lines, notes)):
+                out = PC.with_notes(start, {})
+                self.assertLess(len(out["systemMessage"]), PC.CONTEXT_MAX)
+                self.assertIn("more (practices hooks)", out["systemMessage"])
+                ctx = out["hookSpecificOutput"]["additionalContext"]
+                self.assertLess(len(ctx), PC.CONTEXT_MAX)
+                self.assertIn("more notes on this project's copies", ctx)
+        lock = chr(0x1F512)  # two UTF-16 units, as Claude Code counts a string
+        heavy = PC.digest(["x"], {"x": {"dir": "/p/.claude/skills/x", "gate": [lock * 1000] * 5}})
+        self.assertLess(PC.units(heavy), PC.DIGEST_MAX)
+        self.assertIn("more in its SKILL.md", heavy)
+        self.assertEqual(PC.units(PC.cut_units(lock * 10, 5)), 4)
+        astral = [f"note {i} " + chr(0x1F600) * 250 for i in range(40)]  # two units each
+        out = PC.fit_context("D" * (PC.DIGEST_MAX - 1), astral)
+        self.assertLess(len(out.encode("utf-16-le")) // 2, PC.CONTEXT_MAX)
+        many = [f"crumb {i} " + "p" * 200 for i in range(200)]
+        with mock.patch.object(PC, "start_notes", return_value=(lines, notes)):
+            out = PC.with_notes({"systemMessage": PC.fit_joined(
+                "practices hooks:", many, " ", "; ", lambda n: f"and {n} more",
+                PC.CONTEXT_MAX // 2)}, {})
+            self.assertLess(len(out["systemMessage"]), PC.CONTEXT_MAX)
+        with mock.patch.object(PC, "start_notes", return_value=(["a", "b"], None)):
+            self.assertEqual(PC.with_notes(None, {})["systemMessage"], "practices hooks: a; b")
+            self.assertEqual(PC.with_notes({"systemMessage": "x"}, {})["systemMessage"], "x; a; b")
 
     def test_the_lint(self):
         for bad in ("(a+)+", "(a*)*", "(.*)+", r"(?:\s*,\s*\w+)*", "(ab|ab)*", "("):
@@ -4668,6 +4766,714 @@ class DependenciesSkill(unittest.TestCase):
         self.assertIn("references/lifecycle.md", body)
         self.assertIn(".claude/practices/dependencies.md", body)
         self.assertLess(len(body.splitlines()), 50)
+
+
+DATA_LAYER = os.path.join(REPO, "skills", "data-layer")
+MIGRATION = "supabase/migrations/20261107120000_users.sql"
+HEREDOC = (f"cat > {MIGRATION} <<'EOF'\n"
+           "alter table users rename column username to handle;\nEOF\n")
+PRINTF = f"f={MIGRATION}; printf 'alter table t rename column a to b;\\n' > \"$f\""
+# A rule with its own words, so a test can say what a pass runs without the shipped pattern.
+WORDS_RULE = """
+skill = "{name}"
+[[rule]]
+id = "{rule}"
+at = ["bash"]
+command = '''{command}'''
+when = '''{when}'''
+say = "Say this."
+"""
+
+
+def words_rule(name="words", rule="W-1", command="pathword", when="badword"):
+    return WORDS_RULE.format(name=name, rule=rule, command=command, when=when)
+
+
+def data_layer_samples(kind=None):
+    with open(os.path.join(SAMPLES, "data-layer.toml"), "rb") as f:
+        samples = tomllib.load(f)["sample"]
+    return [s for s in samples if kind is None or s["kind"] == kind]
+
+
+class TextBase(BashBase):
+    """REL-31 as installed: the shipped events.toml in the user's skills."""
+
+    def setUp(self):
+        super().setUp()
+        with open(os.path.join(DATA_LAYER, "events.toml")) as f:
+            self.skill("data-layer", f.read(), where="user")
+
+    def state_rows(self):
+        rows = []
+        for path in glob.glob(os.path.join(self.state, "dotclaude", "practices", "denies", "*")):
+            with open(path) as f:
+                rows += json.load(f)["keys"]
+        return rows
+
+
+class BashText(TextBase):
+    """The Bash text level: a rule with "bash" read against the raw command."""
+
+    def test_a_heredoc_is_denied_once_and_the_resend_passes(self):
+        self.assertTrue(self.pre(HEREDOC).startswith("[practices:L2:data-layer:REL-31:bash] "))
+        self.assertIsNone(self.pre(HEREDOC))
+
+    def test_a_one_line_printf_is_denied_once_and_the_resend_passes(self):
+        self.assertTrue(self.pre(PRINTF).startswith("[practices:L2:data-layer:REL-31:bash] "))
+        self.assertIsNone(self.pre(PRINTF))
+
+    def test_a_second_different_rename_is_denied_again(self):
+        self.assertIsNotNone(self.pre(HEREDOC))
+        self.assertIsNone(self.pre(HEREDOC))
+        other = HEREDOC.replace("username to handle", "nick to handle")
+        self.assertIsNotNone(self.pre(other))
+        self.assertIsNone(self.pre(other))
+
+    def test_a_heredoc_of_two_renames_is_one_deny_and_the_resend_passes(self):
+        both = (f"cat > {MIGRATION} <<'EOF'\nalter table users rename column a to b;\n"
+                "alter table users drop column nick;\nEOF\n")
+        self.assertIsNotNone(self.pre(both))
+        self.assertIsNone(self.pre(both))
+
+    def test_a_kept_line_plus_a_new_one_is_denied_for_the_new_one(self):
+        self.assertIsNotNone(self.pre(HEREDOC))
+        more = HEREDOC.replace("\nEOF", "\nalter table users drop column nick;\nEOF")
+        self.assertIsNotNone(self.pre(more))
+        self.assertIsNone(self.pre(more))
+
+    def test_the_key_is_the_skill_the_rule_and_the_line_s_hash(self):
+        self.pre(HEREDOC)
+        line = "alter table users rename column username to handle;"
+        self.assertEqual(self.state_rows(), [
+            f"L2b|data-layer|REL-31|{hashlib.sha1(line.encode()).hexdigest()}"])
+
+    def test_no_path_word_or_no_ddl_passes(self):
+        for command in ("printf 'alter table t rename column a to b;\\n' > \"$f\"",
+                        "psql -c 'drop table scratch_rows'",
+                        f"cat > {MIGRATION} <<'EOF'\nalter table users add column a text;\nEOF\n",
+                        "ls supabase/migrations"):
+            with self.subTest(command=command):
+                self.assertIsNone(self.pre(command))
+        self.assertEqual(self.state_rows(), [])
+
+    def test_the_reason_carries_the_say_and_the_resend_note_and_no_command_text(self):
+        reason = self.pre(HEREDOC)
+        skill, _ = PC.load_skill(DATA_LAYER)
+        self.assertIn(skill["rules"][0]["say"], reason)
+        self.assertIn("reads command text only", reason)
+        self.assertIn("resend", reason.rsplit("\n", 1)[-1].lower())
+        for word in ("username", "handle", "supabase", "cat >"):
+            self.assertNotIn(word, reason)
+
+    def test_practices_allow_in_the_command_passes_with_no_key(self):
+        allow = HEREDOC.replace("alter", "-- practices-allow: REL-31 the contract step\nalter", 1)
+        self.assertIsNone(self.pre(allow))
+        self.assertEqual(self.state_rows(), [])
+        self.assertIsNotNone(self.pre(HEREDOC.replace("alter",
+                                                      "-- practices-allow: REL-310 no\nalter", 1)))
+
+    def test_a_command_over_the_cap_is_skipped(self):
+        self.assertIsNone(self.pre(HEREDOC + "# " + "x" * PC.CMD_MAX))
+        self.assertEqual(self.state_rows(), [])
+        self.assertIsNotNone(self.pre(HEREDOC + "# " + "x" * (PC.CMD_MAX - len(HEREDOC) - 2)))
+
+    def test_a_spent_budget_allows_and_logs(self):
+        self.env["PRACTICES_TEST_BUDGET"] = "0"
+        self.assertIsNone(self.pre(HEREDOC))
+        self.assertIn("skipped data-layer:REL-31", self.log())
+        self.assertEqual(self.state_rows(), [])
+
+    def test_a_deny_whose_key_cant_be_kept_is_dropped(self):
+        os.makedirs(os.path.join(self.state, "dotclaude", "practices"))
+        with open(os.path.join(self.state, "dotclaude", "practices", "denies"), "w") as f:
+            f.write("a file where the folder goes")
+        self.assertIsNone(self.pre(HEREDOC))
+        self.assertIn("state-error", self.log())
+
+    def test_a_fault_is_logged_and_the_push_check_still_runs(self):
+        seen = []
+        with mock.patch.dict(os.environ, self.env, clear=True), \
+                mock.patch.object(PC, "discover", side_effect=KeyError("boom")), \
+                mock.patch.object(PC, "bash_calls",
+                                  side_effect=lambda e: seen.append(e) or ([], [], False)):
+            self.assertIsNone(PC.bash_pre(self.event(HEREDOC, "PreToolUse", "b1")))
+        self.assertEqual(len(seen), 1)
+        self.assertIn("crash", self.log())
+
+    def test_the_budget_is_put_back_after_a_deny_and_a_fault(self):
+        whole = PC.BUDGET
+        with mock.patch.dict(os.environ, self.env, clear=True), \
+                mock.patch.object(PC, "START", time.monotonic()):
+            self.assertIsNotNone(PC.text_check(self.event(HEREDOC, "PreToolUse", "b1")))
+            self.assertEqual(PC.BUDGET, whole)
+            with mock.patch.object(PC, "discover", side_effect=KeyError("boom")):
+                self.assertIsNone(PC.text_check(self.event(HEREDOC, "PreToolUse", "b2")))
+            self.assertEqual(PC.BUDGET, whole)
+        PC.CRUMB.clear()
+
+    def test_each_pattern_leaves_a_breadcrumb_naming_the_rule(self):
+        marks = []
+        with mock.patch.dict(os.environ, self.env, clear=True), \
+                mock.patch.object(PC, "START", time.monotonic()), \
+                mock.patch.object(PC.CRUMB, "mark", side_effect=lambda *a: marks.append(a)):
+            PC.text_check(self.event(HEREDOC, "PreToolUse", "b1"))
+        self.assertIn(("(the command)", "bash", "REL-31"), marks)
+
+    def test_a_call_that_also_commits_runs_the_commit_levels_on_the_resend(self):
+        command = f"{PRINTF} && git commit -m x"
+        self.assertTrue(self.pre(command).startswith("[practices:L2:data-layer:REL-31:bash]"))
+        self.assertEqual(glob.glob(os.path.join(self.state, "dotclaude", "practices", "heads",
+                                                "*")), [])
+        self.assertIsNone(self.pre(command))
+        self.assertTrue(glob.glob(os.path.join(self.state, "dotclaude", "practices", "heads",
+                                               "*")))
+
+    def test_the_install_check_speaks_first_and_each_resend_moves_on(self):
+        command = f"npm i acme-a && {PRINTF}"
+        self.assertTrue(self.pre(command).startswith("[practices:SEC-64]"))
+        self.assertTrue(self.pre(command).startswith("[practices:L2:data-layer:REL-31:bash]"))
+        self.assertIsNone(self.pre(command))
+
+    def test_it_reads_no_repo_and_no_transcript(self):
+        with mock.patch.dict(os.environ, self.env, clear=True), \
+                mock.patch.object(PC, "START", time.monotonic()), \
+                mock.patch.object(PC, "open_transcript", side_effect=AssertionError), \
+                mock.patch.object(PC, "Repo", side_effect=AssertionError):
+            self.assertIsNotNone(PC.text_check(self.event(HEREDOC, "PreToolUse", "b1")))
+        PC.CRUMB.clear()
+
+
+class SkillAdvice(unittest.TestCase):
+    """What the deny and the compaction line tell a model that may not have the skill loaded."""
+
+    def test_the_deny_and_gate_name_both_deploy_orders(self):
+        skill, _ = PC.load_skill(DATA_LAYER)
+        texts = [skill["rules"][0]["say"], " ".join(skill["gate"])]
+        for text in texts:
+            self.assertNotIn("migrations run before the new code is live", text)
+            self.assertNotIn("new name now", text)
+        say = texts[0]
+        self.assertIn("code first", say)
+        self.assertIn("migrations first", say)
+        for text in texts:  # each stands alone for a model that never loaded the skill
+            self.assertIn("two-way sync", text)
+            self.assertIn("backfill", text)
+            self.assertIn("new code", text)
+            self.assertIn("after the migration commits", text)
+            self.assertIn("in batches", text)
+            self.assertIn("large table", text)
+            self.assertIn("stops using", text)
+        self.assertIn("small table", say)  # batching a few rows breeds backfills nothing can run
+
+    def test_the_skill_covers_a_drop_a_table_and_the_contract_step(self):
+        with open(os.path.join(DATA_LAYER, "SKILL.md")) as f:
+            text = f.read()
+        for words in ("nullable", "ignored_columns", "SeparateDatabaseAndState", "view",
+                      "IS DISTINCT FROM", "disable_ddl_transaction!", "before the new code serves",
+                      "small table", "meta-command"):
+            self.assertIn(words, text)
+
+    def test_the_backfill_is_batched_after_the_sync_commits(self):
+        with open(os.path.join(DATA_LAYER, "SKILL.md")) as f:
+            text = f.read()
+        self.assertIn("in batches", text)
+        self.assertIn("two-way", text)
+
+    def test_the_sync_comes_before_the_backfill(self):
+        with open(os.path.join(DATA_LAYER, "SKILL.md")) as f:
+            text = f.read()
+        self.assertLess(text.index("sync"), text.index("backfill"))
+
+
+class WhenLines(TextBase):
+    """REL-31's `when` against what the scans feed it."""
+
+    def rule(self):
+        return PC.load_skill(DATA_LAYER)[0]["rules"][0]
+
+    def test_a_match_across_lines_leaves_the_next_line_flagged(self):
+        lines = ["alter table a", "  rename", "  to b; drop table c;"]
+        hits = PC.when_lines(self.rule(), list(enumerate(lines, 1)), ())
+        self.assertEqual([n for n, _ in hits], [2, 3])
+
+    def test_a_printf_s_lines_each_get_the_line_cap(self):
+        # The cap is per line, so a one-line printf can't run its whole file into one budget.
+        command = ("printf '" + "x" * (PC.LINE_MAX + 100)
+                   + r"\ndrop table users;\n' > migrations/1.sql")
+        self.assertTrue(PC.bash_lines(self.rule(), PC.bash_text(command)))
+
+    def test_a_shell_long_flag_isn_t_a_comment_but_a_dash_dash_comment_is(self):
+        rule = self.rule()
+        self.assertTrue(PC.rule_fires(rule, "migrations/1.sql", PC.scan_text("--x; drop table c;")))
+        self.assertFalse(PC.rule_fires(rule, "migrations/1.sql", PC.scan_text("-- drop table c;")))
+        self.assertFalse(PC.rule_fires(rule, "migrations/1.sql", PC.scan_text("--\n")))
+
+
+class BashTextAccepted(TextBase):
+    """A line resent past L2b was accepted, as a line resent past L2 is: the commit and the push
+    don't raise it again, and any other line of that rule still gets told."""
+
+    MIGRATION = "supabase__migrations__1_users.sql"
+    LINE = "alter table users rename column a to b;\n"
+
+    def test_a_line_resent_past_l2b_isnt_told_at_the_commit(self):
+        command = f"cat > supabase/migrations/1_users.sql <<'EOF'\n{self.LINE}EOF"
+        self.assertIn("[practices:L2:data-layer:REL-31:bash]", self.pre(command))
+        self.assertIsNone(self.pre(command))
+        self.assertIsNone(self.committed(**{self.MIGRATION: self.LINE}))
+
+    def test_a_line_l2b_never_saw_is_still_told_at_the_commit(self):
+        command = f"cat > supabase/migrations/1_users.sql <<'EOF'\n{self.LINE}EOF"
+        self.assertIsNotNone(self.pre(command))
+        told = self.committed(**{self.MIGRATION: self.LINE + "alter table users drop column c;\n"})
+        self.assertIn("1_users.sql:2", told)
+        self.assertNotIn("1_users.sql:1", told)
+
+    def test_a_printf_s_later_lines_are_accepted_but_its_first_is_not(self):
+        # The key is the command's line, so the first one, after `printf '`, never equals the
+        # file's.
+        command = (r"printf 'alter table users rename column a to b;\n"
+                   r"alter table users drop column c;\n' > supabase/migrations/1_users.sql")
+        self.assertIsNotNone(self.pre(command))
+        self.assertIsNone(self.pre(command))
+        told = self.committed(**{self.MIGRATION: self.LINE + "alter table users drop column c;\n"})
+        self.assertIn("1_users.sql:1", told)
+        self.assertNotIn("1_users.sql:2", told)
+
+
+class BashTextPasses(BashBase):
+    """Installed rules first, then a project's, and a project's pattern can't cost the call."""
+
+    def pattern_case(self, **patterns):
+        self.skill("words", words_rule(**patterns))
+        command = "pathword badword"
+        self.assertIsNone(self.pre(command))
+        self.assertIn("pattern-skipped", self.log())
+        self.assertNotIn("crash", self.log())
+
+    def test_a_project_skill_s_bad_when_allows_the_call_and_is_logged(self):
+        self.pattern_case(when="(")
+
+    def test_a_project_skill_s_bad_command_allows_the_call_and_is_logged(self):
+        self.pattern_case(command="(")
+
+    def test_a_project_skill_s_slow_pattern_allows_the_call_and_is_logged(self):
+        self.skill("words", words_rule(command="(a+)+$"))
+        self.assertIsNone(self.pre("a" * 40 + "b badword"))
+        self.assertIn("pattern-skipped", self.log())
+        self.assertIn("ran past", self.log())
+
+    def test_a_bad_project_rule_leaves_the_next_rule_and_the_installed_one_on(self):
+        self.skill("bad", words_rule(name="bad", rule="B-1", when="("))
+        self.skill("inst", words_rule(name="inst", rule="I-1"), where="user")
+        self.skill("zzz", words_rule(name="zzz", rule="Z-1", when="otherword"))
+        self.assertIn("[practices:L2:inst:I-1:bash]", self.pre("pathword badword"))
+        self.assertIn("[practices:L2:zzz:Z-1:bash]", self.pre("pathword otherword"))
+
+    def test_each_pass_denies_its_own_rule_once(self):
+        self.skill("inst", words_rule(name="inst", rule="I-1"), where="user")
+        self.skill("words", words_rule(name="words", rule="P-1"))
+        self.assertIn("[practices:L2:inst:I-1:bash]", self.pre("pathword badword"))
+        self.assertIn("[practices:L2:words:P-1:bash]", self.pre("pathword badword"))
+        self.assertIsNone(self.pre("pathword badword"))
+
+    def test_a_project_copy_can_t_replace_the_installed_rule(self):
+        self.skill("inst", words_rule(name="inst", rule="I-1"), where="user")
+        self.skill("inst", words_rule(name="inst", rule="I-1", when="neverthis"))
+        self.assertIn("[practices:L2:inst:I-1:bash]", self.pre("pathword badword"))
+
+    def test_with_project_skills_alone_and_with_installed_skills_alone(self):
+        self.skill("words", words_rule())
+        self.assertIsNotNone(self.pre("pathword badword"))
+        self.assertIsNone(self.pre("pathword badword"))
+        shutil.rmtree(os.path.join(self.proj, ".claude", "skills"))
+        self.skill("words", words_rule(when="otherword"), where="user")
+        self.assertIsNotNone(self.pre("pathword otherword"))
+        self.assertIsNone(self.pre("pathword otherword"))
+
+    def test_an_unless_in_the_command_passes(self):
+        self.skill("words", words_rule() + "unless = 'guardword'\n")
+        self.assertIsNone(self.pre("pathword badword guardword"))
+        self.assertIsNotNone(self.pre("pathword badword"))
+
+    def test_a_line_scoped_rule_reads_its_allow_on_the_line(self):
+        self.skill("words", words_rule() + "scope = 'line'\n")
+        self.assertIsNone(self.pre("pathword badword # practices-allow: W-1 ok"))
+        self.assertIsNotNone(self.pre("pathword\nbadword\n# practices-allow: W-1 ok"))
+
+
+class BashAt(BashBase):
+    """`at` gains "bash" as an opt-in. AT stays the default, so no other rule moves."""
+
+    def rule_file(self, **fields):
+        body = 'skill = "x"\n[[rule]]\nid = "X-1"\nwhen = "w"\nsay = "s"\n' + "".join(
+            f"{k} = {v}\n" for k, v in fields.items())
+        return PC.load_skill(self.skill("x", body))
+
+    def test_a_bash_rule_needs_a_command_string(self):
+        for fields in ({"at": '["bash"]'}, {"at": '["bash"]', "command": "7"},
+                       {"at": '["bash"]', "command": '""'},
+                       {"at": '["edit", "bash"]', "command": '["migrat"]'}):
+            with self.subTest(fields=fields):
+                skill, why = self.rule_file(**fields)
+                self.assertIsNone(skill)
+                self.assertIn("bad rule 'X-1'", why)
+
+    def test_a_good_bash_rule_loads(self):
+        for at in ('["bash"]', '["edit", "commit", "bash"]', '["commit", "bash"]'):
+            with self.subTest(at=at):
+                skill, why = self.rule_file(at=at, command='"migrat"')
+                self.assertIsNone(why)
+                self.assertEqual(skill["rules"][0]["command"], "migrat")
+
+    def test_an_unknown_level_or_a_repeat_fails_as_before(self):
+        for at in ('["push"]', '["bash", "push"]', '["bash", "bash"]', "[]", '"bash"'):
+            with self.subTest(at=at):
+                self.assertIsNone(self.rule_file(at=at, command='"migrat"')[0])
+
+    def test_a_non_string_command_fails_on_any_rule(self):
+        self.assertIsNone(self.rule_file(command="7")[0])
+
+    def test_the_default_stays_edit_and_commit(self):
+        self.assertEqual(PC.AT, ("edit", "commit"))
+        self.assertIsNone(self.pre("cat > lib/a.ts <<'X'\nx({ ...body })\nX\n"))
+
+    def test_a_rule_without_bash_never_runs_on_a_command_even_with_a_command_word(self):
+        self.skill("words", words_rule().replace('at = ["bash"]', 'at = ["edit", "commit"]'))
+        self.assertIsNone(self.pre("pathword badword"))
+
+    def test_a_bash_only_rule_never_runs_at_edit_or_commit(self):
+        self.skill("words", words_rule())
+        self.loaded()
+        self.assertIsNone(self.fire("lib/pathword.ts", "badword\n"))
+        self.assertIsNone(self.committed(**{"pathword.txt": "badword\n"}))
+
+    def test_only_rel_31_has_a_bash_level_among_the_shipped_rules(self):
+        found = []
+        for path in sorted(glob.glob(os.path.join(REPO, "skills", "*", "events.toml"))):
+            skill, why = PC.load_skill(os.path.dirname(path))
+            self.assertIsNone(why)
+            found += [r["id"] for r in skill["rules"] if "bash" in r.get("at", PC.AT)]
+        self.assertEqual(found, ["REL-31"])
+
+
+class BashTextOffFile(OffFile):
+    """The Bash text level reads the same off file as every other rule."""
+
+    def setUp(self):
+        super().setUp()
+        with open(os.path.join(DATA_LAYER, "events.toml")) as f:
+            self.skill("data-layer", f.read(), where="user")
+
+    def pre(self, command, sid):
+        return self.run_hook({"session_id": sid, "transcript_path": self.transcript,
+                              "cwd": self.proj, "hook_event_name": "PreToolUse",
+                              "tool_name": "Bash", "tool_input": {"command": command},
+                              "tool_use_id": "b-now"})
+
+    def test_the_off_file_turns_it_off_by_rule_or_whole(self):
+        for n, over in enumerate(({"rule": "REL-31", "reason": "x"},
+                                  {"rule": "data-layer:REL-31", "reason": "x"}, {})):
+            with self.subTest(over=over):
+                self.plant(self.entry(**over))
+                self.assertIsNone(self.pre(HEREDOC, f"a{n}"))
+        self.assertNotIn("crash", self.log())  # a crash would allow the call too
+
+    def test_another_rule_in_the_off_file_leaves_it_on(self):
+        self.plant(self.entry(rule="SEC-60", reason="x"))
+        self.assertIsNotNone(self.pre(HEREDOC, "s"))
+
+
+class TextPrefilter(Base):
+    """settings.json's real filter against each shipped "bash" rule, by its samples, so the two
+    can't drift: a form the rule fires on that the filter stops would never reach it."""
+
+    ran, both = InstallPrefilter.ran, InstallPrefilter.both
+
+    def rule(self):
+        return PC.load_skill(DATA_LAYER)[0]["rules"][0]
+
+    def test_the_older_alternatives_stay_case_sensitive(self):
+        for command in ("cat Cargo.toml | grep required", "cat Gemfile | grep required",
+                        "GIT COMMIT", "echo Push GitHub"):
+            with self.subTest(command=command):
+                self.assertEqual(self.both(command), (False, False))
+
+    def test_lower_title_and_upper_case_reach_the_hook(self):
+        for command in ("migrations drop", "Migrations Drop", "MIGRATIONS DROP",
+                        "RENAME x > alembic/v.py", "Rename x > Drizzle/1.sql"):
+            with self.subTest(command=command):
+                self.assertEqual(self.both(command), (True, True))
+
+    def test_every_shipped_bash_rule_has_samples_both_ways(self):
+        for path in sorted(glob.glob(os.path.join(REPO, "skills", "*", "events.toml"))):
+            skill, why = PC.load_skill(os.path.dirname(path))
+            self.assertIsNone(why)
+            for rule in (r for r in skill["rules"] if "bash" in r.get("at", PC.AT)):
+                with self.subTest(rule=rule["id"]):
+                    with open(os.path.join(SAMPLES, f"{skill['name']}.toml"), "rb") as f:
+                        samples = [s for s in tomllib.load(f)["sample"]
+                                   if s["kind"] == "bash" and s["id"] == rule["id"]]
+                    self.assertTrue(any(s["fires"] for s in samples))
+                    self.assertTrue(any(not s["fires"] for s in samples))
+
+    def test_every_bash_sample_that_fires_reaches_the_hook(self):
+        for s in data_layer_samples("bash"):
+            if s["fires"]:
+                with self.subTest(command=s["content"]):
+                    self.assertEqual(self.both(s["content"]), (True, True))
+
+    def test_every_edit_sample_written_through_bash_reaches_the_hook_and_fires(self):
+        """A heredoc puts the path first and a printf the statement first, and each fires at the
+        Bash level as it fires at an edit. SQL is tried in upper case too: it is written that way,
+        and a framework's call never is."""
+        rule = self.rule()
+        for s in data_layer_samples("rule"):
+            if not s["fires"]:
+                continue
+            body = s["content"].strip("\n")
+            for command in (f"cat > {s['path']} <<'X'\n{body}\nX\n",
+                            f"printf %s {shlex.quote(body)} > {s['path']}"):
+                with self.subTest(command=command):
+                    self.assertEqual(self.both(command), (True, True))
+                    if s["path"].endswith(".sql"):
+                        self.assertEqual(self.both(command.upper()), (True, True))
+                    self.assertTrue(PC.bash_lines(rule, PC.bash_text(command)))
+
+    def test_commands_with_only_one_word_don_t_start_python(self):
+        for command in ("ls", "git status", "npm test", "ls migrations", "npm run migrate",
+                        "alembic upgrade head", "python manage.py migrate", "cat drizzle/0001.sql",
+                        "rm -rf build", "docker compose down --rmi local",
+                        "echo rename", "psql -c 'drop table scratch_rows'",
+                        "mv a.txt b.txt", "cat MIGRATIONS.md"):
+            with self.subTest(command=command):
+                self.assertEqual(self.both(command), (False, False))
+
+    def test_text_outside_the_command_doesnt_reach_the_hook(self):
+        payload = json.dumps({"tool_name": "Bash", "tool_input": {
+            "command": "ls", "description": "rename a column in the migrations folder"}})
+        self.assertFalse(self.ran(payload))
+        payload = json.dumps({"tool_name": "Bash", "tool_input": {
+            "command": "ls migrations", "description": "drop column"}})
+        self.assertFalse(self.ran(payload))
+
+
+class DataLayerRule(TextBase):
+    """REL-31 at its three levels, through the hook."""
+
+    def test_the_skill_is_one_rule_at_three_levels_with_no_event(self):
+        skill, why = PC.load_skill(DATA_LAYER)
+        self.assertIsNone(why)
+        self.assertEqual(skill["events"], [])
+        (rule,) = skill["rules"]
+        self.assertEqual(rule["id"], "REL-31")
+        self.assertEqual(rule["at"], ["edit", "commit", "bash"])
+        for word in ("add-then-remove", "say so in your reply", "practices-allow: REL-31"):
+            self.assertIn(word, rule["say"])
+
+    def test_an_edit_is_denied_once_for_the_file(self):
+        statement = "alter table users drop column username;\n"
+        self.assertIn(f"[practices:L2:data-layer:REL-31:{MIGRATION}]",
+                      self.fire(MIGRATION, statement))
+        self.assertIsNone(self.fire(MIGRATION, statement))
+
+    def test_a_commit_is_told(self):
+        told = self.committed(**{MIGRATION: "alter table users rename to people;\n"})
+        self.assertIn(f"REL-31 (data-layer) at {MIGRATION}:1", told)
+
+    def test_a_commit_outside_the_paths_is_not_told(self):
+        self.assertIsNone(self.committed(**{"lib/q.sql": "alter table users rename to people;\n"}))
+
+    def test_every_form_that_fires_matches_on_one_line(self):
+        rule = PC.load_skill(DATA_LAYER)[0]["rules"][0]
+        for s in data_layer_samples("rule"):
+            if s["fires"]:
+                with self.subTest(content=s["content"]):
+                    self.assertTrue(any(PC.search(rule["when"], line)
+                                        for line in s["content"].split("\n")))
+
+
+class DataLayerSkill(unittest.TestCase):
+    def read(self, name):
+        with open(os.path.join(DATA_LAYER, name)) as f:
+            return f.read()
+
+    def test_the_description_names_its_triggers_and_no_workflow(self):
+        head = self.read("SKILL.md").split("---")[1]
+        (description,) = re.findall(r"^description: (.*)$", head, re.M)
+        self.assertTrue(description.startswith("Use when"))
+        for word in ("migration", "column", "table", "Row Level Security", "raw SQL"):
+            self.assertIn(word, description)
+        self.assertNotIn("add-then-remove", description)
+
+    def test_the_core_rule_comes_before_the_gate_rule_and_the_lines_nothing_enforces(self):
+        body = self.read("SKILL.md")
+        order = [body.index(s) for s in ("## Core rule", "## Gate rule", "## Not enforced",
+                                         "## When the hook stops a migration")]
+        self.assertEqual(order, sorted(order))
+        self.assertIn(".claude/practices/data-layer.md", body)
+        self.assertIn("**Gate rule REL-31", body)
+        self.assertIn("[practices:L2:data-layer:REL-31", body)
+        self.assertLess(len(body.splitlines()), 50)
+
+    def test_every_rule_the_skill_names_is_in_the_spec_table(self):
+        spec = self.read("SPEC.md")
+        for rule in ("REL-31", "SEC-20", "SEC-24", "REL-32", "REL-20", "REL-23"):
+            with self.subTest(rule=rule):
+                self.assertIn(rule, self.read("SKILL.md"))
+                self.assertRegex(spec, rf"(?m)^\| {rule} \|")
+
+    def test_the_gate_line_and_the_spec_state_the_same_rule(self):
+        skill, _ = PC.load_skill(DATA_LAYER)
+        self.assertEqual(len(skill["gate"]), 1)
+        self.assertIn("REL-31", skill["gate"][0])
+        self.assertIn("## The L1 test", self.read("SPEC.md"))
+
+    def test_the_shipped_files_hold_no_em_dash(self):
+        for name in ("SKILL.md", "SPEC.md", "events.toml"):
+            with self.subTest(name=name):
+                self.assertNotIn(chr(0x2014), self.read(name))
+
+
+CLIENT_CODE = os.path.join(REPO, "skills", "client-code")
+
+
+def client_code_samples():
+    with open(os.path.join(SAMPLES, "client-code.toml"), "rb") as f:
+        return tomllib.load(f)["sample"]
+
+
+class ClientCodeRules(BashBase):
+    """LEG-01 and UX-63 as shipped: each sample against the rule, and both through the hook."""
+
+    GATED = 'const key = "analytics-consent";\ngtag("config", "G-1");\n'
+    TRACKER = 'gtag("config", "G-1");\n'
+    DELETE = "<button onClick={() => deleteClient(id)}>Delete</button>\n"
+
+    def setUp(self):
+        super().setUp()
+        with open(os.path.join(CLIENT_CODE, "events.toml")) as f:
+            self.skill("client-code", f.read(), where="user")
+
+    @staticmethod
+    def rule(rule_id):
+        return next(r for r in PC.load_skill(CLIENT_CODE)[0]["rules"] if r["id"] == rule_id)
+
+    def test_the_skill_is_two_rules_at_edit_and_commit_with_no_event(self):
+        skill, why = PC.load_skill(CLIENT_CODE)
+        self.assertIsNone(why)
+        self.assertEqual(skill["events"], [])
+        self.assertEqual([r["id"] for r in skill["rules"]], ["LEG-01", "UX-63"])
+        for rule in skill["rules"]:
+            with self.subTest(rule=rule["id"]):
+                self.assertEqual(rule["at"], ["edit", "commit"])
+                for word in ("by default", "say so in your reply",
+                             f"practices-allow: {rule['id']}"):
+                    self.assertIn(word, rule["say"])
+
+    def test_every_sample_fires_or_passes_as_it_says(self):
+        for s in client_code_samples():
+            with self.subTest(id=s["id"], path=s["path"], content=s["content"]):
+                self.assertEqual(PC.rule_fires(self.rule(s["id"]), s["path"], s["content"]),
+                                 s["fires"])
+
+    def test_every_form_that_fires_matches_on_one_line(self):
+        # The commit scan reads added lines one at a time.
+        for s in client_code_samples():
+            if s["fires"]:
+                with self.subTest(content=s["content"]):
+                    self.assertTrue(any(PC.search(self.rule(s["id"])["when"], line)
+                                        for line in s["content"].split("\n")))
+
+    def test_both_rules_have_samples_both_ways(self):
+        samples = client_code_samples()
+        for rule_id in ("LEG-01", "UX-63"):
+            for fires in (True, False):
+                with self.subTest(rule=rule_id, fires=fires):
+                    self.assertTrue([s for s in samples if s["id"] == rule_id
+                                     and s["fires"] is fires])
+
+    def test_an_edit_is_denied_once_for_the_file(self):
+        for rel, rule_id, content in (("app/layout.tsx", "LEG-01", self.TRACKER),
+                                      ("app/Row.tsx", "UX-63", self.DELETE)):
+            with self.subTest(rule=rule_id):
+                self.assertIn(f"[practices:L2:client-code:{rule_id}:{rel}]",
+                              self.fire(rel, content))
+                self.assertIsNone(self.fire(rel, content))
+
+    def test_a_guard_elsewhere_in_the_file_excuses_an_edit(self):
+        path = os.path.join(self.proj, "app", "Row.tsx")
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w") as f:
+            f.write('const ask = () => window.confirm("Delete it?");\nSLOT\n')
+        self.assertIsNone(self.fire("app/Row.tsx", self.DELETE, tool="Edit", old="SLOT"))
+
+    def test_a_commit_is_told(self):
+        for rel, rule_id, content in (("app/layout.tsx", "LEG-01", self.TRACKER),
+                                      ("app/Row.tsx", "UX-63", self.DELETE)):
+            with self.subTest(rule=rule_id):
+                self.assertIn(f"{rule_id} (client-code) at {rel}:1",
+                              self.committed(**{rel: content}))
+
+    def test_a_guard_in_the_committed_file_excuses_it(self):
+        self.assertIsNone(self.committed(**{"app/a.tsx": self.GATED}))
+        self.assertIsNone(self.committed(
+            **{"app/Row.tsx": 'if (confirm("Delete it?")) {\n  deleteClient(id);\n}\n'}))
+
+    def test_a_ts_file_is_a_tracker_path_and_not_a_delete_path(self):
+        self.assertIn("LEG-01 (client-code)", self.committed(**{"lib/a.ts": self.TRACKER}))
+        self.assertIsNone(self.committed(**{"lib/b.ts": "api.deleteClient(id);\n"}))
+
+
+class ClientCodeSkill(unittest.TestCase):
+    def read(self, name):
+        with open(os.path.join(CLIENT_CODE, name)) as f:
+            return f.read()
+
+    def test_the_description_names_its_triggers_and_no_workflow(self):
+        head = self.read("SKILL.md").split("---")[1]
+        (description,) = re.findall(r"^description: (.*)$", head, re.M)
+        self.assertTrue(description.startswith("Use when"))
+        for word in ("analytics", "tracking pixel", "session replay", "delete", "React"):
+            self.assertIn(word, description)
+        self.assertNotIn("client components", description)  # one-line edits shouldn't load it
+        self.assertNotIn("confirm", description)
+        self.assertNotIn("consent", description)
+
+    def test_the_sections_come_in_order_and_the_skill_stays_short(self):
+        body = self.read("SKILL.md")
+        order = [body.index(s) for s in ("## Core rule", "## Gate rule", "## When the hook stops a")]
+        self.assertEqual(order, sorted(order))
+        self.assertIn(".claude/practices/client-code.md", body)
+        for marker in ("**Gate rule LEG-01", "**Gate rule UX-63",
+                       "[practices:L2:client-code:LEG-01", "[practices:L2:client-code:UX-63",
+                       "practices-allow: <id> <reason>"):
+            self.assertIn(marker, body)
+        self.assertNotIn("(not enforced)", body)
+        self.assertLess(len(body.encode()), 5000)
+
+    def test_every_rule_the_skill_names_is_in_the_spec_table(self):
+        spec = self.read("SPEC.md")
+        for rule in ("LEG-01", "LEG-04", "UX-63"):
+            with self.subTest(rule=rule):
+                self.assertIn(rule, self.read("SKILL.md"))
+                self.assertRegex(spec, rf"(?m)^\| {rule} \|")
+
+    def test_the_gate_names_both_rules_and_the_spec_has_the_load_test(self):
+        skill, _ = PC.load_skill(CLIENT_CODE)
+        self.assertIn("LEG-01", skill["gate"][0])
+        self.assertIn("UX-63", skill["gate"][1])
+        self.assertIn("## The L1 test", self.read("SPEC.md"))
+
+    def test_the_shipped_files_hold_no_em_dash(self):
+        for name in ("SKILL.md", "SPEC.md", "events.toml"):
+            with self.subTest(name=name):
+                self.assertNotIn(chr(0x2014), self.read(name))
+
+    def test_the_gate_and_digest_tests_read_this_skill(self):
+        # Those tests glob skills/*/events.toml; this fails if the skill stops being one they find.
+        self.assertIn(os.path.join(CLIENT_CODE, "events.toml"),
+                      glob.glob(os.path.join(REPO, "skills", "*", "events.toml")))
 
 
 if __name__ == "__main__":

@@ -1,0 +1,11 @@
+{
+  "name": "practices-oracle-dom",
+  "version": "0.0.0",
+  "private": true,
+  "description": "The React and the TypeScript transform the client-code oracles render agent components with, in headless Chrome. Install: npm ci --ignore-scripts",
+  "dependencies": {
+    "react": "19.0.0",
+    "react-dom": "19.0.0",
+    "typescript": "5.7.3"
+  }
+}

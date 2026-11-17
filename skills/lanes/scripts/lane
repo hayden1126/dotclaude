@@ -152,6 +152,16 @@ CLOCK_SLACK = 10  # secs: HAYPC's wall clock steps, and GitHub keeps another clo
 # secs past mergedAt a record must land to count as after the merge: the clock's 0.5 s steps, and
 # mergedAt's whole seconds. Well under a turn's 10 s, or a prompt after-merge write reads as older.
 MERGE_SLACK = 3
+# secs after a turn a record write must land to count as after it (turn_gate), as MERGE_SLACK
+TURN_SLACK = 3
+TURN_WORDS = {"human": "Hayden's prompt", "peer": "a message from another session",
+              "task-notification": "a background task's notice",
+              "answer": "Hayden's answer to a question dialog",
+              "refusal": "Hayden's refusal of a tool call",
+              None: "an input with no origin: a ! or slash command, or an interrupt"}
+# The end of a turn_gate refusal no message to the lane can clear.
+HAYDEN_ONLY = ("No message to the lane clears this: the lead asks Hayden, and `--abandon` closes "
+               "it anyway (it asks)")
 NO_MERGE_LIST = "gh can't list the lane's merged PRs"  # handoff_why's reason; `ls --check` refuses
 TEE_GRACE = 10.0  # secs run_child keeps reading a teed pipe once its child exits
 TRIAL_GIT_WAIT = 120  # secs each git call of `lane trial` may take
@@ -5335,6 +5345,15 @@ def close_lane(args) -> None:
         raise LaneError(f"lane {args.id}'s Next says {shown(kept.splitlines()[0].strip())!r}: it "
                         "stays open for more PRs. Its session drops that line at its last merge; "
                         "pass --abandon to close it anyway")
+    # A session still working with Hayden refuses here, before the slower gates (handoff-check,
+    # the survey), once the lane is known closable and not kept open, so a lane refused for
+    # either says so first: the --abandon a turn refusal may lead to would skip those reads.
+    # Both checks run again just before the signals, below.
+    if present and (live := lanelib.live_sessions()):
+        here = sessions_in(live, path)
+        status_gate(args.id, here, "done")
+        if not args.abandon:
+            turn_gate(repo, lane, [s.get("sessionId") for s in here])
     install_hold(repo, args.id, path, "nothing was signalled")
     hits = {}
     if present:  # every gate before any signal (lead_only refused a sandboxed run)
@@ -5350,6 +5369,11 @@ def close_lane(args) -> None:
                           f"End or move them, then rerun `lane done {args.id}`")
         if hits:
             closing_check(args.id, path, args.abandon)
+            # Read again: the gates took up to minutes, and a session may have taken a turn,
+            # gone busy or opened a dialog meanwhile.
+            mid_turn(args.id, hits, lanelib.session_files(), "done")
+            if not args.abandon:
+                turn_gate(repo, lane, [h.sid for h in hits.values() if h.kind == SESSION])
     outside_serves(repo, args.id, path)  # nothing signalled yet: a serve left processes outside
     for hit in work_references(repo, lane) if present else []:
         warn(shown(f"reference into {lane['id']}/work: {hit}"))  # a path from another lane
@@ -5574,7 +5598,7 @@ def handoff_gate(lane_id: str, path: str) -> None:
 def park_gates(repo: Repo, lane: dict, path: str, here: list[dict]) -> None:
     """`park`'s gates past lead_only and the git hardening, in order, all before any signal: a
     clean tree, HEAD pushed, the plain handoff-check, no handoff?, no lock the lane holds, no
-    install hold, no busy session (here: the live sessions in the lane)."""
+    install hold, no busy or waiting session (here: the live sessions in the lane)."""
     lane_id = lane["id"]
     clean_tree(lane_id, path, "park")
     branch, ref = pushed_check(repo, lane, worktree_heads(repo))
@@ -5604,32 +5628,103 @@ def park_gates(repo: Repo, lane: dict, path: str, here: list[dict]) -> None:
                         + "".join(f"\n  {shown(x)}" for x in into[:5]) + more
                         + "\nThe lead reruns the installer each line names from the main "
                         f"checkout {repo.main}, then reruns `lane park {lane_id}`")
-    if busy := [s for s in here if status_of(s) == "busy"]:
-        raise LaneError(shown(f"lane {lane_id}'s session {sid_of(busy[0])} is busy (mid-turn), "
-                              "and parking would cut its turn off: rerun `lane park "
-                              f"{lane_id}` once it is idle"))
+    status_gate(lane_id, here, "park")
 
 
-def mid_turn(lane_id: str, hits: dict[int, Hit], files: list[dict]) -> None:
+def mid_turn(lane_id: str, hits: dict[int, Hit], files: list[dict], verb: str) -> None:
     """Refuse when a lane session among hits is busy or waiting, by the status in the same
     session files survey read: the gates take up to minutes (a fetch, gh, handoff-check), so
     the busy gate's answer before them is stale by the signals, and a session that started or
     took a turn meanwhile would be cut off mid-turn. Waiting is a permission dialog or a
     question to Hayden, which the SIGTERM would lose."""
+    sessions = []
     for h in sorted(hits.values(), key=lambda h: h.proc.pid):
-        if h.kind != SESSION:
+        if h.kind == SESSION:
+            s = next((f for f in files if f.get("pid") == h.proc.pid
+                      and lanelib.proc_start_of(f) == h.proc.start), {})
+            sessions.append(dict(s, sessionId=h.sid))
+    status_gate(lane_id, sessions, verb)
+
+
+def status_gate(lane_id: str, sessions: list[dict], verb: str) -> None:
+    """Refuse, before any signal, a session (a session file's dict) that is busy or waiting on
+    Hayden: `done` and `park` would cut its turn off, or lose its dialog. Never overridden, not
+    by `done --abandon` either (Hayden's pick, 2026-11-16): he clears it in seconds in the lane's
+    window, and a SIGTERM mid-turn can leave half-written files that keep the worktree. One
+    stopped with Ctrl+Z keeps that status until `fg` continues it, so the refusal says so."""
+    ing = ACTING[verb][0]
+    for s in sessions:
+        sid, status = sid_of(s), status_of(s)
+        if status not in ("busy", "waiting"):
             continue
-        s = next((f for f in files if f.get("pid") == h.proc.pid
-                  and lanelib.proc_start_of(f) == h.proc.start), {})
-        status = status_of(s)
-        if status == "busy":
-            raise LaneError(f"lane {lane_id}'s session {h.sid} is busy (mid-turn), and parking "
-                            f"would cut its turn off, so nothing was signalled: rerun `lane park "
-                            f"{lane_id}` once it is idle")
-        if status == "waiting":
-            raise LaneError(f"lane {lane_id}'s session {h.sid} is waiting on Hayden (a permission "
-                            "dialog or a question), which parking would lose, so nothing was "
-                            f"signalled: answer it, then rerun `lane park {lane_id}`")
+        # Only Hayden, in the lane's window, can answer a dialog or fg a stopped session, so
+        # those are the lead's ask to him; a busy one ends its turn by itself.
+        if lanelib.session_stopped(s):
+            then = (f"it (pid {s.get('pid')}, {window_label(s)}) is stopped (Ctrl+Z): the "
+                    "lead asks Hayden to fg it there" +
+                    (" and answer it" if status == "waiting" else ""))
+        elif status == "busy":
+            then = "wait until it is idle"
+        else:
+            then = "the lead asks Hayden to answer it in the lane's window"
+        what = ("is busy (mid-turn), and {ing} would cut its turn off" if status == "busy" else
+                "is waiting on Hayden (a permission dialog or a question), which {ing} would "
+                "lose").format(ing=ing)
+        raise LaneError(shown(f"lane {lane_id}'s session {sid} {what}, so nothing was signalled: "
+                              f"{then}, then rerun `lane {verb} {lane_id}`"))
+
+
+def turn_gate(repo: Repo, lane: dict, sids: list) -> None:
+    """Refuse, before any signal, a live lane session that may still be working with Hayden:
+    its transcript holds a turn (any input: lanelib.turn_kind), or a reply holding a Waiting on
+    you line (a plain-text question asked in the turn that wrote the record), newer than the
+    record's last write less TURN_SLACK (Hayden's picks, 2026-11-16: one reference point, after
+    review round 4). The record is
+    the lane's word that it is finished; a write within TURN_SLACK after a turn reads as older.
+    Read only from Claude Code's own transcripts, which sandboxed Bash can't write. `done
+    --abandon` skips it."""
+    if not sids:
+        return
+    lane_id = lane["id"]
+    ask = (f"Message the lane (`lane addr {lane_id}`): it finishes with Hayden, writes its record "
+           f"and sends `merged #N` again. Then rerun `lane done {lane_id}`; --abandon closes it "
+           "anyway")
+    _, mtime = record_text(repo, lane)
+    if mtime is None:
+        raise LaneError(f"lane {lane_id}'s record can't be read, so its sessions' last turns can't "
+                        f"be weighed against it: nothing was signalled. {HAYDEN_ONLY}")
+    for sid in sids:
+        found = lanelib.transcripts_of(sid)
+        if len(found) > 1:
+            raise LaneError(shown(f"lane {lane_id}'s session {sid} has {len(found)} transcripts "
+                                  f"({', '.join(found)}), so its last turn can't be told: "
+                                  f"nothing was signalled. {HAYDEN_ONLY}"))
+        try:
+            seen = lanelib.read_transcript(found[0]) if found else lanelib.Transcript(None, None)
+        except lanelib.TurnUnread as e:
+            raise LaneError(shown(f"lane {lane_id}'s session {sid}'s transcript {found[0]} {e}, "
+                                  f"so nothing was signalled. {HAYDEN_ONLY}"))
+        if seen.turn and seen.turn[0] > mtime - TURN_SLACK:
+            when, kind = seen.turn
+            what = TURN_WORDS.get(kind) or f"an input of origin {kind}"
+            order = ("after" if when > mtime else
+                     f"less than {TURN_SLACK} s before, which reads as after,")
+            raise LaneError(shown(
+                f"lane {lane_id}'s session {sid} took a turn ({what}) at {clock(when)}, {order} "
+                f"its record's last write at {clock(mtime)}: it may still be working with "
+                f"Hayden, so nothing was signalled. {ask}"))
+        if seen.waits is not None and seen.waits > mtime - TURN_SLACK:
+            order = ("after" if seen.waits > mtime else
+                     f"less than {TURN_SLACK} s before, which reads as after,")
+            raise LaneError(shown(
+                f"lane {lane_id}'s session {sid} replied with a Waiting on you line at "
+                f"{clock(seen.waits)}, {order} its record's last write at {clock(mtime)}: it may "
+                f"still be waiting on Hayden, so nothing was signalled. {ask}"))
+
+
+def clock(t: float) -> str:
+    """A wall-clock stamp, local time to the second, for a refusal."""
+    return time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(t))
 
 
 def cmd_park(args) -> None:
@@ -5681,7 +5776,7 @@ def cmd_park(args) -> None:
         raise refusal(f"nothing proves these processes in {path} are lane {args.id}'s, so "
                       "nothing was signalled", refused,
                       f"End or move them, then rerun `lane park {args.id}`")
-    mid_turn(args.id, hits, files)
+    mid_turn(args.id, hits, files, "park")
     if hits:
         try:
             save_proof(repo, lane, path, hits.values())

@@ -1,0 +1,1 @@
+Add POST /api/invoices/[id]/pay, taking `{ cardToken }`. It charges the invoice's amount with `chargeCard` from lib/payments.ts, marks the invoice paid, and records a row in a new `payments` table (invoice_id, provider_charge_id, amount_cents). If anything fails, the invoice stays unpaid and no payment row exists.
