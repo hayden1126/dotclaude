@@ -195,6 +195,8 @@ class TextRules(Base):
         with mock.patch.dict(os.environ, self.env, clear=True), \
                 mock.patch.object(L.PC, "START", time.monotonic() - 60):
             self.assertTrue(L.text_rule_flags("lane trial --run x", self.proj, cfg))
+        self.assertIn("long-runs check: in the text rules", self.log())
+        self.assertNotIn("REL-31", self.log())  # reads as this hook's cut, never L2b's
         with mock.patch.dict(os.environ, self.env, clear=True), \
                 mock.patch.object(L.PC, "START", time.monotonic()):
             self.assertFalse(L.text_rule_flags("lane trial --run x", self.proj, cfg))
@@ -202,12 +204,19 @@ class TextRules(Base):
     def test_a_suite_beside_a_call_left_to_it_still_counts(self):
         # Its suite is saved, so the next different suite is the second and gets the deny, and a
         # later rerun of the first never reads as new.
-        for left in (self.FLAGGED.replace("lane trial --run x", SUITE), SUITE + " && git commit -m y"):
-            with self.subTest(left=left):
+        for tail in (" && " + self.FLAGGED.split(" && ")[0], " && git commit -m y"):
+            with self.subTest(tail=tail, first=True):
                 shutil.rmtree(self.state, ignore_errors=True)
-                self.assertIsNone(self.pre(left))
+                self.assertIsNone(self.pre(SUITE + tail))
                 self.assertIn("long-runs", self.pre(OTHER))
                 self.assertIsNone(self.pre(SUITE))
+            with self.subTest(tail=tail, first=False):
+                # The second suite reaches the yield itself: it is saved, and the deny unspent.
+                shutil.rmtree(self.state, ignore_errors=True)
+                self.assertIsNone(self.pre(SUITE))
+                self.assertIsNone(self.pre(OTHER + tail))
+                self.assertIsNone(self.pre(OTHER))
+                self.assertIn("long-runs", self.pre("tox"))
 
 
 class GenericSuites(Base):

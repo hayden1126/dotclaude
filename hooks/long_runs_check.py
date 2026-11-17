@@ -46,11 +46,11 @@ PC = importlib.util.module_from_spec(_spec)
 sys.modules.setdefault("practices_check", PC)
 _spec.loader.exec_module(PC)
 
-FROM_PRACTICES = ("ADD_VERBS", "AT", "PIP_HEAD", "Budget", "CMD_MAX", "CONFIG_MAX", "Transcripts",
-                  "bash_lines", "bash_project", "bash_text", "check_budget", "command_of",
-                  "config_home", "discover",
-                  "is_loaded", "is_off", "l1_window", "load_bash_words", "load_config", "log",
-                  "names_a_call", "read_toml", "run_patterns", "state_dir")
+FROM_PRACTICES = ("ADD_VERBS", "AT", "PIP_HEAD", "Budget", "CMD_MAX", "CONFIG_MAX", "PatternError",
+                  "Transcripts", "bash_lines", "bash_project", "bash_text", "check_budget",
+                  "command_of", "config_home", "discover", "is_loaded", "is_off", "l1_window",
+                  "load_bash_words", "load_config", "log", "names_a_call", "on_the_clock",
+                  "read_toml", "state_dir")
 
 SKILL = "long-runs"
 LOCKS = ("suite", "gate")
@@ -235,16 +235,17 @@ def text_rule_flags(cmd, project, cfg):
     try:
         rules = [(s, r) for s in PC.discover(project, quiet=True).values() for r in s["rules"]
                  if "bash" in r.get("at", PC.AT) and not PC.is_off(cfg, s, r["id"])]
-        if not rules:
-            return False
-        text = PC.bash_text(cmd)
-
-        def flags(item):
-            PC.check_budget("L2b")  # as L2b's own breadcrumb does, before each rule
-            return bool(PC.bash_lines(item[1], text, cfg["helpers"]))
-
-        return bool(PC.run_patterns(rules, flags, cut=True))
-    except PC.Budget:
+        text = PC.bash_text(cmd) if rules else ""
+        for _skill, rule in rules:
+            PC.check_budget("the text rules")  # before each rule, as L2b's breadcrumb does
+            try:
+                if PC.on_the_clock(lambda rule=rule: PC.bash_lines(rule, text, cfg["helpers"])):
+                    return True
+            except PC.PatternError:  # slow or broken: L2b skips it too, so it can't deny on it
+                continue
+        return False
+    except PC.Budget as e:
+        PC.log("budget-spent", f"long-runs check: in {e}; its deny was skipped")
         return True
     except Exception as e:  # noqa: BLE001  fail toward the practices hook's deny
         PC.log("long-runs-l2b", f"{type(e).__name__}")
