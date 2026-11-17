@@ -428,8 +428,8 @@ need nothing extra.
   nothing to wait on (no Waiting on you list or `Waiting on <who>: <what>` line, no waited-on
   background task, no message to the lead or a lane, no pass, not plan mode) is blocked once,
   with its ways out: continue the record's Next, pass, put the decision in Asks for Hayden, or
-  send the lead `park me` (after its PR's merge: no Waiting on you list, which would hold
-  `lane done`, but `merged #N` to the lead). A turn Hayden's own typed prompt started passes unless he approved a
+  send the lead `park me` (after its PR's merge: the lanes skill's after-merge steps, with no
+  Waiting on you list, which would hold `lane done`). A turn Hayden's own typed prompt started passes unless he approved a
   plan in it. `docs/lanes.md` ("Idle lanes") has the why and the replay numbers. Fails open.
 - **PreToolUse(`SubagentHandback`) and SubagentStop: `report-check.sh`** (in this repo). It sends a
   report from `Explore`, `researcher`, `reviewer` or `writer` back when it doesn't match
