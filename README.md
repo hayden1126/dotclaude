@@ -993,7 +993,10 @@ and status single-writer:
   removes the worktree, with the registration of any tree a killed `lane trial` left in it.
   While the worktree exists, it refuses a lane whose record's Next has a
   `Keep open:` line (more PRs to come; one inside a comment counts too), or whose record has an
-  unclosed `<!--` or a stray `-->`, unless given `--abandon`.
+  unclosed `<!--` or a stray `-->`, unless given `--abandon`. It never cuts off a lane session
+  still working with Hayden as far as its transcript shows: it refuses one that is busy or has a
+  dialog open, and, unless given `--abandon`, an idle one whose transcript holds input newer
+  than the record's last write or whose last reply holds a Waiting on you list.
 - `lane park chart-fix` frees a finished lane's cap slot while it waits its merge turn. It ends
   the lane's sessions the way `done` does and keeps the worktree, branch, record and claims. It
   refuses unless the work is pushed and handed off. `lane open chart-fix` unparks it, at most

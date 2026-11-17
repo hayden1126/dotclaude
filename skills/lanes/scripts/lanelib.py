@@ -2168,6 +2168,131 @@ def transcript_cwd(path: str) -> str | None:
     return None
 
 
+class TurnUnread(ValueError):
+    """read_transcript can't say when a transcript's last turn or reply was: `done` refuses."""
+
+
+# A line that may be a turn holds one of these; one that may be a reply holds both of the
+# second pair. Any other line is never parsed (most assistant lines are tool calls alone).
+TURN_BYTES = (b'"user"', b'"queued_command"')
+REPLY_BYTES = (b'"assistant"', b'"text"')
+# A line of a reply that waits on Hayden: the Waiting on you list CLAUDE.md asks for (or
+# "Waiting on Hayden"), after any markup; hooks/stop_check.py reads it the same way.
+HAYDEN_WAIT = re.compile(r"^[\W_]*waiting on (you|hayden)\b", re.IGNORECASE | re.MULTILINE)
+
+
+def turn_kind(rec) -> tuple[bool, str | None]:
+    """(whether the transcript record starts a turn, its origin kind or None). A turn is any input
+    (Hayden's pick, 2026-11-16): a main-chain user record, or a queued_command attachment (a
+    prompt, peer message or task notice that arrived mid-turn). Not a turn: a compaction summary,
+    a subagent's record, an isMeta record with no origin (a loaded skill's body, Stop-hook
+    feedback, a reminder), and a tool's result (one may carry an image beside it), except
+    Hayden's answer to a question dialog or his refusal of a tool call, which are his input. An
+    input of a shape not seen yet counts."""
+    if not isinstance(rec, dict) or rec.get("isSidechain"):
+        return False, None
+    if rec.get("type") == "attachment":
+        att = rec.get("attachment")
+        if not (isinstance(att, dict) and att.get("type") == "queued_command"):
+            return False, None
+        origin = att.get("origin")
+    elif rec.get("type") == "user":
+        origin = rec.get("origin")
+        if rec.get("isCompactSummary") or (rec.get("isMeta") and not origin):
+            return False, None
+        msg = rec.get("message")
+        content = msg.get("content") if isinstance(msg, dict) else None
+        if isinstance(content, list) and any(
+                isinstance(b, dict) and b.get("type") == "tool_result" for b in content):
+            result = rec.get("toolUseResult")
+            if isinstance(result, dict) and "answers" in result:
+                return True, "answer"
+            if rec.get("toolDenialKind") == "user-rejected":
+                return True, "refusal"
+            return False, None
+    else:
+        return False, None
+    kind = origin.get("kind") if isinstance(origin, dict) else None
+    return True, kind if isinstance(kind, str) else None
+
+
+def reply_text(rec) -> str | None:
+    """The text of a main-chain assistant record, or None: not one, or one with no text (a tool
+    call alone)."""
+    if not isinstance(rec, dict) or rec.get("type") != "assistant" or rec.get("isSidechain"):
+        return None
+    msg = rec.get("message")
+    content = msg.get("content") if isinstance(msg, dict) else None
+    if isinstance(content, str):
+        return content
+    texts = [b.get("text") for b in content if isinstance(b, dict) and b.get("type") == "text"
+             and isinstance(b.get("text"), str)] if isinstance(content, list) else []
+    return "\n".join(texts) if texts else None
+
+
+class Transcript(NamedTuple):
+    """What read_transcript found: the newest turn as (when, origin kind), and the newest reply
+    with text as (when, whether it waits on Hayden); None for either when there is none."""
+    turn: tuple[float, str | None] | None
+    reply: tuple[float, bool] | None
+
+
+def read_transcript(path: str) -> Transcript:
+    """The newest turn (turn_kind) and the newest reply with text (reply_text) in the transcript
+    at path, newest by stamp, not by line: the wall clock steps. No file is Transcript(None,
+    None): Claude Code writes none before a session's first input. The whole file is read,
+    streamed (0.3 s for a 129 MB transcript, 2026-11-16). Raises TurnUnread when a turn's or a
+    reply's time can't be told: a line that may be one won't parse, one has no readable
+    timestamp, the path is no regular file, or a read fails. Opened without following a link or
+    waiting on a FIFO, as read_head is."""
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW | os.O_CLOEXEC)
+    except FileNotFoundError:
+        return Transcript(None, None)
+    except OSError as e:
+        raise TurnUnread(f"can't be opened ({e.strerror or e})")
+    turn = reply = None
+    try:
+        with os.fdopen(fd, "rb") as f:
+            if not stat.S_ISREG(os.fstat(f.fileno()).st_mode):
+                raise TurnUnread("is no regular file")
+            for n, line in enumerate(f, 1):
+                if not (any(b in line for b in TURN_BYTES)
+                        or all(b in line for b in REPLY_BYTES)):
+                    continue
+                try:
+                    rec = json.loads(line)
+                except (ValueError, RecursionError):
+                    raise TurnUnread(f"line {n} won't parse, and it may be a turn or a reply")
+                is_turn, kind = turn_kind(rec)
+                text = None if is_turn else reply_text(rec)
+                if not is_turn and text is None:
+                    continue
+                when = parse_iso(rec.get("timestamp"))
+                if when is None:
+                    raise TurnUnread(f"line {n} is a {'turn' if is_turn else 'reply'}, but its "
+                                     "timestamp can't tell when")
+                if is_turn and (turn is None or when > turn[0]):
+                    turn = (when, kind)
+                elif text is not None and (reply is None or when > reply[0]):
+                    reply = (when, bool(HAYDEN_WAIT.search(text)))
+    except OSError as e:
+        raise TurnUnread(f"can't be read ({e.strerror or e})")
+    return Transcript(turn, reply)
+
+
+def last_turn(path: str) -> tuple[float, str | None] | None:
+    """read_transcript's newest turn alone."""
+    return read_transcript(path).turn
+
+
+def transcripts_of(sid: str) -> list[str]:
+    """Every <config>/projects/*/<sid>.jsonl: Claude Code's own, which sandboxed Bash can't write."""
+    if not isinstance(sid, str) or not SID.fullmatch(sid):
+        return []
+    return sorted(glob.glob(os.path.join(config_dir(), "projects", "*", sid + ".jsonl")))
+
+
 def lane_sid(sid, path: str, files: list[dict]) -> bool:
     """Whether Claude Code's own records place session sid in the lane at path: a session file
     (session_files(), live or stale) with that sessionId and a cwd inside it, or a transcript
