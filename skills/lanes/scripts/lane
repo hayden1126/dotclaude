@@ -152,7 +152,7 @@ CLOCK_SLACK = 10  # secs: HAYPC's wall clock steps, and GitHub keeps another clo
 # secs past mergedAt a record must land to count as after the merge: the clock's 0.5 s steps, and
 # mergedAt's whole seconds. Well under a turn's 10 s, or a prompt after-merge write reads as older.
 MERGE_SLACK = 3
-# secs before a turn a record write must land to count as after it (turn_gate), as MERGE_SLACK
+# secs after a turn a record write must land to count as after it (turn_gate), as MERGE_SLACK
 TURN_SLACK = 3
 TURN_WORDS = {"human": "Hayden's prompt", "peer": "a message from another session",
               "task-notification": "a background task's notice",

@@ -194,9 +194,10 @@ an unregistered worktree: `lane whoami` tells you which.
    proposes `lane done`: the lead runs the rest (The lead, step 7). That record write is the
    lane's word that it is finished: a turn after it (Hayden's prompt, a message), or a reply
    with a Waiting on you list after it, makes `lane done` refuse the lane, since it may still
-   be working with him. So ask him anything before that write, never after; once nothing is
-   left after a later turn, end it by writing the record again (a `lane note` does) and
-   sending `merged #N` again.
+   be working with him. So ask him anything before that write, never after: an item still
+   open for him goes in the record's Asks for Hayden, and the replies after the write end
+   with no Waiting on you list. Once nothing is left after a later turn, end it by writing the
+   record again (a `lane note` does) and sending `merged #N` again.
    When `lane addr lead` refuses (no lead running, several sessions and none picked, or the
    lead stopped), it tells Hayden once that #N merged, with the refusal's way to pick the lead
    or the stopped lead's window if it gives one.
@@ -400,7 +401,8 @@ inherits the lead from it.
       - a turn, or a reply with a Waiting on you list, after the record's last write: message
         the lane "#N: lane done refused, your session `<reason>`: finish with Hayden, write
         your record, then send `merged #N` again", and rerun `done` on that message. No ask
-        to Hayden;
+        to Hayden, unless the same refusal comes back after that resent `merged #N`: then it
+        is the lead's ask to him, with the refusal's text;
       - a dialog open, a stopped session, an unreadable record or transcript, or two
         transcripts for one session: no message to the lane clears it, so it is the lead's
         ask to Hayden, with the refusal's text. A dialog or a stopped session he clears in the
