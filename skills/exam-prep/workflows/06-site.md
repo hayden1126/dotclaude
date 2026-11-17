@@ -1,6 +1,6 @@
 # 06 Site
 
-Baseline as of 2026-10-20; changes only via `12-retro`.
+Baseline as of 2026-11-12; changes only via `12-retro`.
 
 The site is one long notes page, `_build/notes.html`, built from the verified notes and published
 as a private artifact (FB-110). Converters turn each notes file into an HTML fragment in parallel;
@@ -49,10 +49,14 @@ each writing its own `_build/frag/secN.html`. Each converter draws its section's
 place. Converters use only the chassis's classes (FB-120).
 
 When they return, `git status` names nothing but the fragments and steps 1 and 2's files (a
-converter that ran `assemble.py` left a page: delete it; step 5 builds it). Compare each fragment's
-text with its notes file by a script (`_build/verify/fidelity.py`: the words in order, markup
-aside), never by eye, after checking it fails on a scratch copy of a fragment with a word dropped
-and with two sentences swapped. Then read each report's list of bare references: wire each in the
+converter that ran `assemble.py` left a page: delete it; step 5 builds it). Compare each fragment
+with its notes file by script, never by eye: copy `<skill>/templates/fidelity.py` to
+`_build/verify/fidelity.py`. First `python3 -I _build/verify/fidelity.py --self-test` must print
+`SELF-TEST OK`: a clean pair passes, and a dropped sentence, a changed number, two swapped steps
+and a dropped citation planted into each fragment are caught. `python3 -I
+_build/verify/fidelity.py` then compares headings, text, citations, links, callouts and steps as
+CONVERT.md maps them, prints one line per difference with its section, and exits 1 on any: fix
+the fragment and rerun it. Then read each report's list of bare references: wire each in the
 notes (a link with the backbone's id; a mention inside its own subsection stays text, S12), rerun
 `linkcheck.py`, and make the same edit in that section's fragment (a larger change: have the section
 converted again), then run `fidelity.py` again on the sections touched.
@@ -65,7 +69,18 @@ line (the conventions that change every answer, linked), a `.egrid` of `.eq` gro
 heading, then one `<li>` per question shape: the shape in `<b>`, its section as an `xref`, its
 practice questions), and an `.edrill` line naming what to drill hardest. Every link uses a
 backbone id. A shape that tests only what a topic cut takes out (the backbone's Conventions cut
-lines) stays out of the map.
+lines) stays out of the map. Each section the map names carries its depth label (S33) beside its
+`xref`: the label's words alone (Know cold, Use, Recognize), in parentheses after the link, plain
+text, without the statement it rests on: `<a class="xref" href="#sec-2-walks">§2.2 Walks</a> (Use)`.
+
+The fragment holds no cram block and no `open` attribute: `assemble.py` refuses both. Once
+`08-practice` step 7 has written `practice/cram-order.md`, `assemble.py` renders the map's cram
+block from it on every build (K02) and opens the map, so the cram order shows at the top of the
+page: a `div.ecram` at the start of the `.ebody`, one `.eq` group per tier, its `.eqh` the tier's
+name and minutes, one `<li>` per row (its one thing in `<b>`, its section as an `xref` to the
+section's anchor, its depth label), then the skip list and the Out of time line in an `.edrill`
+line. Its mock lines and `## Tonight` stay in the file only. The file is the one source, and
+nothing edits the rendered block. Before the file exists the map stays closed.
 
 ## Step 5: Assemble and check
 
@@ -73,17 +88,33 @@ From the hub root:
 
 1. `python3 -I <skill>/scripts/assemble.py` writes `_build/notes.html`. It refuses a missing or
    misnamed fragment, a script, style or unknown class in one, and a FIG marker with no
-   step-through.
+   step-through. It ends the page with a source key built from `MANIFEST.md` (a row per code the
+   page cites, each citation linked to its row), and refuses a citation whose code has no
+   `MANIFEST.md` row. A refusal of a citation that "has an href of its own" means the hub has a
+   hand-built source key: remove it as `11-next-exam` step 5.2 ("Reconcile the templates") says,
+   then rebuild. It renders the map's cram block (step 4), and reads PLAN.md's `Review view:` line
+   (`_build/CHASSIS.md`): with minutes, it keeps the Review / Full notes toggle and fails when the
+   Review view takes longer to read (both numbers printed); with `none: <why>` or no line, it strips
+   the toggle and refuses any `.rv` block (`07-cheatsheet`, "Tag the review").
 2. `python3 -I <skill>/scripts/linkcheck.py --html _build/notes.html`: every in-page link
-   resolves, and no id repeats.
+   resolves, no id repeats, and every citation links to the source key.
 3. `node <skill>/scripts/verify_page.mjs _build/notes.html _build/shots --steps
    _build/frag/steps.json` (leave `--steps` out when there are no step-throughs) with
    `allowed_domains` cdnjs.cloudflare.com, fonts.googleapis.com and fonts.gstatic.com (L20 to L22).
    It checks math (TeX errors too), overflow (with the worked examples and the map opened too),
    links, fonts, closed examples, scroll-spy and every step-through's runs, forward and back, at 390
-   and 1280 px in light and dark, and saves screenshots to `_build/shots/` (gitignored). It finds
+   and 1280 px in light and dark, and saves screenshots to `_build/shots/` (gitignored). Its long
+   jump clicks the rail's last entry from the top and its first from the bottom, and checks each
+   heading lands at the top, in Chromium and in WebKit, Safari's engine, where a jump the rail cuts
+   short shows (C1); without Playwright's WebKit it prints a WARN line naming `npx playwright
+   install webkit`, for the user to run in their terminal. On a page with the toggle it runs it all
+   again in the Review view, its screenshots named `-review`, and checks what the view shows and
+   hides. A build never passes its
+   `--no-long-jump`, which is for the skill's own tests. It finds
    Playwright in `_build/node_modules/`, the hub's `node_modules/` or npm's global root, or at the
-   package directory `EXAM_PREP_PLAYWRIGHT` names. With none, it says so and exits 2: install it
+   package directory `EXAM_PREP_PLAYWRIGHT` names, set from the hub CLAUDE.md's Tools line
+   (`00-intake` step 4; a hub without the line gets it the first time Playwright is found, so no
+   later session hunts again). With none, it says so and exits 2: install it
    once outside the hub's tracked files (`npm install playwright` in `_build/`, whose
    `node_modules/` and `package*.json` are gitignored), with `allowed_domains` registry.npmjs.org
    (a sandbox denial names any other host it needs). Its browser comes from the user's terminal:
@@ -98,7 +129,18 @@ rerun from step 1.
 ## Step 6: Publish
 
 - Publish `_build/notes.html` with the Artifact tool, private (FB-110), then check its sharing
-  setting (FB-118), and put the URL in STATUS.
+  setting (FB-118), and put the URL in STATUS. Every artifact's STATUS line, this one's and each
+  later one's (a sheet, a mock page, the watch list), records its owner account and its sharing
+  state beside the URL (`<URL> v2, owner <account>, private`), so a later session knows before
+  it tries whether it can republish there.
+- When the URL can't be updated (another account owns it, or the session has no write access to
+  it), publish a new private artifact instead, check its sharing as above, and lead the hand-off
+  with the new link, first in the message, said to replace the old one. In STATUS the new line
+  takes the URL's place, and the old URL stays on a line of its own marked `stale since <date>:
+  <why>`, so no session republishes there or sends the student to it (FB-118, L30).
+- To open a file or folder for the student (a screenshot, a PDF), on WSL run `explorer.exe
+  "$(wslpath -w <path>)"` with the sandbox off, since it starts a Windows program; its exit status
+  1 is normal, not a failure (L76).
 - Publish from the session that built the page. A republish from another session must first read
   the whole live copy, in chunks, and diff it against the build (FB-122, L30). If the
   auto-mode classifier refuses an Artifact call once, repeat the identical call once (L31).

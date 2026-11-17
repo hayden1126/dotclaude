@@ -1,0 +1,7 @@
+@import url("https://fonts.googleapis.com/css2?family=Inter&display=swap");
+
+body {
+  margin: 0;
+  color: #1a1a1a;
+  font: 16px/1.5 Inter, sans-serif;
+}

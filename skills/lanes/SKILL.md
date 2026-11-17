@@ -135,6 +135,10 @@ an unregistered worktree: `lane whoami` tells you which.
       `git add PLAN.md`) and, if anything is staged, commit it alone as
       `STATUS: the lead's notes through <sha>`.
 
+   The PR body carries the `long-runs` skill's `Skipped:` block, or `Skipped: nothing` when every
+   check ran: write it with the body, since `gh pr ready` is refused without the line (the
+   practices hook, rule SKIPPED-LINE).
+
    Before the ask for ready, run `lane trial --run "<suite>" ...` from the lane, one `--run` per
    suite your Done when names, in the background (it takes as long as the suites, longer when
    one fails). It merges origin/main and every other live lane's commits onto your HEAD in a
@@ -193,12 +197,25 @@ an unregistered worktree: `lane whoami` tells you which.
    finishes its handoff. Just before `handoff-check`, it runs a bare `lane ls --check`, which
    exits 1 and names the reason when its row shows `handoff?`: it fixes that and reruns it. A
    refusal, or a reason it can't fix, goes in its record's State, and it goes on. Then, as its
-   last act (the lead's `lane done` ends its session), it sends the lead `merged #N`, to what a
+   turn's last act, it sends the lead `merged #N`, to what a
    bare `lane addr lead` prints. It says nothing more about the merge to Hayden and never
-   proposes `lane done`: the lead runs the rest (The lead, step 7).
+   proposes `lane done`: the lead runs the rest (The lead, step 7). That record write is the
+   lane's word that it is finished: a turn after it (Hayden's prompt, a message), or a reply
+   with a Waiting on you list after it, makes `lane done` refuse the lane, since it may still
+   be working with him. So ask him anything before that write, never after: an item still
+   open for him goes in the record's Asks for Hayden, and the replies after the write end
+   with no Waiting on you list. Once nothing is left after a later turn, end it by writing the
+   record again (a `lane note` does) and, with no `Keep open:` line, sending `merged #N` again.
+   A `Keep open:` lane only writes the record: `lane done` refuses it anyway, and a second
+   `merged #N` would rerun the lead's chain and its pass.
    When `lane addr lead` refuses (no lead running, several sessions and none picked, or the
    lead stopped), it tells Hayden once that #N merged, with the refusal's way to pick the lead
    or the stopped lead's window if it gives one.
+   The lead's `lane done` ends a lane with no `Keep open:` line. A lane with one would stop
+   idle, so when the lead's "#N chain done: run /pass" arrives it runs the `pass` skill, and its
+   fresh session starts on the lead's reinstall. If another message drops the pass (a `[pass]`
+   notice), it runs the skill again once that message is dealt with. After a refusal no message
+   will come: it runs the skill straight after telling Hayden.
 7. **Close:** `lane done <id>` refuses an unmerged branch, a lane made by `lane new` with no
    commits past its base, and, while its worktree exists, a lane whose record's Next has a
    `Keep open:` line (one inside a comment counts too) or whose record has an unclosed `<!--` or a stray `-->` (it names the line), live session or not (pass `--abandon` to close any of them anyway; it
@@ -228,7 +245,17 @@ an unregistered worktree: `lane whoami` tells you which.
    - a run from anywhere but the main checkout, or under a lane's session (only the lead
      closes lanes);
    - links the install still points into the lane;
-   - a failing `handoff-check --closing`.
+   - a failing `handoff-check --closing`;
+   - a lane session that is busy or waiting on Hayden (a permission dialog or a question),
+     read again just before the signals (one stopped with Ctrl+Z keeps that status until `fg`);
+     `--abandon` never overrides it;
+   - a live lane session whose transcript holds a turn newer than the record's last write
+     (any input: Hayden's prompt or dialog answer, a message, a task notice, a `!` or slash
+     command), or a reply holding a Waiting on you line, newer than the record's last write
+     (one within 3 s before it reads as after), read again just before the signals: it may
+     still be working with Hayden. Also a record, or a transcript, that can't say when those
+     were. Checked after the `Keep open:` and comment reads, which `--abandon` skips.
+     `--abandon` closes it anyway (it asks).
 
    A close refused after a signal, or one that couldn't record its proof (nothing signalled),
    leaves the lane `closing`, which `open` refuses: rerun `lane done`, which keeps what the
@@ -375,6 +402,12 @@ inherits the lead from it.
       - **Any other lane:** "main moved to `<sha>`: leave it until your turn, unless your work
         needs something it gained". A parked one gets no message, and its `rebase` flag waits
         for its turn.
+      - **Merged with `Keep open:` in its Next:** one message, the chain's last to that lane:
+        any line above it gets, then "#N chain done: run /pass". Two messages would race, since
+        one landing during the pass drops it. It goes after step 3's reinstall, so the lane's
+        fresh session starts on the new install. A chain stopped before step 3 names the stall,
+        adds "hold your pass", and sends the pass line once the reinstall has run. A stop after
+        step 3 sends it with the stall named; one citing DA15/DA16 sends nothing.
 
       A pushed branch merges main rather than rebasing, which would need a force push.
    7. `lane done <id>` once the hand-back gate (step 5) passes, unless the lane's Next has a
@@ -383,7 +416,18 @@ inherits the lead from it.
       fails on a lane with no live session is the lead's one ask to Hayden,
       since no lane is left to ask (step 5 says what his yes allows in each case). A record
       older than the merge means the lane may have stopped before writing `Keep open:`, or its last session
-      ended without writing it. Never `--abandon` here.
+      ended without writing it. Never `--abandon` here. When `done` refuses a lane session
+      still working with Hayden, its refusal says who acts:
+      - busy: rerun `done` once the session is idle;
+      - a turn, or a reply with a Waiting on you list, after the record's last write: message
+        the lane "#N: lane done refused, your session `<reason>`: finish with Hayden, write
+        your record, then send `merged #N` again", and rerun `done` on that message. No ask
+        to Hayden, unless the same refusal comes back after that resent `merged #N`: then it
+        is the lead's ask to him, with the refusal's text;
+      - a dialog open, a stopped session, an unreadable record or transcript, or two
+        transcripts for one session: no message to the lane clears it, so it is the lead's
+        ask to Hayden, with the refusal's text. A dialog or a stopped session he clears in the
+        lane's window (nothing overrides those); for the rest, his yes allows `--abandon`.
 
    Then tell Hayden one line ("#42 merged: installed, lane chart-fix closed, api-docs nudged"),
    or the step that failed. A failed step stops the chain. A chain stopped on something that can
@@ -444,6 +488,7 @@ what").
 | `lane park` of a lane waiting its merge turn | the lead | on the lane's `park me`, no ask: `lane open` undoes it |
 | `lane open` of a parked lane at its merge turn | the lead | no ask (step 7.6): it opens in plan mode, so Hayden approves its plan first |
 | More PRs to come on the lane | the lane | `Keep open: <why>` at the top of its Next |
+| A `Keep open:` lane's pass after its merge | the lane | on the lead's "#N chain done: run /pass" (The lead, step 7.6), no ask |
 | An act past the lane's worktree (an install from it, a cap slot), or a step the lead must run | the lead | the lane messages the lead first (Lifecycle, step 3); the lead asks Hayden only when it needs his ok |
 
 - A lane never proposes `lane done`: only the lead can run it. The lead never restates a lane's

@@ -196,6 +196,41 @@ repo that turns the sandbox off loses subagent Bash; the policy still applies.
 - **rm:** `-r` outside the root, allowWrite and temp is denied; so are a dynamic or glob target of
   `-r`, git metadata, and `/` or home.
 - **MCP:** only the read tools listed in `[mcp]`. A new MCP tool fails closed until it is listed.
+  A machine-local overlay adds reads this public repo must not name, such as a private server's:
+  - It lives at `/etc/dotclaude/policy.local.toml`, outside git. The hook reads it only when a
+    call misses the `[mcp]` list.
+  - It may hold only `[mcp] read_tools`, for example
+    `read_tools = ["mcp__example__get_page", "mcp__example__list_*"]`, matched as fnmatch globs
+    the way `[mcp]` is. Each entry is `mcp__<server>__<tool>`, spelled in letters, digits, `_`,
+    `.`, `-` and the one wildcard `*`, and its tool part starts with a literal character other
+    than `_`, as every `[mcp]` entry does (`get_*`). A tool part that starts with `*` matches
+    every tool on that server, its write tools too, and `mcp__srv___*` is `*` on a server named
+    `srv_`. `?` and bracket sets are refused because fnmatch can read them as a separator or a
+    wildcard that a text check misses: `mcp__example_[__]*` is `mcp__example__*` to fnmatch.
+    A literal start still allows a broad glob such as `g*`, so list exact names where you can.
+  - Known limit: Claude Code joins server and tool with `__` and turns punctuation into `_`, so
+    a server named `a (beta)` has tools named `mcp__a__beta__...`, and `mcp__a__b*` matches all
+    of them. No spelling rule tells the two apart. Glob only a server whose name no other
+    server's name extends, or list exact names.
+  - It counts only when root owns the file and every directory above it, and none of them is
+    writable by group or others. The hook checks the open file's resolved path, so a symlink
+    into a directory someone else owns is ignored. Ownership, not the sandbox, is the guard: a
+    sandbox-off Bash call runs as Hayden, and the kernel refuses it a write to `/etc`.
+  - The path is fixed, with no override: a user can mount a filesystem (FUSE) that reports root
+    as the owner of anything, so only a path a user can't mount over is safe to trust.
+    `$DELEGATION_NO_OVERLAY` switches the overlay off, which only narrows; the tests set it so
+    a subprocess never reads the real file.
+  - Inside the sandbox root shows as uid 65534, so a sandboxed `delegation-ledger audit` (a
+    piped one, say) warns that the file isn't root-owned. The hook and a bare audit run outside.
+  - Anything else makes the whole file add nothing, so it never widens past `policy.toml`: a
+    file root doesn't own, a stray key, a bad entry, TOML that won't parse, a file over 64 KiB
+    or one that isn't a regular file. A missing or empty file is a no-op.
+  - A denial names both lists, and says when the overlay was ignored and why.
+    `delegation-ledger audit` lists its entries (`info`), or says why it was ignored (`WARN`,
+    which exits 1).
+  - Install it from a terminal, not a `!` line in a session, since sudo needs a tty:
+    `sudo install -d -o root -g root -m 755 /etc/dotclaude && sudo install -o root -g root -m
+    644 <file> /etc/dotclaude/policy.local.toml`.
 - **Protected writes:** file tools and literal Bash targets are realpath-resolved, so symlinks count.
   The protected paths are:
   - `~/.claude`, the project's `.claude` (except `.claude/worktrees`) and `.mcp.json`;

@@ -152,6 +152,16 @@ CLOCK_SLACK = 10  # secs: HAYPC's wall clock steps, and GitHub keeps another clo
 # secs past mergedAt a record must land to count as after the merge: the clock's 0.5 s steps, and
 # mergedAt's whole seconds. Well under a turn's 10 s, or a prompt after-merge write reads as older.
 MERGE_SLACK = 3
+# secs after a turn a record write must land to count as after it (turn_gate), as MERGE_SLACK
+TURN_SLACK = 3
+TURN_WORDS = {"human": "Hayden's prompt", "peer": "a message from another session",
+              "task-notification": "a background task's notice",
+              "answer": "Hayden's answer to a question dialog",
+              "refusal": "Hayden's refusal of a tool call",
+              None: "an input with no origin: a ! or slash command, or an interrupt"}
+# The end of a turn_gate refusal no message to the lane can clear.
+HAYDEN_ONLY = ("No message to the lane clears this: the lead asks Hayden, and `--abandon` closes "
+               "it anyway (it asks)")
 NO_MERGE_LIST = "gh can't list the lane's merged PRs"  # handoff_why's reason; `ls --check` refuses
 TEE_GRACE = 10.0  # secs run_child keeps reading a teed pipe once its child exits
 TRIAL_GIT_WAIT = 120  # secs each git call of `lane trial` may take
@@ -163,9 +173,6 @@ TRIAL_LOCK = "suite"
 # The dir in a lane that holds its trials' trees: never a temp root, which a sandbox's policy
 # treats apart (some suites fail on any tree there), and hidden from git by its own .gitignore
 TRIAL_DIR = ".lane-trial"
-# A trial's trees always get an absolute gitdir, whatever the repo's worktree.useRelativePaths
-# (git 2.48+): `done` finds a leftover's admin dir by that text (trial_admin_dirs)
-ABS_GITDIR = ("-c", "worktree.useRelativePaths=false")
 # env: the locks `lane` processes above this one hold, `<repo key>/<name>@<pid>:<start ticks>,...`
 LOCKS_HELD = "LANE_LOCKS_HELD"
 OVERLAP_WAIT = 10  # secs each git call behind the board's overlap flag may take
@@ -3314,13 +3321,15 @@ class NotUtf8(LaneError):
 
 
 def trial_git(repo: Repo, args: list[str], ok: tuple[int, ...] = (0,),
-              env: dict[str, str] | None = None) -> subprocess.CompletedProcess:
-    """git in the lane (`trial` runs sandboxed), bounded by TRIAL_GIT_WAIT. Running out, an exit
-    outside ok, or output that isn't UTF-8 (NotUtf8) aborts the trial with a message. env, when
-    given, replaces every inherited GIT_* variable (lanelib.git)."""
+              env: dict[str, str] | None = None,
+              cwd: str | None = None) -> subprocess.CompletedProcess:
+    """git in the lane, or in cwd (the trial's tree) when given (`trial` runs sandboxed),
+    bounded by TRIAL_GIT_WAIT. Running out, an exit outside ok, or output that isn't UTF-8
+    (NotUtf8) aborts the trial with a message. env, when given, replaces every inherited GIT_*
+    variable (lanelib.git)."""
     sub = next((a for a in args if a[:1] != "-" and "=" not in a), "git")
     try:
-        p = git(args, repo.toplevel, timeout=TRIAL_GIT_WAIT, env=env)
+        p = git(args, cwd or repo.toplevel, timeout=TRIAL_GIT_WAIT, env=env)
     except subprocess.TimeoutExpired:
         raise LaneError(f"git {sub} took over {TRIAL_GIT_WAIT} s, so the trial stopped")
     except UnicodeDecodeError:
@@ -3543,6 +3552,58 @@ def trial_root(repo: Repo) -> str:
     return root
 
 
+def trial_tree(repo: Repo, tmpdir: str, commit: str) -> str:
+    """Check commit out at <tmpdir>/tree, a checkout of the repo that is no registered worktree:
+    Claude Code's sandbox mounts <common>/worktrees read-only but for the session's own entry
+    (2.1.326), so a sandboxed `git worktree add` fails in every lane. The tree's own git dir,
+    <tmpdir>/git, holds its HEAD and index and names the shared common dir in `commondir`
+    (gitrepository-layout(5)), so git in the tree sees the repo's objects, refs and config as in
+    a linked worktree, and `lane` there finds the repo, its locks among them. tmpdir is fresh
+    (mkdtemp) and each file goes in with O_EXCL and O_NOFOLLOW. The checkout drops every
+    inherited GIT_* (env={}): a GIT_DIR or GIT_INDEX_FILE would aim it elsewhere. A reftable
+    repo is refused before this (ref_storage_problem): its HEAD lives in a reftable stack.
+    limit: gc in the repo can't see the tree's HEAD or index, so a gc that prunes dangling
+    objects (past gc.pruneExpire, 2 weeks by default; at once with `now`) takes the trial's
+    commit: a run mid-way fails on a bad object, and a `--keep` tree older than the grace
+    reads `bad object HEAD`."""
+    tree, gitdir = os.path.join(tmpdir, "tree"), os.path.join(tmpdir, "git")
+    os.mkdir(gitdir)
+    os.mkdir(tree)
+    for path, text in ((os.path.join(gitdir, "commondir"), repo.common_dir),
+                       (os.path.join(gitdir, "HEAD"), commit),
+                       (os.path.join(tree, ".git"), f"gitdir: {gitdir}")):
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o644)
+        with os.fdopen(fd, "w") as f:
+            f.write(text + "\n")
+    trial_git(repo, ["read-tree", "--reset", "-u", "HEAD"], env={}, cwd=tree)
+    return tree
+
+
+def ref_storage_problem(repo: Repo) -> str | None:
+    """Why trial_tree can't build a tree here, else None: a repo whose refs are in reftable
+    (extensions.refStorage) keeps each worktree's HEAD in a reftable stack in its git dir, and
+    trial_tree writes HEAD as a plain file. Not probed (git 2.43 has no reftable), so refused
+    rather than tried."""
+    p = trial_git(repo, ["config", "--get", "extensions.refStorage"], ok=(0, 1))
+    value = p.stdout.strip().lower()
+    if p.returncode == 0 and value != "files":
+        return (f"`lane trial` can't build its tree in a repo whose refs are in {shown(value)} "
+                "(extensions.refStorage): its tree's own git dir holds HEAD as a plain file")
+    return None
+
+
+def clear_tree(tmpdir: str) -> None:
+    """Delete the tree trial_tree made in tmpdir and its git dir, for the baseline's tree at the
+    same path. rmtree never follows a link (the trial's links into the lane among them)."""
+    for name in ("tree", "git"):
+        try:
+            shutil.rmtree(os.path.join(tmpdir, name))
+        except OSError as e:
+            raise LaneError(f"couldn't delete the merge's tree ({e.strerror or e}) before the "
+                            "baseline run, so the trial stopped; the next `lane trial` clears "
+                            "it") from None
+
+
 def link_problem(rel: str) -> str | None:
     """Why rel can't be a trial link (trial-link's entries, `--link`), else None: like a
     .worktreeinclude match, a plain path relative to the lane (one trailing '/' is dropped
@@ -3651,33 +3712,26 @@ def trial_leftovers(repo: Repo, lane_id: str, root: str) -> None:
     """Clear what earlier trials of this lane left in root (the lane's TRIAL_DIR, or the temp
     dir an older `lane` put its trees in): one killed by the Bash cap or a respawn never reaches
     its `finally`. Only this repo's lane's names (trial_prefix and mkdtemp's 8 characters, so
-    lane a never takes lane a-b's), and only registrations of a `tree` there: never a blanket
-    `git worktree prune`, since the common dir holds other prunable entries that aren't this
-    lane's. A sandboxed command can't remove an admin dir the sandbox mounted when it started,
-    so a registration it can't remove is named, once, as left for `lane done`, never with a
-    by-path remove to run sandbox-off (it would follow a symlink swapped in for the tree). A
-    root that is a symlink is left alone. Only `trial` calls this, sandboxed: it removes by
-    path, which `done`, sandbox-off, never may (remove_worktree)."""
+    lane a never takes lane a-b's). A tree an older `lane` registered as a worktree (before
+    trial_tree) keeps its registration: the sandbox mounts <common>/worktrees read-only, so it
+    is named, once, as left for `lane done`, never with a by-path remove to run sandbox-off (it
+    would follow a symlink swapped in for the tree), and never a blanket `git worktree prune`,
+    since the common dir holds other prunable entries that aren't this lane's. A root that is a
+    symlink is left alone. Only `trial` calls this, sandboxed: it deletes by path, which `done`,
+    sandbox-off, never may (remove_worktree)."""
     if os.path.islink(root):
         return
     mine = re.compile(re.escape(trial_prefix(repo, lane_id)) + "[a-z0-9_]{8}")
-    cleared, stuck = [], []
-    for path in worktree_heads(repo):
-        parent = os.path.dirname(path)
-        if (os.path.basename(path) == "tree" and os.path.dirname(parent) == root
-                and mine.fullmatch(os.path.basename(parent))):
-            p = trial_git(repo, ["worktree", "remove", "--force", "--end-of-options", path],
-                          ok=tuple(range(256)))
-            (cleared if p.returncode == 0 else stuck).append(path)
+    stuck = [path for path in worktree_heads(repo)
+             if os.path.basename(path) == "tree"
+             and os.path.dirname(os.path.dirname(path)) == root
+             and mine.fullmatch(os.path.basename(os.path.dirname(path)))]
     for d in glob.glob(os.path.join(root, "lane-trial-*")):
         if mine.fullmatch(os.path.basename(d)) and not os.path.islink(d):
             shutil.rmtree(d, ignore_errors=True)
-    if cleared:
-        warn(shown(f"cleared the tree an earlier trial left registered (it never reached its "
-                   f"cleanup): {', '.join(cleared)}"))
     if stuck:  # never a by-path remove to run: it follows a symlink swapped in for the tree
-        warn(shown(f"the sandbox can't unregister a tree an earlier trial left, so it stays "
-                   f"registered: {', '.join(stuck)}; harmless meanwhile, and `lane done "
+        warn(shown(f"the sandbox can't unregister a tree an older trial left, so it stays "
+                   f"registered: {', '.join(sorted(stuck))}; harmless meanwhile, and `lane done "
                    f"{lane_id}` clears it when the lane closes"))
 
 
@@ -3707,7 +3761,9 @@ def admin_dirs(wt_fd: int) -> list[tuple[str, str]]:
 
 def trial_admin_dirs(repo: Repo, lane_id: str, path: str, wt_fd: int) -> list[tuple[str, str]]:
     """(admin dir name, tree) of each tree a trial of lane lane_id left registered in the lane
-    at path (real), for `done`, which runs sandbox-off. Found by text alone, never by a path
+    at path (real), for `done`, which runs sandbox-off. Only an older `lane` registered its
+    trial trees (trial_tree registers none), always with an absolute gitdir
+    (worktree.useRelativePaths=false). Found by text alone, never by a path
     resolved: an admin dir under wt_fd (admin_dirs) whose gitdir file reads exactly
     <root>/<trial_prefix + 8 chars>/tree/.git, root being <path>/TRIAL_DIR or a temp dir an
     older `lane` built its trees in (this process's, or the Bash sandbox's /tmp/claude-<uid>:
@@ -3918,10 +3974,12 @@ def cmd_trial(args) -> int:
     me = own_lane(repo)
     if lanelib.pids_visible():
         raise LaneError("`lane trial` runs only inside the Bash sandbox (a Claude Code session's "
-                        "Bash, not a plain shell): it removes its scratch trees by path, safe only "
-                        "where the sandbox bounds what a symlink swapped in for one could make git "
-                        "delete, and its suites inherit the sandbox")
+                        "Bash, not a plain shell): its suites inherit the sandbox, and it deletes its "
+                        "scratch trees by path, safe only where the sandbox bounds what a symlink "
+                        "swapped in for one could reach")
     args.links = trial_links(repo, args.link)  # refused now, never after a wait for the lock
+    if why := ref_storage_problem(repo):  # likewise
+        raise LaneError(why)
     if held_by_caller(repo, TRIAL_LOCK):  # held_lock would let it in, and its sweep then clear
         raise LaneError(f"a trial can't run under a hold of the {TRIAL_LOCK} lock (inside "
                         "another trial's suite, or `lane lock suite`): an outer trial's live tree "
@@ -4018,8 +4076,7 @@ def trial(repo: Repo, me: dict, args) -> int:
     tmpdir = tempfile.mkdtemp(prefix=trial_prefix(repo, me["id"]), dir=root)
     tree, holds = os.path.join(tmpdir, "tree"), None
     try:
-        trial_git(repo, [*ABS_GITDIR, "worktree", "add", "--detach", "--quiet", "--end-of-options",
-                         tree, cur])
+        trial_tree(repo, tmpdir, cur)
         holds = "merge" if merged else "baseline"
         say_setup(me["id"], trial_setup(repo, repo.toplevel, tree, links))
         if not merged:  # cur is the baseline, so nothing reruns
@@ -4030,18 +4087,10 @@ def trial(repo: Repo, me: dict, args) -> int:
             failed = [i for i, run in enumerate(runs) if run.failed]
             again = {}
             if failed:
-                # At the same path: subtest ids that embed it, and the admin dir's name, then
-                # match.
+                # At the same path, so subtest ids that embed it match.
                 holds = None
-                p = trial_git(repo, ["worktree", "remove", "--force", "--end-of-options", tree],
-                              ok=tuple(range(256)))
-                if p.returncode:  # git's words withheld: see drop_tree
-                    raise LaneError(f"couldn't unregister the merge's tree (git exit "
-                                    f"{p.returncode}) before the baseline run, so the trial "
-                                    f"stopped; `lane done {me['id']}` clears it when the lane "
-                                    "closes")
-                trial_git(repo, [*ABS_GITDIR, "worktree", "add", "--detach", "--quiet",
-                                 "--end-of-options", tree, baseline])
+                clear_tree(tmpdir)
+                trial_tree(repo, tmpdir, baseline)
                 holds = "baseline"
                 trial_setup(repo, repo.toplevel, tree, links)  # said once, for the merge's
                 again = dict(zip(failed, run_suites(tree, args.run, "baseline", failed)))
@@ -4049,10 +4098,9 @@ def trial(repo: Repo, me: dict, args) -> int:
     finally:
         if args.keep and holds:
             say(shown(f"lane trial: kept the tree (the {holds}) at {tree}; a later `lane trial` "
-                      f"of lane {me['id']} clears its files and `lane done {me['id']}` its "
-                      "registration"))
+                      f"of lane {me['id']} clears it"))
         else:
-            drop_tree(repo, me["id"], tree, tmpdir)
+            shutil.rmtree(tmpdir, ignore_errors=True)
     if clashed:
         many = len(clashed) > 1
         say(f"lane trial: FAILED: lane{'s' * many} {', '.join(clashed)} didn't merge, so "
@@ -4132,24 +4180,6 @@ def conflict_line(repo: Repo, lane_id: str, sha: str, conflicted: list[str], cha
                         *[x for c in commands for x in ("--run", c)]])
     return (f"lane trial: lane {lane_id} conflicts with {whom}, not with this lane: {lane_id} "
             f"was left out; try it with this lane alone: {alone}"), False
-
-
-def drop_tree(repo: Repo, lane_id: str, tree: str, tmpdir: str) -> None:
-    """Unregister and remove the trial's tree, then its dir; a failure only warns, so it never
-    hides how the trial ended. git's stderr is withheld: a sandboxed process can plant its text
-    (a lock's reason), and git's own advice (`remove -f -f`), pasted sandbox-off, would follow a
-    symlink swapped in for the tree."""
-    if os.path.lexists(os.path.join(tree, ".git")):
-        try:
-            p = git(["worktree", "remove", "--force", "--end-of-options", tree], repo.toplevel,
-                    timeout=TRIAL_GIT_WAIT)
-            if p.returncode != 0:
-                warn(shown(f"couldn't unregister the trial's tree at {tree} (git exit "
-                           f"{p.returncode}): a later `lane trial` of lane {lane_id} clears its "
-                           f"files and `lane done {lane_id}` its registration"))
-        except subprocess.TimeoutExpired:
-            warn(f"git worktree remove took over {TRIAL_GIT_WAIT} s: the tree at {tree} is left")
-    shutil.rmtree(tmpdir, ignore_errors=True)
 
 
 def trial_report(commands: list[str], runs: list[SuiteRun], again: dict[int, SuiteRun]) -> int:
@@ -5428,6 +5458,15 @@ def close_lane(args) -> None:
         raise LaneError(f"lane {args.id}'s Next says {shown(kept.splitlines()[0].strip())!r}: it "
                         "stays open for more PRs. Its session drops that line at its last merge; "
                         "pass --abandon to close it anyway")
+    # A session still working with Hayden refuses here, before the slower gates (handoff-check,
+    # the survey), once the lane is known closable and not kept open, so a lane refused for
+    # either says so first: the --abandon a turn refusal may lead to would skip those reads.
+    # Both checks run again just before the signals, below.
+    if present and (live := lanelib.live_sessions()):
+        here = sessions_in(live, path)
+        status_gate(args.id, here, "done")
+        if not args.abandon:
+            turn_gate(repo, lane, [s.get("sessionId") for s in here])
     install_hold(repo, args.id, path, "nothing was signalled")
     hits = {}
     if present:  # every gate before any signal (lead_only refused a sandboxed run)
@@ -5443,6 +5482,11 @@ def close_lane(args) -> None:
                           f"End or move them, then rerun `lane done {args.id}`")
         if hits:
             closing_check(args.id, path, args.abandon)
+            # Read again: the gates took up to minutes, and a session may have taken a turn,
+            # gone busy or opened a dialog meanwhile.
+            mid_turn(args.id, hits, lanelib.session_files(), "done")
+            if not args.abandon:
+                turn_gate(repo, lane, [h.sid for h in hits.values() if h.kind == SESSION])
     outside_serves(repo, args.id, path)  # nothing signalled yet: a serve left processes outside
     for hit in work_references(repo, lane) if present else []:
         warn(shown(f"reference into {lane['id']}/work: {hit}"))  # a path from another lane
@@ -5667,7 +5711,7 @@ def handoff_gate(lane_id: str, path: str) -> None:
 def park_gates(repo: Repo, lane: dict, path: str, here: list[dict]) -> None:
     """`park`'s gates past lead_only and the git hardening, in order, all before any signal: a
     clean tree, HEAD pushed, the plain handoff-check, no handoff?, no lock the lane holds, no
-    install hold, no busy session (here: the live sessions in the lane)."""
+    install hold, no busy or waiting session (here: the live sessions in the lane)."""
     lane_id = lane["id"]
     clean_tree(lane_id, path, "park")
     branch, ref = pushed_check(repo, lane, worktree_heads(repo))
@@ -5697,32 +5741,103 @@ def park_gates(repo: Repo, lane: dict, path: str, here: list[dict]) -> None:
                         + "".join(f"\n  {shown(x)}" for x in into[:5]) + more
                         + "\nThe lead reruns the installer each line names from the main "
                         f"checkout {repo.main}, then reruns `lane park {lane_id}`")
-    if busy := [s for s in here if status_of(s) == "busy"]:
-        raise LaneError(shown(f"lane {lane_id}'s session {sid_of(busy[0])} is busy (mid-turn), "
-                              "and parking would cut its turn off: rerun `lane park "
-                              f"{lane_id}` once it is idle"))
+    status_gate(lane_id, here, "park")
 
 
-def mid_turn(lane_id: str, hits: dict[int, Hit], files: list[dict]) -> None:
+def mid_turn(lane_id: str, hits: dict[int, Hit], files: list[dict], verb: str) -> None:
     """Refuse when a lane session among hits is busy or waiting, by the status in the same
     session files survey read: the gates take up to minutes (a fetch, gh, handoff-check), so
     the busy gate's answer before them is stale by the signals, and a session that started or
     took a turn meanwhile would be cut off mid-turn. Waiting is a permission dialog or a
     question to Hayden, which the SIGTERM would lose."""
+    sessions = []
     for h in sorted(hits.values(), key=lambda h: h.proc.pid):
-        if h.kind != SESSION:
+        if h.kind == SESSION:
+            s = next((f for f in files if f.get("pid") == h.proc.pid
+                      and lanelib.proc_start_of(f) == h.proc.start), {})
+            sessions.append(dict(s, sessionId=h.sid))
+    status_gate(lane_id, sessions, verb)
+
+
+def status_gate(lane_id: str, sessions: list[dict], verb: str) -> None:
+    """Refuse, before any signal, a session (a session file's dict) that is busy or waiting on
+    Hayden: `done` and `park` would cut its turn off, or lose its dialog. Never overridden, not
+    by `done --abandon` either (Hayden's pick, 2026-11-16): he clears it in seconds in the lane's
+    window, and a SIGTERM mid-turn can leave half-written files that keep the worktree. One
+    stopped with Ctrl+Z keeps that status until `fg` continues it, so the refusal says so."""
+    ing = ACTING[verb][0]
+    for s in sessions:
+        sid, status = sid_of(s), status_of(s)
+        if status not in ("busy", "waiting"):
             continue
-        s = next((f for f in files if f.get("pid") == h.proc.pid
-                  and lanelib.proc_start_of(f) == h.proc.start), {})
-        status = status_of(s)
-        if status == "busy":
-            raise LaneError(f"lane {lane_id}'s session {h.sid} is busy (mid-turn), and parking "
-                            f"would cut its turn off, so nothing was signalled: rerun `lane park "
-                            f"{lane_id}` once it is idle")
-        if status == "waiting":
-            raise LaneError(f"lane {lane_id}'s session {h.sid} is waiting on Hayden (a permission "
-                            "dialog or a question), which parking would lose, so nothing was "
-                            f"signalled: answer it, then rerun `lane park {lane_id}`")
+        # Only Hayden, in the lane's window, can answer a dialog or fg a stopped session, so
+        # those are the lead's ask to him; a busy one ends its turn by itself.
+        if lanelib.session_stopped(s):
+            then = (f"it (pid {s.get('pid')}, {window_label(s)}) is stopped (Ctrl+Z): the "
+                    "lead asks Hayden to fg it there" +
+                    (" and answer it" if status == "waiting" else ""))
+        elif status == "busy":
+            then = "wait until it is idle"
+        else:
+            then = "the lead asks Hayden to answer it in the lane's window"
+        what = ("is busy (mid-turn), and {ing} would cut its turn off" if status == "busy" else
+                "is waiting on Hayden (a permission dialog or a question), which {ing} would "
+                "lose").format(ing=ing)
+        raise LaneError(shown(f"lane {lane_id}'s session {sid} {what}, so nothing was signalled: "
+                              f"{then}, then rerun `lane {verb} {lane_id}`"))
+
+
+def turn_gate(repo: Repo, lane: dict, sids: list) -> None:
+    """Refuse, before any signal, a live lane session that may still be working with Hayden:
+    its transcript holds a turn (any input: lanelib.turn_kind), or a reply holding a Waiting on
+    you line (a plain-text question asked in the turn that wrote the record), newer than the
+    record's last write less TURN_SLACK (Hayden's picks, 2026-11-16: one reference point, after
+    review round 4). The record is
+    the lane's word that it is finished; a write within TURN_SLACK after a turn reads as older.
+    Read only from Claude Code's own transcripts, which sandboxed Bash can't write. `done
+    --abandon` skips it."""
+    if not sids:
+        return
+    lane_id = lane["id"]
+    ask = (f"Message the lane (`lane addr {lane_id}`): it finishes with Hayden, writes its record "
+           f"and sends `merged #N` again. Then rerun `lane done {lane_id}`; --abandon closes it "
+           "anyway")
+    _, mtime = record_text(repo, lane)
+    if mtime is None:
+        raise LaneError(f"lane {lane_id}'s record can't be read, so its sessions' last turns can't "
+                        f"be weighed against it: nothing was signalled. {HAYDEN_ONLY}")
+    for sid in sids:
+        found = lanelib.transcripts_of(sid)
+        if len(found) > 1:
+            raise LaneError(shown(f"lane {lane_id}'s session {sid} has {len(found)} transcripts "
+                                  f"({', '.join(found)}), so its last turn can't be told: "
+                                  f"nothing was signalled. {HAYDEN_ONLY}"))
+        try:
+            seen = lanelib.read_transcript(found[0]) if found else lanelib.Transcript(None, None)
+        except lanelib.TurnUnread as e:
+            raise LaneError(shown(f"lane {lane_id}'s session {sid}'s transcript {found[0]} {e}, "
+                                  f"so nothing was signalled. {HAYDEN_ONLY}"))
+        if seen.turn and seen.turn[0] > mtime - TURN_SLACK:
+            when, kind = seen.turn
+            what = TURN_WORDS.get(kind) or f"an input of origin {kind}"
+            order = ("after" if when > mtime else
+                     f"less than {TURN_SLACK} s before, which reads as after,")
+            raise LaneError(shown(
+                f"lane {lane_id}'s session {sid} took a turn ({what}) at {clock(when)}, {order} "
+                f"its record's last write at {clock(mtime)}: it may still be working with "
+                f"Hayden, so nothing was signalled. {ask}"))
+        if seen.waits is not None and seen.waits > mtime - TURN_SLACK:
+            order = ("after" if seen.waits > mtime else
+                     f"less than {TURN_SLACK} s before, which reads as after,")
+            raise LaneError(shown(
+                f"lane {lane_id}'s session {sid} replied with a Waiting on you line at "
+                f"{clock(seen.waits)}, {order} its record's last write at {clock(mtime)}: it may "
+                f"still be waiting on Hayden, so nothing was signalled. {ask}"))
+
+
+def clock(t: float) -> str:
+    """A wall-clock stamp, local time to the second, for a refusal."""
+    return time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(t))
 
 
 def cmd_park(args) -> None:
@@ -5774,7 +5889,7 @@ def cmd_park(args) -> None:
         raise refusal(f"nothing proves these processes in {path} are lane {args.id}'s, so "
                       "nothing was signalled", refused,
                       f"End or move them, then rerun `lane park {args.id}`")
-    mid_turn(args.id, hits, files)
+    mid_turn(args.id, hits, files, "park")
     if hits:
         try:
             save_proof(repo, lane, path, hits.values())

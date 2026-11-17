@@ -16,7 +16,9 @@ Each practices skill ships an events.toml beside its SKILL.md:
   when = '''regex'''
   unless = '''optional regex'''
   paths = ["optional globs"]
-  at = ["edit", "commit"]   # optional: the levels it runs at, both by default
+  at = ["edit", "commit"]   # optional: the levels it runs at, both by default; "bash" is opt-in
+  command = '''regex'''     # required with "bash": the path words a command must hold; the
+                            # call reaches this only if settings.json's filter passes it too
   scope = "line"            # optional: judged line by line (default "file")
   say = "one line"
 
@@ -58,8 +60,9 @@ Levels:
       after the edit suppresses it. L2 doesn't run in a call L1 denies, nor for a rule whose
       `at` lacks "edit". A `scope = "line"` rule (a key shape) is judged per line of new: `when`,
       `unless` and the allow all on the one line, so an allow covers only its own line.
+  L2b a rule with "bash" in `at`, read against a Bash call's raw command, below.
   L3s, push and L3r: the Bash levels, below.
-  L4  SessionStart(compact): a digest (under DIGEST_MAX characters, shared among the skills
+  L4  SessionStart(compact): a digest (under DIGEST_MAX UTF-16 units, shared among the skills
       and cut only between lines) naming the practices skills loaded since the previous
       compaction, with their gate lines, plus reloadSkills: true.
 Deny-once has two signs, and either lets the call through (an edit level denies only when
@@ -116,8 +119,9 @@ start, as one systemMessage line (shown to the user only), and prints nothing wh
 
 Bash levels. settings.json sends a Bash call here only when its command (the payload's
 "command" string, never the tool_response output) holds git with commit or push, gh with pr
-ready or pr create, or a package manager with an add verb (PostToolUse: git with commit), so
-Python never starts for any other call.
+ready or pr create, a package manager with an add verb, or, in either order and in lower, Title
+or UPPER case, a path word and a rename or drop word for L2b (PostToolUse: git with commit), so
+Python never starts for any other call. A test ties L2b's rules to that filter by their samples.
 The prefilter is one `LC_ALL=C grep -E`, linear in the payload (a bash `case` glob backtracked
 over every "git" in a large output). Every practices entry in settings.json (edit, Bash and
 SessionStart) runs the shim only when it exists and then exits 0; a deny is JSON on stdout.
@@ -139,7 +143,7 @@ command never runs the parse into the 5 s kill.
 Accepted limits beyond those logs: `eval`, an alias, a function or a script file
 that runs git with nothing naming it in the command; a command inside an unquoted heredoc's
 $(...); a function body's cd, read as if it ran. A file written by a heredoc or `cat >`
-escapes L1 and L2, and L3s is its backstop.
+escapes L1 and L2, and L3s is its backstop; L2b is the one exception.
 A repo is read only inside Bounds: git runs only in (or pointed at) the project dir
 (CLAUDE_PROJECT_DIR, else the cwd recorded at the session's first SessionStart, never the call's
 own cwd; the Bash levels read config.toml and the project skills from it too, so a cd moves
@@ -175,6 +179,15 @@ Each level reads commits, never the index or the working tree:
         the commit it judged; the reason carries each skill's gate lines and the marker in one
         block to paste into a reviewer brief. The line-scoped and commit-time rules also run
         over every commit in the range.
+  skipped  The same two calls are refused, not denied once, until the PR body has a `Skipped:`
+        line (`Skipped: nothing` passes; rule id SKIPPED-LINE for the off switch). A `ready` reads
+        the body with `gh pr view`, outside the repo and with a bare environment, started first
+        and read last so its network wait spends no scan budget; a create reads its own command
+        or its --body-file. What can't be read is allowed and logged as
+        skipped-line. It shares L3r's one deny, because when two hooks deny one call Claude Code
+        shows only the reason of the last to finish (2.1.319, measured), and L3r's fires once.
+        It proves the line is there, not that it is true, and a ready on GitHub's site never
+        reaches it.
 A scan runs every rule whose `at` has "commit" (L3r: or `scope = "line"`): `when` on each
 commit's added lines (lines its blob has that the parent's doesn't, by count and without a
 trailing \\r: a moved line isn't new, nor is a CRLF rewrite) of regular files matching `paths`,
@@ -197,6 +210,22 @@ key per line it named (`L2|<skill>|<rule>|<path>|sha1(the stripped line)`); a fi
 of those lines was accepted at edit time and is skipped, and any other line of that rule in
 that file is still told (a transcript marker names no line, so it accepts none). A deny or
 tell names a finding by rule, path and line, never the matched text, and so does errors.log.
+
+L2b runs in PreToolUse(Bash) right after SEC-64 and reads no repo and no file. Its rule gives
+`command` in place of `paths`: a call is denied when `command` and `when` both match the raw
+command text, with each literal \\n or \\t read as the character, and neither `unless` nor
+`practices-allow: <id>` is in it. settings.json's filter names REL-31's words, so a rule with other
+words, a project's included, never starts Python until the filter gains them. It is blunt on
+purpose: a false match (a commit message that names a migration and a drop) costs one resend.
+Each matched line gets a key, `L2b|<skill>|<rule>|sha1(the stripped line)`, and the call is denied
+when any of its keys is new, so a resend passes and a different line is denied again. A line denied at L2b
+counts as accepted, as one at L2 does: a commit or push scan skips it, for any path, since the key
+names none. That needs the command's line to equal the file's, as a heredoc's does; a printf's
+first line holds the printf too, so its finding is still told. The deny's marker is
+`[practices:L2:<skill>:<rule>:bash]`, and it never echoes the matched text. A command over CMD_MAX
+is skipped. L2b shares SEC-64's part of the budget, fails the same way and reads the same off
+file. sed, a Python write or a name built from parts can still pass; L3s and push read those
+commits.
 
 SEC-64, the engine's other rule, runs first in PreToolUse(Bash) and reads no repo: a Bash call
 that adds a named package (ADD_VERBS: npm, pnpm, yarn and bun add and install, pip and uv pip
@@ -247,6 +276,7 @@ import sys
 import time
 
 START = time.monotonic()
+PROCESS_START = START  # two_passes resets START; the 5 s kill counts from here
 try:
     import tomllib
 except ImportError:  # python3 < 3.11: reported by the startup health check
@@ -259,6 +289,7 @@ try:  # tests only: a tiny budget proves the skip path without a slow pattern. O
         BUDGET = float(os.environ.get("PRACTICES_TEST_BUDGET") or BUDGET)
 except ValueError:
     pass
+GH_PATHS = ("/usr/bin/gh", "/usr/local/bin/gh", "/opt/homebrew/bin/gh")
 CONTENT_MAX = 256 << 10
 FILE_MAX = 1 << 20  # bytes of the current file read to apply an Edit; scans still cap at CONTENT_MAX
 LINE_MAX = 4000
@@ -276,7 +307,13 @@ WS_RUN = re.compile(r"\s{%d,}" % (WS_RUN_MAX + 1))
 LINE_START_WS = re.compile(r"(?<![\\\[])\^(\(\?!)?\\s\*")
 PARSE_MAX = 1 << 20  # transcript rows bigger than this are never a load or a deny
 LOG_MAX = 64 << 10
-DIGEST_MAX = 2000
+# Claude Code turns a hook string over 10,000 characters into a file path plus a 2,000-character
+# preview, and doesn't ask Claude to read the file. The five shipped skills' whole gates take about
+# 3,150 with their titles, so 6,000 holds about four more at that size; tests/setup pins that every
+# shipped gate fits and caps each skill's gate. CONTEXT_MAX bounds the digest plus the session
+# start's notes, which share one additionalContext string.
+DIGEST_MAX = 6000
+CONTEXT_MAX = 9500
 STALE_CRUMB = 10  # seconds: a live scan ends within the 5 s kill
 KEEP_MAX = 500  # preserved uuids looked up per compaction boundary
 STATE_DAYS = 7
@@ -295,6 +332,7 @@ EDIT_TOOLS = ("Edit", "Write", "MultiEdit")
 SKILL_MAX = 1 << 20
 PROJECT_SKILLS_MAX = 256 * 1024  # all of a project's events.toml files together
 AT = ("edit", "commit")  # a [[rule]]'s `at` when it gives none: checked at both
+LEVELS = AT + ("bash",)  # what `at` may name: "bash" is opt-in, so no rule gains it by default
 # An [auth] helpers name: an identifier, dotted allowed (auth.requireUser). An empty or blank
 # name would turn `(?:...|)` into a match for any call and silence SEC-01.
 HELPER = re.compile(r"[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*")
@@ -644,8 +682,14 @@ def _strs(v):
 
 
 def _at_ok(at):
-    """A rule's `at`: a non-empty list of "edit" and "commit", each at most once."""
-    return _strs(at) and bool(at) and set(at) <= set(AT) and len(at) == len(set(at))
+    """A rule's `at`: a non-empty list of LEVELS, each at most once."""
+    return _strs(at) and bool(at) and set(at) <= set(LEVELS) and len(at) == len(set(at))
+
+
+def _command_ok(rule):
+    """A rule's `command`: a string when given, and not empty on a rule that runs at "bash"."""
+    command = rule.get("command", "")
+    return isinstance(command, str) and (bool(command) or "bash" not in rule.get("at", AT))
 
 
 def read_toml(path, cap):
@@ -683,7 +727,8 @@ def load_skill(folder):
         if not (isinstance(r, dict) and isinstance(r.get("id"), str) and ID.fullmatch(r["id"])
                 and isinstance(r.get("when"), str) and isinstance(r.get("say"), str)
                 and isinstance(r.get("unless", ""), str) and _strs(r.get("paths", []))
-                and _at_ok(r.get("at", list(AT))) and r.get("scope", "file") in ("file", "line")):
+                and _at_ok(r.get("at", list(AT))) and _command_ok(r)
+                and r.get("scope", "file") in ("file", "line")):
             return None, f"{path}: bad rule {r.get('id') if isinstance(r, dict) else r!r}"
         ids.append(r["id"])
     if len(ids) != len(set(ids)):
@@ -2092,7 +2137,7 @@ def _scan(repo, commits, more, rules, level, ctx, lockfiles, found):
 def fresh(findings, event, repo, project):
     """The findings whose key is new for this session and agent, less those on a line L2
     already denied for that file and rule (its path relative to project, the Bash levels'
-    project dir, as L2 keyed it); one per key."""
+    project dir, as L2 keyed it) or L2b already denied for that rule; one per key."""
     seen = state_keys(event)
     l2_keys = accepted_at_l2(event)
     out, keys = [], set()
@@ -2101,7 +2146,8 @@ def fresh(findings, event, repo, project):
             continue
         if f.skill is not ENGINE:
             rel = relative(os.path.join(repo.top or repo.cwd, f.path), project)
-            if f"L2|{f.skill['name']}|{f.rule['id']}|{rel}|{f.line_hash}" in l2_keys:
+            if f"L2|{f.skill['name']}|{f.rule['id']}|{rel}|{f.line_hash}" in l2_keys \
+                    or f"L2b|{f.skill['name']}|{f.rule['id']}|{f.line_hash}" in l2_keys:
                 continue
         keys.add(f.key)
         out.append(f)
@@ -2563,11 +2609,226 @@ def review_block(touched, mb, head, branch, shown=8):
             "check won't stop the resend.\n\n" + "\n\n".join(parts))
 
 
+# The Skipped line: a PR marked ready, or opened as one, says what didn't run.
+
+SKIPPED_ID = "SKIPPED-LINE"
+SKIPPED_LINE = re.compile(r"^[ \t]*(?:[-*+][ \t]+)?(?:\*\*|__)?Skipped(?:\*\*|__)?:(.*)$", re.M)
+GH_SHARE = 1.5  # of BUDGET, from the process's start, so both passes fit settings.json's 5 s kill
+REPO_NAME = re.compile(r"[A-Za-z0-9][\w.-]*/[\w.][\w.-]*", re.A)
+PR_SELECTOR = re.compile(r"\w[\w./-]*", re.A)
+PR_URL = re.compile(r"https://github\.com/([^/\s]+/[^/\s]+)/pull/(\d+)(?:[/?#]\S*)?")
+ORIGIN_URL = re.compile(r"(?:https://(?:[^/@\s]+@)?|ssh://git@|git@)github\.com[:/]"
+                        r"([^/\s]+/[^/\s]+?)(?:\.git)?/?")
+HEREDOC_BODY = re.compile(r"(?:--body[= ]|-b[ =]?)\s*\"?\$\(\s*cat\s+<<-?\s*(['\"\\\\]?)([\w.-]+)")
+EXPANSION = re.compile(r"\$[A-Za-z_{(]")  # known limit: a single-quoted `$X` reads as one, and goes unchecked
+SKIPPED_REASON = (
+    "[practices:skipped] This PR's body has no `Skipped:` line, so it can't be marked ready. Add "
+    "this block to the body (`gh pr edit <n> --body-file <file>`, or the --body of `gh pr "
+    "create`). Make that change in a Bash call of its own, since this check reads the body "
+    "before a command runs and a refusal cancels all of it, then resend:\n\nSkipped: <what didn't run, or `nothing`>\nSafe because: <why>\n"
+    "Caught by: <what would catch a problem>\n\nWhen every check ran, `Skipped: nothing` is "
+    "enough. This check refuses every resend until the line is there.")
+
+
+def has_skipped_line(text):
+    """Whether a line of text starts `Skipped:` (a bullet or bold allowed) with something after it."""
+    return any(m.group(1).strip().lstrip("*_").strip() for m in SKIPPED_LINE.finditer(text))
+
+
+def body_unseen(command, bodies):
+    """Whether a --body is built by an expansion, so this check can't read it. A heredoc written
+    out in the command can be read, unless its delimiter is unquoted and its own text expands
+    something."""
+    heredoc = HEREDOC_BODY.search(command)
+    if heredoc:
+        end = re.compile(r"\n[ \t]*" + re.escape(heredoc.group(2)) + r"\b").search(command, heredoc.end())
+        text = command[heredoc.end():end.start() if end else len(command)]
+        return not heredoc.group(1) and bool(EXPANSION.search(text))
+    return any(EXPANSION.search(b) or "%SUBST%" in b or "%ANSI%" in b for b in bodies)
+
+
+def flag_values(args, short, long_):
+    """Each value given to a gh option, in order, in any of its spellings."""
+    for k, a in enumerate(args):
+        if a in (short, long_):
+            if k + 1 < len(args):
+                yield args[k + 1]
+        elif a.startswith(long_ + "="):
+            yield a.split("=", 1)[1]
+        elif a.startswith(short) and not a.startswith("--") and len(a) > 2:
+            yield a[2:].removeprefix("=")  # gh's flag parser takes -b=value as well as -bvalue
+
+
+def base_repo_name(repo):
+    """The owner/name gh would use on github.com, or None: the remote `gh repo set-default`
+    marked, else upstream, github, origin, in gh's order. Read from the config file as text, so
+    no program that config names runs."""
+    try:
+        text = read_plain(os.path.join(repo.common_dir, "config"), CONFIG_MAX).decode(
+            "utf-8", "replace")
+    except OSError:
+        return None
+    remotes, current = {}, None
+    for line in text.splitlines():  # by line: a regex over a repo-written file can go quadratic
+        line = line.strip()
+        if line.startswith("["):
+            head = re.fullmatch(r'\[remote "([^"]+)"\]', line)
+            current = remotes.setdefault(head.group(1), {}) if head else None
+        elif current is not None:
+            key, _, value = line.partition("=")
+            current.setdefault(key.strip(), value.strip())
+    marked = [r["gh-resolved"] for r in remotes.values() if "gh-resolved" in r]
+    if marked and marked[0] != "base":  # `set-default` on another repo stores its name
+        return marked[0]
+    order = [n for n, r in remotes.items() if r.get("gh-resolved") == "base"]
+    for name in (*order, "upstream", "github", "origin"):
+        match = ORIGIN_URL.fullmatch(remotes.get(name, {}).get("url", ""))
+        if match:  # gh skips a remote on another host
+            return match.group(1)
+    return None
+
+
+def gh_repo_prefix(event, args):
+    """The GH_REPO=... set on this gh call itself, from the command parser, or None."""
+    bash_words = load_bash_words()
+    try:
+        for words in bash_words.segments(command_of(event)):
+            name, found, prefix = bash_words.command_words(words, {"gh"})
+            if name == "gh" and found == args:
+                return dict(prefix).get("GH_REPO")
+    except (ValueError, IndexError, RecursionError):
+        pass
+    return None
+
+
+def start_body_read(event, args, cwd, pr, bounds):
+    """A running `gh pr view` of the PR a `ready` call names, or None (logged) when it can't be
+    named. It starts here and is read last, so its network wait doesn't spend the budget of the
+    checks that run beside it. gh runs outside the repo (cwd /, a --repo and a selector, so it
+    never reads local git) with a bare environment, since a project's settings can set a hook's;
+    both names are checked first, so neither can be read as an option. Known limit: where gh's
+    token lives in a keyring, or GH_CONFIG_DIR or XDG_CONFIG_HOME moves its config, this gh fails
+    and every ready goes unchecked, logged."""
+    import subprocess  # noqa: PLC0415 (only the Bash levels pay for it)
+    target, name = pr["pr"] or pr["branch"], None
+    if pr["pr"] and pr["pr"].startswith("http"):
+        url = PR_URL.fullmatch(pr["pr"])
+        if not url:
+            log("skipped-line", "the PR's URL isn't one this check reads, so it went unchecked")
+            return None
+        name, target = url.groups()
+    repos = list(flag_values(args, "-R", "--repo"))
+    if repos and name is None:
+        name = repos[-1]
+    name = name or gh_repo_prefix(event, args)
+    if name is None or target is None:
+        repo = open_repo({"cwd": cwd, "git_dir": None, "work_tree": None}, "skipped-line", bounds)
+        if repo is None:
+            return None
+        name = name or base_repo_name(repo)
+        if target is None:
+            target = repo.run("rev-parse", "--abbrev-ref", "HEAD").decode(
+                "utf-8", "surrogateescape").strip()
+    target = (target or "").lstrip("#")
+    if not (name and REPO_NAME.fullmatch(name) and PR_SELECTOR.fullmatch(target)):
+        log("skipped-line", "no GitHub repo and PR could be named, so the PR went unchecked")
+        return None
+    gh, home = next((g for g in GH_PATHS if os.path.isfile(g)), None), passwd_home()
+    if not gh or not home:
+        log("skipped-line", "no system gh or no home dir, so the PR went unchecked")
+        return None
+    try:
+        return subprocess.Popen(
+            [gh, "pr", "view", target, "--repo", name, "--json", "body"], cwd="/",
+            env={"HOME": home, "PATH": "/usr/bin:/bin", "LC_ALL": "C.UTF-8"},
+            stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+    except OSError as e:
+        log("skipped-line", f"gh didn't start ({type(e).__name__}), so the PR went unchecked")
+        return None
+
+
+def create_has_line(event, args, cwd):
+    """Whether a `gh pr create`'s body has the Skipped line: read from the command's own text
+    (a heredoc body too), its --body, or its --body-file. None (logged) when the file can't be
+    read. The file may sit anywhere: gh reads the same path outside the sandbox and posts it, so
+    this answer tells the session nothing it couldn't learn. read_plain refuses anything but a
+    regular file, so a FIFO can't block it."""
+    command, bodies = command_of(event), list(flag_values(args, "-b", "--body"))
+    if any(has_skipped_line(t) for t in (command, *bodies)):
+        return True
+    files = list(flag_values(args, "-F", "--body-file"))
+    if not files:
+        if body_unseen(command, bodies):
+            log("skipped-line", "a --body built by an expansion, so the PR went unchecked")
+            return None
+        return False
+    path = os.path.join(cwd, files[-1]) if cwd else None
+    if files[-1] == "-" or path is None:
+        log("skipped-line", "a --body-file this check can't read, so the PR went unchecked")
+        return None
+    try:
+        return has_skipped_line(read_plain(path, FILE_MAX).decode("utf-8", "replace"))
+    except OSError as e:
+        log("skipped-line", f"a --body-file didn't read ({type(e).__name__}), so the PR went "
+            "unchecked")
+        return None
+
+
+def skipped_checks(event, ghs, cfg, bounds):
+    """One entry per PR call: a running gh, or whether the body has the line (None: unknown)."""
+    if is_off(cfg, ENGINE, SKIPPED_ID):
+        return []
+    out = []
+    for args, cwd in ghs:
+        if "--help" in args or "-h" in args or "--dry-run" in args:
+            continue
+        if "--web" in args or "-w" in args:
+            log("skipped-line", "a PR body typed in the browser, so the PR went unchecked")
+            continue
+        try:
+            out.append(start_body_read(event, args, cwd, pr_ready(args), bounds)
+                       if without_repo(args)[1] == "ready"
+                       else create_has_line(event, args, cwd))
+        except (Budget, GitError) as e:
+            log("skipped-line", f"{type(e).__name__}, so the PR went unchecked")
+    return out
+
+
+def body_has_line(proc):
+    """Whether the body a running gh returns has the line; None (logged) on any failure, since
+    this stops accidents and a GitHub outage shouldn't stop work."""
+    import subprocess  # noqa: PLC0415 (only the Bash levels pay for it)
+    try:
+        out, _ = proc.communicate(
+            timeout=max(0.0, PROCESS_START + GH_SHARE * BUDGET - time.monotonic()))
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        proc.communicate()
+        log("skipped-line", "gh timed out, so the PR went unchecked")
+        return None
+    try:
+        body = json.loads(out)["body"] if proc.returncode == 0 else None
+    except (ValueError, KeyError, TypeError):
+        body = None
+    if not isinstance(body, str):
+        log("skipped-line", f"gh exited {proc.returncode} with no PR body, so the PR went unchecked")
+        return None
+    return has_skipped_line(body)
+
+
+def skipped_reasons(checks):
+    """The refusal, once, when any PR call's body lacks the line. It keeps no deny key: only the
+    line clears it, so every resend is refused too."""
+    found = [body_has_line(c) if hasattr(c, "communicate") else c for c in checks]
+    return [SKIPPED_REASON] if False in found else []
+
+
 # ---------------------------------------------------------------- SEC-64, the install check
 
 SEC64 = {"id": "SEC-64", "say": (
     "Read a package's install scripts before its first install, or install with scripts off.")}
-SEC64_SHARE = 0.5  # of BUDGET, counted from the start of the run; the git levels keep the rest
+# Of BUDGET, counted from the start of the run, for SEC-64 and L2b; the git levels keep the rest.
+SEC64_SHARE = 0.5
 NPM_FAMILY = {"npm", "pnpm", "yarn", "bun"}
 PY_MANAGERS = {"pip", "uv", "poetry"}
 # Each manager's words that add a package named after them. npm's are its documented aliases.
@@ -3135,12 +3396,79 @@ def install_check(event):
     return None
 
 
+# ---------------------------------------------------------------- L2b, a command's text
+
+def bash_text(cmd):
+    """A Bash command as L2b reads it: a literal \\n or \\t is the character, since a printf writes
+    it as one and `when` reads lines. That comes before the line cap, so a one-line printf's lines
+    each get their own."""
+    return scan_text(cmd.replace("\\n", "\n").replace("\\t", "\t"))
+
+
+def bash_lines(rule, text, helpers=()):
+    """The lines of a Bash command's scanned text that a "bash" rule flags: `command` and `when`
+    both match, and neither `unless` nor `practices-allow: <id>` is in the text (for a
+    `scope = "line"` rule, on the flagged line)."""
+    if not guarded(rule["command"], text, helpers, rule["id"]):
+        return []
+    if rule.get("scope") != "line" and (allowed(rule["id"], text)
+                                        or excused(rule, text, helpers)):
+        return []
+    return l2_lines(rule, text, helpers)
+
+
+def text_reason(pending):
+    return "\n\n".join(
+        f"[practices:L2:{skill['name']}:{rule['id']}:bash] {rule['say']}\nThis check reads command "
+        "text only, so it can match what the command doesn't do. Resending a false match passes "
+        "it." for skill, rule in pending)
+
+
+def text_check(event):
+    """L2b: the deny for this call, or None. A fault allows the call and logs it, and the git
+    levels still run, with their share of the budget."""
+    global BUDGET
+    whole, BUDGET = BUDGET, BUDGET * SEC64_SHARE
+    try:
+        cmd = command_of(event)
+        if not cmd or len(cmd) > CMD_MAX:
+            return None
+        project = bash_project(event)
+        cfg = load_config(project)
+        if not cfg["enabled"]:
+            return None
+        rules = [(s, r) for s in discover(project).values() for r in s["rules"]
+                 if "bash" in r.get("at", AT) and not is_off(cfg, s, r["id"])]
+        text, found = bash_text(cmd), []
+
+        def hits(item):
+            s, r = item
+            CRUMB.mark("(the command)", "bash", r["id"])
+            found.extend((s, r, f"L2b|{s['name']}|{r['id']}|{_sha1(line.strip())}")
+                         for line in bash_lines(r, text, cfg["helpers"]))
+            return False
+
+        run_patterns(rules, hits)
+        seen = state_keys(event)
+        new = [item for item in found if item[2] not in seen]
+        if not new or not state_add(event, [key for _, _, key in found]):
+            return None
+        pending = {(s["name"], r["id"]): (s, r) for s, r, _ in new}
+        return deny(text_reason(pending.values()))
+    except Exception as e:  # noqa: BLE001  never at the cost of the push and PR checks
+        log("crash", f"L2b: {type(e).__name__}: {e}")
+    finally:
+        BUDGET = whole
+    return None
+
+
 def bash_pre(event):
-    """PreToolUse(Bash): deny a first package install once per package (SEC-64), deny a call
-    that both commits and pushes once, record HEAD before a commit (L3s), deny a push once per
-    new finding in what it would send, and deny a PR's `ready` once until a reviewer ran with the
-    gate lines of the skills it touches (L3r)."""
-    out = install_check(event)
+    """PreToolUse(Bash): deny a first package install once per package (SEC-64), deny a command
+    whose text a "bash" rule flags once per line (L2b), deny a call that both commits and pushes
+    once, record HEAD before a commit (L3s), deny a push once per new finding in what it would
+    send, and deny a PR's `ready` once until a reviewer ran with the gate lines of the skills it
+    touches (L3r)."""
+    out = install_check(event) or text_check(event)
     if out:
         return out
     gits, ghs, named = bash_calls(event)
@@ -3169,9 +3497,10 @@ def bash_pre(event):
                 "still scans the commits already made that no remote has, and stops the resend "
                 "once for any finding in them; what the new commit adds is only told after it "
                 "is made.")
-    reasons, keys, cut_keys = [], [], []
+    reasons, keys, cut_keys, checks = [], [], [], []
     try:
         bounds = bounds_of(project)
+        checks = skipped_checks(event, ghs, cfg, bounds)
         if commits:
             record_heads(event, commits, bounds)
         if pushes or ghs:
@@ -3213,15 +3542,16 @@ def bash_pre(event):
                         if reasons:
                             reasons.append(LEFT_NOTE)
     except Budget as e:
-        log("budget-spent", f"after {BUDGET}s, in the Bash check's {e}; the call was allowed")
-        return None
+        log("budget-spent", f"after {BUDGET}s, in the Bash check's {e}; the rest went unchecked")
+        reasons = []
     except GitError as e:
         log("git-skipped", f"Bash check: {e}")
-        return None
+        reasons = []
     # A cut scan's key rides on any deny of this call, so its resend passes that range unscanned.
-    if not reasons or not state_add(event, keys + cut_keys):  # an unkept key: allow, logged
-        return None
-    return deny("\n\n".join(reasons))
+    if reasons and not state_add(event, keys + cut_keys):  # an unkept key: allow, logged
+        reasons = []
+    reasons += skipped_reasons(checks)  # needs no key, so it stands when the others are dropped
+    return deny("\n\n".join(reasons)) if reasons else None
 
 
 def deny(reason):
@@ -3232,16 +3562,16 @@ def deny(reason):
 # ---------------------------------------------------------------- SessionStart
 
 def digest(names, skills):
-    """The L4 digest, under DIGEST_MAX characters: a head naming the skills, then each one's
-    SKILL.md path and gate lines. The room after the head is shared among the skills (one that
+    """The L4 digest, under DIGEST_MAX UTF-16 units (see units()): a head naming the skills, then
+    each one's SKILL.md path and gate lines. The room after the head is shared among the skills (one that
     needs less than its share passes the rest on), so a long gate never crowds out the next
     skill, and a skill's lines are cut only between lines, with a note of how many it left
     out."""
     head = "Practices skills loaded before this compaction: " + ", ".join(names) + "."
     blocks = [(f"\n{n} ({os.path.join(skills[n]['dir'], 'SKILL.md')}), its must-hold lines:",
                [f"\n- {line}" for line in skills[n]["gate"]]) for n in names]
-    need = [len(title) + sum(map(len, lines)) for title, lines in blocks]
-    room, share, left = DIGEST_MAX - 1 - len(head), {}, list(range(len(blocks)))
+    need = [units(title) + sum(map(units, lines)) for title, lines in blocks]
+    room, share, left = DIGEST_MAX - 1 - units(head), {}, list(range(len(blocks)))
     while left:  # each skill's share: what it needs, or an even split of what is left
         fair = max(room, 0) // len(left)
         fits = [k for k in left if need[k] <= fair]
@@ -3256,17 +3586,17 @@ def digest(names, skills):
         if need[k] <= share[k]:
             out += title + "".join(lines)
             continue
-        kept, used = [], len(title)
+        kept, used = [], units(title)
         for line in lines:
             note = f"\n- ({len(lines) - len(kept) - 1} more in its SKILL.md)"
-            if used + len(line) + len(note) > share[k]:
+            if used + units(line) + units(note) > share[k]:
                 break
             kept.append(line)
-            used += len(line)
+            used += units(line)
         note = f"\n- ({len(lines) - len(kept)} more in its SKILL.md)"
-        if used + len(note) <= share[k]:
+        if used + units(note) <= share[k]:
             out += title + "".join(kept) + note
-    return out[:DIGEST_MAX - 1]  # only a head naming dozens of skills reaches this cap
+    return cut_units(out, DIGEST_MAX - 1)  # only a head naming dozens of skills reaches this cap
 
 
 def compact(event):
@@ -3361,9 +3691,13 @@ def health(event):
     prune(os.path.join(d, "denies"), now)
     prune(os.path.join(d, "heads"), now)
     prune(os.path.join(d, "sessions"), now)
+    prune(os.path.join(d, "long-runs"), now)  # hooks/long_runs_check.py's state
     if not problems:
         return None
-    return {"systemMessage": "practices hooks: " + "; ".join(problems)}
+    # Half the cap, so the session start's own notes still fit after it (with_notes).
+    return {"systemMessage": fit_joined("practices hooks:", problems, " ", "; ",
+                                        lambda n: f"and {n} more (practices hooks)",
+                                        CONTEXT_MAX // 2)}
 
 
 LABELS = {"skill-disabled": ("skill disabled", "skills disabled"),
@@ -3466,14 +3800,55 @@ def with_notes(out, event):
         return out
     out = dict(out or {})
     if lines:
-        note = "practices hooks: " + "; ".join(lines)
-        out["systemMessage"] = f"{out['systemMessage']}; {'; '.join(lines)}" \
-            if out.get("systemMessage") else note
+        sm = out.get("systemMessage")
+        out["systemMessage"] = fit_joined(sm or "practices hooks:", lines, "; " if sm else " ", "; ",
+                                          lambda n: f"and {n} more (practices hooks)")
     if context:
         spec = out.setdefault("hookSpecificOutput", {"hookEventName": "SessionStart"})
-        spec["additionalContext"] = (spec["additionalContext"] + "\n" + context
-                                     if spec.get("additionalContext") else context)
+        spec["additionalContext"] = fit_context(spec.get("additionalContext"), context.split("\n"))
     return out
+
+
+def fit_context(first, notes):
+    """first (the digest, under DIGEST_MAX, or None) whole, then each note while the string stays
+    under CONTEXT_MAX, then a count of the notes left out. A project can add any number of
+    copies, and past Claude Code's cap the model would see only a preview."""
+    return fit_joined(first or "", notes, "\n" if first else "", "\n", lambda n: (
+        f"({n} more notes on this project's copies of practices skills are left out here; "
+        "the user sees them at session start.)"))
+
+
+def fit_joined(first, items, lead, sep, tail, cap=None):
+    """first whole, then lead and items joined by sep while the string stays under cap
+    (CONTEXT_MAX by default: Claude Code files a longer hook string away), then tail(how many
+    were left out). Its callers keep first short (a digest under DIGEST_MAX, health's message
+    under half the cap), so the first item's check leaves room for the tail. Lengths count
+    UTF-16 units, as a JavaScript string does, so astral characters can't slip past."""
+    cap = CONTEXT_MAX if cap is None else cap
+    out, room = first + lead, units(sep) + units(tail(len(items)))
+    for k, item in enumerate(items):
+        piece = (sep if k else "") + item
+        if units(out) + units(piece) + room >= cap:
+            return out + (sep if k else "") + tail(len(items) - k)
+        out += piece
+    return out
+
+
+def units(s):
+    """s's length in UTF-16 units: a character past U+FFFF counts two."""
+    return len(s.encode("utf-16-le", "surrogatepass")) // 2
+
+
+def cut_units(s, n):
+    """s's longest prefix of at most n UTF-16 units, never splitting a character."""
+    if units(s) <= n:
+        return s
+    used = 0
+    for i, c in enumerate(s):
+        used += 2 if ord(c) > 0xFFFF else 1
+        if used > n:
+            return s[:i]
+    return s
 
 
 def two_passes(level, event):

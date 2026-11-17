@@ -196,6 +196,12 @@ it too. No doc said which window owns which ask.
 - A lane with more PRs to come starts its Next with `Keep open: <why>`, and `lane done` refuses
   it (a commented-out flag too), as it does a record with an unclosed `<!--`. `--abandon` closes
   it anyway and stays an ask rule (Hayden, 2026-10-14).
+- A merged lane with `Keep open:` runs the `pass` skill on the lead's "#N chain done: run /pass",
+  so it doesn't stop idle (Hayden, 2026-11-08). The message goes after the reinstall: CLAUDE.md
+  loads only at session start, so a pass straight after `merged #N` could start on the old
+  install, and a message landing during a pass's wait would drop the pass, so the lead's lines
+  to that lane go in one message and a dropped pass is run again. With no lead to answer, the
+  lane passes straight after telling Hayden.
 - Lanes report their own state and asks, never the lead's messages.
 - Before an act whose effect leaves its worktree (an install from the lane, a cap slot), and
   with anything the lead must run, a lane messages the lead, never Hayden (Hayden, 2026-10-19).
@@ -267,9 +273,9 @@ Why it works this way:
   standing approval written here; the lead proves the merge with `gh pr view` before it acts,
   and `lane done` checks it again (a merged PR whose head is the tip, or the tip in the base).
 - **A scoped exception to "confirm before deleting"**, which CLAUDE.md names. `lane done`
-  refuses an unmerged branch, a dirty worktree, links into the lane, a `Keep open:` lane and a
-  record whose comments don't parse,
-  archives the record before the remove, and never passes `--force` or `-D` (a killed trial's
+  refuses an unmerged branch, a dirty worktree, links into the lane, a `Keep open:` lane, a
+  record whose comments don't parse and a lane session still working with Hayden (below),
+  archives the record before the remove, and never passes `--force` or `-D` (an older trial's
   leftover registration goes by its gitdir text, never by path: the `lane trial` section). The approval
   covers `lane done` after a merge only; `--abandon` still asks.
 - **`lane done` reads `Keep open:` itself.** `handoff-check --closing` fails on the line too,
@@ -317,6 +323,57 @@ Why it works this way:
   belongs in `lane.json`, set by a command (`lane keep "<why>"`), with the record's line for
   people and `handoff-check` warning when the two disagree. A lane can only hold itself that
   way, the safe direction. Until then, keep `Keep open:` at the top of Next, in plain text.
+- **`lane done` never cuts off a lane session still working with Hayden** (lane done-gate,
+  2026-11-16). In another repo, a lane wrote "Nothing left, the lead runs lane done" into its
+  record, its live session kept walking Hayden through a test, and the lead's `lane done` ended
+  it mid-conversation. `done` now refuses, before any signal, a lane session that is busy or
+  waiting on Hayden (park's gate, `status_gate`; `--abandon` never overrides it, since he
+  clears it in seconds in the lane's window and a SIGTERM mid-turn can leave half-written files
+  that keep the worktree), and a live one whose transcript holds a turn newer than the record's
+  last write (`turn_gate`, the `handoff?` idea applied to the conversation; `--abandon` skips
+  it). The record is the lane's word that it is finished, so a turn after it means it may not
+  be. `turn_gate` also refuses on a reply holding a Waiting on you line newer than the record:
+  a lane can write its record and end the same turn on a plain-text question, with no input
+  after the write and no dialog open. Any such reply counts, not only the last (a Stop hook's
+  block can draw one more line that drops the list while his question stays open). The line is
+  the Waiting on you list CLAUDE.md asks for, read after any markup (`lanelib.HAYDEN_WAIT`:
+  `^[\W_]*waiting on (you|hayden)\b`), so a lane's `Waiting on the lead:` passes. **One
+  reference point** (Hayden's pick, 2026-11-16): inputs and waiting replies are both weighed
+  against the record's last write, nothing else. Two earlier rules opened a major gap each.
+  Clearing a wait by any later input let the lead's own "lane done refused" message clear the
+  question it was refused for (review round 3); clearing it only by Hayden's own input then
+  refused every routine close where he merged on GitHub, since a lane's merge ask ends with a
+  Waiting on you list and only the lead's "#N merged" follows it (review round 4). With the
+  record as the reference, a merge ask before the after-merge write passes, and a question after
+  the write holds the close until the lane writes its record again, which the skill says it does
+  only once it is done with him: the record is the lane's word, as for every other check here.
+  Each refusal names who acts: a turn or a waiting reply newer than the record is the lane's to
+  clear (the lead messages it), busy clears by itself, and the rest (a dialog, a stopped
+  session, which keeps its busy or waiting status until `fg`, an unreadable record or
+  transcript, two transcripts) only Hayden can clear, so the lead asks him. Both run once the
+  lane is known closable and not kept open (after the merge check and the `Keep open:` and
+  comment reads, so those say so first: `--abandon`, where a refusal may lead, skips the
+  reads), before the slower gates, and again after
+  `handoff-check --closing`, just before the lane is marked `closing`. A turn is any input
+  (Hayden's pick, 2026-11-16; `lanelib.turn_kind`): every main-chain user record but a tool's
+  result, a compaction summary and an `isMeta` record with no `origin` (a loaded skill's body,
+  Stop-hook feedback), plus each `queued_command` attachment (input that arrived mid-turn). A
+  tool's result is no turn even with an image beside it (10 such records in the local
+  transcripts), except Hayden's answer to a question dialog (`toolUseResult.answers`) and his
+  refusal of a tool call (`toolDenialKind: user-rejected`). A tally of 300 real transcripts
+  gave the shapes: typed prompts carry `origin.kind` `human`, messages `peer`, background
+  notices `task-notification`; `!` commands, slash commands and interrupts carry none. An
+  input of a shape not seen yet counts (`auto-continuation`, a usage limit's reset resuming
+  work, turned up once in 4,231 transcripts), and a turn or reply whose time can't be read
+  refuses. None of the 4,231 local transcripts was unreadable, and the largest (129 MB) reads in
+  0.33 s. The
+  transcripts are Claude Code's own (`<config>/projects/*/<sid>.jsonl`), which sandboxed Bash
+  can't write; a session with none has taken no input. A write within 3 s after a turn reads
+  as older, as a merge's does (`TURN_SLACK`): a lane's after-merge write lands well after the
+  message that started its turn, and its `merged #N` send is a tool call, no turn. It stays out
+  of `handoff?`: a working lane always has turns newer than its record, so the flag would
+  never clear. On a refusal the lead messages the lane, which finishes, writes its record again
+  and resends `merged #N`. `park` keeps only the busy and waiting gate: `lane open` undoes it.
 - **The backlog line moved to the lead.** The lead owns the project STATUS, so the one line at
   merge is a step of its chain, not the lane's.
 
@@ -359,7 +416,9 @@ about 8 hours on a blocker fixed in another window 4 minutes later, while lane p
 merge that never needed the reinstall. So a stopped chain still sends step 6's messages, saying what
 stalled, and arms a wake on the blocker ("The lead", step 7, in `skills/lanes/SKILL.md`). A stop at
 step 1 reports the merge as unproven, since a lane's `merged #N` can be wrong, and a DA15/DA16
-refusal tells no lane to merge until Hayden rules: the shared git dir is the thing in doubt.
+refusal tells no lane to merge until Hayden rules: the shared git dir is the thing in doubt. A merged
+`Keep open:` lane hears "hold your pass" from a chain stopped before the reinstall, and the pass line
+once it has run; after the reinstall, the pass line comes with the stall named.
 
 ## One lead per main checkout (lane two-sessions, 2026-10-14)
 
@@ -499,8 +558,8 @@ alone skips the uncommitted read then, since it can afford to.
 
 **`lane trial`.** Before a lane asks Hayden for ready, it runs
 `lane trial --run "<suite>" --run "<suite>" ...`, sandboxed. It refuses to run anywhere else
-(a plain shell): it removes its scratch trees by path, which is safe only where the sandbox
-bounds what a symlink swapped in for a tree could make git delete, and its suites inherit the
+(a plain shell): it deletes its scratch trees by path, which is safe only where the sandbox
+bounds what a symlink swapped in for a tree could reach, and its suites inherit the
 sandbox. Before it waits for the lock, it also refuses a bad link path, a link under another one,
 and a link the lane lacks (step 3), and a config `trial-locks` entry its `locks` don't list or
 that names `suite`.
@@ -553,7 +612,20 @@ that names `suite`.
    (SandboxReality, the subagent-policy cases). The first trial makes `.lane-trial/` with a
    `.gitignore` of `*` in it, so neither it nor the trees show in the lane's git status; a
    symlink there is refused. The lead notes' scratch index stays in the temp dir, since no suite
-   runs there. The tree then gets set up as the lane's own tests ran: the lane's gitignored files
+   runs there. The tree is no registered worktree: Claude Code 2.1.326's sandbox mounts
+   `<common>/worktrees` read-only but for the session's own entry, so a sandboxed
+   `git worktree add` fails in every lane (no lane could run a trial from 2026-11-13 until
+   lane trial-fix). Its git dir sits beside it (`.../XXXXXXXX/git`, which `tree/.git` names) and
+   holds its HEAD and index and a `commondir` file naming the shared common dir
+   (gitrepository-layout(5)), so git in the tree sees the repo's objects, refs and config as a
+   linked worktree does, and `lane` there finds the repo and its locks; `git worktree list`
+   never shows it. gc in the repo can't see the tree's HEAD, so a gc that prunes dangling
+   objects (past `gc.pruneExpire`, 2 weeks by default, or at once with `now`) takes the trial's
+   commit: a run fails on a bad object, and a `--keep` tree older than the grace reads
+   `bad object HEAD` (probed on git 2.43, 2026-11-17). A repo whose refs are in reftable
+   (`extensions.refStorage`) keeps a tree's HEAD in a reftable stack, which this git dir lacks, so
+   the trial refuses it up front (not probed: git 2.43 has no reftable). The tree then gets set up as the
+   lane's own tests ran: the lane's gitignored files
    that its `.worktreeinclude` matches are copied in (from the lane, not main, so the suites see
    the lane's copies; git's names are read with `-z`, so a non-ASCII name is never quoted), and
    each path the config's `trial-link` (`lane init --trial-link node_modules,.venv`) or a
@@ -611,11 +683,11 @@ merge's. The number of tests run is never compared, so a fail-fast flag (pytest 
 drops a test package from discovery passes unseen. Node resolves a bare `require` up the parent
 dirs, so a tree in `.lane-trial/` without the link still finds the lane's `node_modules`; the
 link makes it the tree's own path, which tools that read `./node_modules` (its `.bin`) need. And
-a trial killed partway (the Bash cap, a respawn) leaves its tree registered. The sandbox mounts
-each registered worktree's admin dir in every command started after the tree exists, so a later
-sandboxed run can't delete it. The next trial removes the files it can (in `.lane-trial/`, and
-in the temp dir an older `lane` used) and names each registration it can't, which stays,
-harmless, until `lane done` clears it; never a blanket `git worktree prune`. Neither that
+a trial killed partway (the Bash cap, a respawn) leaves its dir behind, which the next trial of
+the lane deletes (in `.lane-trial/`, and in the temp dir an older `lane` used). An older `lane`
+registered its trees as worktrees, and a registration the sandbox mounted can't be removed
+sandboxed, so the next trial deletes such a tree's files and names its registration, which
+stays, harmless, until `lane done` clears it; never a blanket `git worktree prune`. Neither that
 message nor `--keep`'s offers a by-path `git worktree remove --force`: git resolves the path,
 so a symlink swapped in for the tree points it at whatever worktree the link names, and it
 deletes that worktree whole (probed on git 2.43, 2026-10-24). `lane done` clears such a
@@ -629,8 +701,8 @@ lane's files are gone (`done` removes them itself, below), or at once when the l
 by hand. One it can't remove it names as left in place, with no path to remove by hand: run
 sandbox-off, that would follow whatever link made the removal fail. No message of `lane` ever
 offers a by-path removal that can recurse or follow a link (a test pins it); the one removal
-it names, `unlink` for a `.lane-trial` that is a symlink, does neither. The trial adds its trees with `worktree.useRelativePaths=false`, so that text is
-always an absolute path.
+it names, `unlink` for a `.lane-trial` that is a symlink, does neither. The older `lane` added
+its trees with `worktree.useRelativePaths=false`, so that text is always an absolute path.
 
 ## Parked lanes (lane park, 2026-10-29)
 
