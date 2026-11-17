@@ -140,7 +140,7 @@ class LastTurn(unittest.TestCase):
         self.write(*recs)
         return lanelib.read_transcript(self.path).waits
 
-    def test_a_reply_waiting_on_hayden_after_the_last_turn(self):
+    def test_a_reply_waiting_on_hayden(self):
         t = self.t
         self.write(typed(t), assistant(t + 5, WAITS), tool_result(t + 6))
         self.assertEqual(lanelib.read_transcript(self.path),
@@ -161,18 +161,12 @@ class LastTurn(unittest.TestCase):
             user(t + 2, "Stop hook feedback: [autopass] Context is at 303k", isMeta=True),
             assistant(t + 3, "Noted, passing next turn.")), t + 1)
 
-    def test_only_haydens_own_input_answers_a_question(self):
-        # Review round 3: the lead's "lane done refused" message is a peer turn, and must not
-        # clear the question it was refused for; nor may a task notice or an unknown kind.
+    def test_the_newest_waiting_reply_whatever_came_after(self):
+        # done weighs it against the record's last write, not against later input.
         t = self.t
-        for make in (typed, answer, refused, bang):
-            with self.subTest(clears=make.__name__):
-                self.assertIsNone(self.waits(assistant(t, WAITS), make(t + 40),
-                                             assistant(t + 50, "Done.")))
-        for make in (peer, notice, lambda w: user(w, origin={"kind": "auto-continuation"})):
-            with self.subTest(keeps=make.__name__):
-                self.assertEqual(self.waits(typed(t - 10), assistant(t, WAITS), make(t + 40),
-                                            assistant(t + 50, "Sent merged #9.")), t)
+        self.assertEqual(self.waits(assistant(t, WAITS), typed(t + 40), peer(t + 45),
+                                    assistant(t + 50, "Done.")), t)
+        self.assertEqual(self.waits(assistant(t, WAITS), assistant(t + 30, WAITS)), t + 30)
 
     def test_a_reply_as_a_plain_string_counts(self):
         # Not seen in 23,248 candidate lines (2026-11-16), so read rather than trusted absent.
@@ -273,14 +267,14 @@ class DoneTurns(test_cli.Fakes):
         self.stop(claude)
         p = self.run_lane("done", "chart-fix", "--abandon")
         self.assertIn(f"session {SID} is busy (mid-turn)", p.stderr)
-        self.assertIn(f"it (pid {claude}, no tmux) is stopped (Ctrl+Z): fg it there: the lead "
-                      "asks Hayden to fg it, then rerun", p.stderr)
+        self.assertIn(f"it (pid {claude}, no tmux) is stopped (Ctrl+Z): the lead asks Hayden "
+                      "to fg it there, then rerun", p.stderr)
         self.assertEqual(self.signals(), [])
         self.session_file(claude, status="waiting")
         p = self.run_lane("done", "chart-fix", "--abandon")
         self.assertIn("is waiting on Hayden", p.stderr)
-        self.assertIn("the lead asks Hayden to fg it and answer it, then rerun `lane done "
-                      "chart-fix`", p.stderr)
+        self.assertIn("the lead asks Hayden to fg it there and answer it, then rerun `lane "
+                      "done chart-fix`", p.stderr)
         self.assertEqual(self.signals(), [])
 
     def test_a_lane_with_no_live_session_closes_without_reading_its_record(self):
@@ -343,22 +337,38 @@ class DoneTurns(test_cli.Fakes):
         (claude,) = self.claude()
         self.transcript_of(typed(self.w - 60), assistant(self.w + 30, WAITS))
         p = self.run_lane("done", "chart-fix")
-        self.assertIn(f"session {SID} replied at", p.stderr)
-        self.assertIn("with a Waiting on you line, and no input of Hayden's has come since",
-                      p.stderr)
-        self.assertIn("Only his answer in the lane's window clears it: the lead asks him",
+        self.assertIn(f"session {SID} replied with a Waiting on you line at", p.stderr)
+        self.assertIn("after its record's last write", p.stderr)
+        self.assertIn("Message the lane (`lane addr chart-fix`)", p.stderr)
+        self.assertRefusedUntouched(p, claude)
+        # Within 3 s before the write reads as after, as a turn does.
+        self.transcript_of(typed(self.w - 60), assistant(self.w - 1, WAITS))
+        p = self.run_lane("done", "chart-fix")
+        self.assertIn("less than 3 s before, which reads as after, its record's last write",
                       p.stderr)
         self.assertRefusedUntouched(p, claude)
         self.assertClosed(self.lane("done", "chart-fix", "--abandon"))
 
-    def test_a_message_from_the_lead_leaves_the_question_open(self):
-        # Review round 3: the lead's refusal message, then the lane rewrites its record and
-        # resends `merged #N` with no list: Hayden's question is still open.
+    def test_a_merge_ask_before_the_after_merge_write_closes(self):
+        # Review round 4: the lane's merge ask ends with a Waiting on you list, Hayden merges on
+        # GitHub, the lead's "#9 merged" arrives, and the lane writes its record and sends
+        # `merged #9`. The ask is older than the record, so the routine chain closes.
+        self.claude()
+        self.transcript_of(assistant(self.w - 100, "Ready to merge.\n\n**Waiting on you:**\n"
+                                                   "- merge #9"),
+                           peer(self.w - 30), assistant(self.w + 3, "Sent merged #9."))
+        self.assertClosed(self.lane("done", "chart-fix"))
+
+    def test_a_kept_lane_says_so_before_its_transcript(self):
+        # Review round 4: a turn refusal leads to --abandon, which skips the Keep open read.
         (claude,) = self.claude()
-        self.transcript_of(assistant(self.w - 100, WAITS), peer(self.w - 30),
-                           assistant(self.w + 3, "Sent merged #9."))
+        self.write(self.record("chart-fix"), self.read(self.record("chart-fix")).replace(
+            "## Next\n", "## Next\nKeep open: PR 2 follows.\n\n"))
+        self.w = os.path.getmtime(self.record("chart-fix"))
+        self.transcript_of(typed(self.w - 60), assistant(self.w + 30, WAITS))
         p = self.run_lane("done", "chart-fix")
-        self.assertIn("with a Waiting on you line", p.stderr)
+        self.assertIn("Next says 'Keep open: PR 2 follows.'", p.stderr)
+        self.assertNotIn("Waiting on you", p.stderr)
         self.assertRefusedUntouched(p, claude)
 
     def test_a_last_reply_waiting_on_the_lead_closes(self):
