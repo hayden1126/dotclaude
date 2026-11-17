@@ -150,6 +150,54 @@ class HeavyGates(Base):
                 self.assertIsNone(self.pre(command))
 
 
+class TextRules(Base):
+    """The practices hook's L2b denies once per line an installed "bash" rule flags, so a heavy
+    gate in the same call is left to it. The real data-layer skill is the fixture."""
+    FLAGGED = ("printf '%s\\n' 'ALTER TABLE t DROP COLUMN c;' > db/migrations/0004.sql"
+               " && lane trial --run x")
+
+    def setUp(self):
+        super().setUp()
+        shutil.copytree(os.path.join(REPO, "skills", "data-layer"),
+                        os.path.join(self.config, "skills", "data-layer"))
+
+    def test_a_line_a_bash_rule_flags_is_left_to_it(self):
+        self.assertIsNone(self.pre(self.FLAGGED))
+        self.assertIn("long-runs", self.pre("lane trial --run x"))
+
+    def test_without_the_flagged_line_it_denies(self):
+        self.assertIn("long-runs", self.pre("echo ok > db/migrations/README && lane trial --run x"))
+
+    def test_the_rule_turned_off_gives_the_deny_back(self):
+        sys.path.insert(0, os.path.join(REPO, "hooks"))
+        self.addCleanup(sys.path.remove, os.path.join(REPO, "hooks"))
+        import long_runs_check as L  # noqa: PLC0415
+        event = {"session_id": SID, "transcript_path": self.transcript, "cwd": self.proj,
+                 "hook_event_name": "PreToolUse", "tool_name": "Bash",
+                 "tool_input": {"command": self.FLAGGED}, "tool_use_id": "b-now"}
+        base = {"enabled": True, "disable": set(), "helpers": ()}
+        for disable, denied in ((set(), False), ({"REL-31"}, True), ({"data-layer:REL-31"}, True)):
+            with self.subTest(disable=disable), mock.patch.dict(os.environ, self.env, clear=True), \
+                    mock.patch.object(L.PC, "START", time.monotonic()), \
+                    mock.patch.object(L.PC, "load_config", return_value={**base, "disable": disable}):
+                shutil.rmtree(self.state, ignore_errors=True)
+                self.assertEqual(L.check(event) is not None, denied)
+
+    def test_a_fault_in_the_text_check_skips_the_deny(self):
+        sys.path.insert(0, os.path.join(REPO, "hooks"))
+        self.addCleanup(sys.path.remove, os.path.join(REPO, "hooks"))
+        import long_runs_check as L  # noqa: PLC0415
+        cfg = {"enabled": True, "disable": set(), "helpers": ()}
+        with mock.patch.dict(os.environ, self.env, clear=True), \
+                mock.patch.object(L.PC, "bash_text", side_effect=RuntimeError("x")):
+            self.assertTrue(L.text_rule_flags("lane trial --run x", self.proj, cfg))
+        with mock.patch.dict(os.environ, self.env, clear=True), \
+                mock.patch.object(L.PC, "run_patterns", side_effect=L.PC.Budget("spent")):
+            self.assertTrue(L.text_rule_flags("lane trial --run x", self.proj, cfg))
+        with mock.patch.dict(os.environ, self.env, clear=True):
+            self.assertFalse(L.text_rule_flags("lane trial --run x", self.proj, cfg))
+
+
 class GenericSuites(Base):
     def test_a_second_different_suite_denies(self):
         self.assertIsNone(self.pre(SUITE))

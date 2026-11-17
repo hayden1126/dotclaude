@@ -95,7 +95,7 @@ class Templates(unittest.TestCase):
         for doc, phrases in (
                 (("skills", "handoff", "SKILL.md"),
                  (message, "as that turn's last act", "run the `pass` skill",
-                  "Send the lead `merged #N` once", "doesn't repeat step 3", "`[pass]` notice")),
+                  "Send the lead `merged #N`", "doesn't repeat step 3", "`[pass]` notice")),
                 (("skills", "lanes", "SKILL.md"),
                  (message, "Merged with `Keep open:` in its Next", "as its turn's last act",
                   "runs the `pass` skill", "one message, the chain's last to that lane",

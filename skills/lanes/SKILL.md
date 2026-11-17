@@ -201,7 +201,9 @@ an unregistered worktree: `lane whoami` tells you which.
    be working with him. So ask him anything before that write, never after: an item still
    open for him goes in the record's Asks for Hayden, and the replies after the write end
    with no Waiting on you list. Once nothing is left after a later turn, end it by writing the
-   record again (a `lane note` does) and sending `merged #N` again.
+   record again (a `lane note` does) and, with no `Keep open:` line, sending `merged #N` again.
+   A `Keep open:` lane only writes the record: `lane done` refuses it anyway, and a second
+   `merged #N` would rerun the lead's chain and its pass.
    When `lane addr lead` refuses (no lead running, several sessions and none picked, or the
    lead stopped), it tells Hayden once that #N merged, with the refusal's way to pick the lead
    or the stopped lead's window if it gives one.

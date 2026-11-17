@@ -23,7 +23,8 @@ subagent (it executes a run someone else planned), when the skill isn't installe
 A call the practices hook could also deny is left to it: when two hooks deny one Bash call,
 Claude Code shows only the reason of the last to finish (2.1.319, measured), and several of that
 hook's denies fire once, so losing one loses it for good. That is why a command that holds a git
-commit or push, a gh pr ready or create, or a package install gets no deny here.
+commit or push, a gh pr ready or create, a package install, or a line an installed skill's
+"bash" rule flags (the practices hook's L2b) gets no deny here.
 
 Fails open: an unreadable command, config, transcript or state file allows the call. State holds
 hashes of the suites, never command text. The practices hook's parser and transcript readers are
@@ -45,9 +46,10 @@ PC = importlib.util.module_from_spec(_spec)
 sys.modules.setdefault("practices_check", PC)
 _spec.loader.exec_module(PC)
 
-FROM_PRACTICES = ("ADD_VERBS", "PIP_HEAD", "Budget", "CMD_MAX", "CONFIG_MAX", "Transcripts", "bash_project",
-                  "command_of", "config_home", "is_loaded", "is_off", "l1_window", "load_bash_words",
-                  "load_config", "log", "names_a_call", "read_toml", "state_dir")
+FROM_PRACTICES = ("ADD_VERBS", "AT", "PIP_HEAD", "Budget", "CMD_MAX", "CONFIG_MAX", "Transcripts",
+                  "bash_lines", "bash_project", "bash_text", "command_of", "config_home", "discover",
+                  "is_loaded", "is_off", "l1_window", "load_bash_words", "load_config", "log",
+                  "names_a_call", "read_toml", "run_patterns", "state_dir")
 
 SKILL = "long-runs"
 LOCKS = ("suite", "gate")
@@ -223,6 +225,26 @@ def may_be_denied_elsewhere(cmd):
     return False
 
 
+def text_rule_flags(cmd, project, cfg):
+    """Whether an installed skill's "bash" rule flags a line of this command, the practices hook's
+    L2b, which denies once per line. Its own matcher runs, so the two can't drift. A line L2b
+    already denied still counts: that costs one nudge here, never L2b's reason. A spent budget or
+    a fault counts too, since a false match only skips a deny."""
+    try:
+        rules = [(s, r) for s in PC.discover(project, quiet=True).values() for r in s["rules"]
+                 if "bash" in r.get("at", PC.AT) and not PC.is_off(cfg, s, r["id"])]
+        if not rules:
+            return False
+        text = PC.bash_text(cmd)
+        return bool(PC.run_patterns(
+            rules, lambda item: bool(PC.bash_lines(item[1], text, cfg["helpers"])), cut=True))
+    except PC.Budget:
+        return True
+    except Exception as e:  # noqa: BLE001  fail toward the practices hook's deny
+        PC.log("long-runs-l2b", f"{type(e).__name__}")
+        return True
+
+
 def state_path(event):
     key = str(event.get("session_id"))
     return os.path.join(PC.state_dir(), "long-runs",
@@ -276,6 +298,8 @@ def check(event):
     cfg = PC.load_config(project)
     skill_dir = os.path.join(PC.config_home(), "skills", SKILL)
     if not cfg["enabled"] or PC.is_off(cfg, {"name": SKILL}, RULE_ID) or not os.path.isdir(skill_dir):
+        return None
+    if text_rule_flags(cmd, project, cfg):
         return None
     path = state_path(event)
     state = read_state(path)
