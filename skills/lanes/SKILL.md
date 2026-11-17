@@ -193,8 +193,8 @@ an unregistered worktree: `lane whoami` tells you which.
    bare `lane addr lead` prints. It says nothing more about the merge to Hayden and never
    proposes `lane done`: the lead runs the rest (The lead, step 7). A turn after that record
    write (Hayden's prompt, a message) makes `lane done` refuse the lane, since it may still be
-   working with him, and so does a last reply that ends on a Waiting on you list: once nothing
-   is left, it ends that turn by writing its record again (a `lane note` does) and sending
+   working with him, and so does a reply with a Waiting on you list since its last input: once
+   nothing is left, it ends that turn by writing its record again (a `lane note` does) and sending
    `merged #N` again, with no Waiting on you list.
    When `lane addr lead` refuses (no lead running, several sessions and none picked, or the
    lead stopped), it tells Hayden once that #N merged, with the refusal's way to pick the lead
@@ -234,10 +234,11 @@ an unregistered worktree: `lane whoami` tells you which.
      `--abandon` never overrides it;
    - a live lane session whose transcript holds a turn newer than the record's last write
      (any input: Hayden's prompt or dialog answer, a message, a task notice, a `!` or slash
-     command; a write within 3 s after a turn reads as older), or whose last reply holds a
-     Waiting on you line, read again just before the signals, or a transcript that can't say
-     when those were: it may still be working with Hayden, so the lead messages the lane first.
-     `--abandon` closes it anyway (it asks).
+     command; a write within 3 s after a turn reads as older), or with a reply holding a
+     Waiting on you line since its last input, read again just before the signals: it may
+     still be working with Hayden, so the lead messages the lane first. Also a record, or a
+     transcript, that can't say when those were: no message clears that, so the lead asks
+     Hayden. `--abandon` closes either anyway (it asks).
 
    A close refused after a signal, or one that couldn't record its proof (nothing signalled),
    leaves the lane `closing`, which `open` refuses: rerun `lane done`, which keeps what the
@@ -393,11 +394,12 @@ inherits the lead from it.
       since no lane is left to ask (step 5 says what his yes allows in each case). A record
       older than the merge means the lane may have stopped before writing `Keep open:`, or its last session
       ended without writing it. Never `--abandon` here. When `done` refuses a lane session that
-      is busy, waiting on Hayden, took a turn after the record's last write or last replied
-      with a Waiting on you list, the lane is still
-      working with him: message it "#N: lane done refused, your session `<reason>`: finish,
-      write your record, then send `merged #N` again", and rerun `done` on that message. No ask
-      to Hayden.
+      is busy, waiting on Hayden, took a turn after the record's last write or replied with a
+      Waiting on you list since, the lane is still working with him: message it "#N: lane done
+      refused, your session `<reason>`: finish, write your record, then send `merged #N`
+      again", and rerun `done` on that message. No ask to Hayden. A refusal that says no
+      message clears it (an unreadable record or transcript, two transcripts for one session)
+      is the lead's ask to Hayden, with the refusal's text: his yes allows `--abandon`.
 
    Then tell Hayden one line ("#42 merged: installed, lane chart-fix closed, api-docs nudged"),
    or the step that failed. A failed step stops the chain. A chain stopped on something that can

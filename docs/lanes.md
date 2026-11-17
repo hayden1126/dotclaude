@@ -326,12 +326,17 @@ Why it works this way:
   that keep the worktree), and a live one whose transcript holds a turn newer than the record's
   last write (`turn_gate`, the `handoff?` idea applied to the conversation; `--abandon` skips
   it). The record is the lane's word that it is finished, so a turn after it means it may not
-  be. `turn_gate` also refuses when the session's last reply holds a Waiting on you line
-  (Hayden's pick, 2026-11-16, after review): a lane can write its record and end the same turn
-  on a plain-text question, with no input after the write and no dialog open. It reads the line
-  as `hooks/stop_check.py` does (`^[\W_]*waiting on (you|hayden)\b`), so a lane's `Waiting on
-  the lead:` passes. A stopped session (Ctrl+Z) keeps its busy or waiting status until `fg`,
-  so its refusal says to `fg` it. Both run once before the slow gates and again after
+  be. `turn_gate` also refuses when a reply since the session's last input holds a Waiting on
+  you line (Hayden's pick, 2026-11-16, after review): a lane can write its record and end the
+  same turn on a plain-text question, with no input after the write and no dialog open. Any
+  such reply counts, not only the last (a Stop hook's block can draw one more line that drops
+  the list while his question stays open), and one older than the last input has had its
+  answer. The line is the Waiting on you list CLAUDE.md asks for, read after any markup
+  (`lanelib.HAYDEN_WAIT`: `^[\W_]*waiting on (you|hayden)\b`), so a lane's `Waiting on the
+  lead:` passes. An unreadable record or transcript, or two transcripts for one session, can't
+  be cleared by a message to the lane, so that refusal says the lead asks Hayden. A stopped session (Ctrl+Z) keeps its busy or waiting status until `fg`,
+  so its refusal says to `fg` it. Both run once the lane is known closable (after the merge
+  check, so an unmerged lane says so first), before the slower gates, and again after
   `handoff-check --closing`, just before the lane is marked `closing`. A turn is any input
   (Hayden's pick, 2026-11-16; `lanelib.turn_kind`): every main-chain user record but a tool's
   result, a compaction summary and an `isMeta` record with no `origin` (a loaded skill's body,

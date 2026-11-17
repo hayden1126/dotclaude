@@ -136,26 +136,42 @@ class LastTurn(unittest.TestCase):
         self.write(*not_turns(self.t))
         self.assertIsNone(lanelib.last_turn(self.path))
 
-    def test_the_newest_reply_and_whether_it_waits_on_hayden(self):
-        self.write(typed(self.t), assistant(self.t + 5, WAITS), tool_result(self.t + 6))
+    def waits(self, *recs):
+        self.write(*recs)
+        return lanelib.read_transcript(self.path).waits
+
+    def test_a_reply_waiting_on_hayden_after_the_last_turn(self):
+        t = self.t
+        self.write(typed(t), assistant(t + 5, WAITS), tool_result(t + 6))
         self.assertEqual(lanelib.read_transcript(self.path),
-                         lanelib.Transcript((self.t, "human"), (self.t + 5, True)))
-        # A later reply without the list replaces it; a wait on the lead is no wait on Hayden.
-        for text in ("All done.", "Waiting on the lead: lane done", "waiting on youth sports"):
-            with self.subTest(text):
-                self.write(typed(self.t), assistant(self.t + 5, WAITS),
-                           assistant(self.t + 9, text))
-                self.assertEqual(lanelib.read_transcript(self.path).reply, (self.t + 9, False))
+                         lanelib.Transcript((t, "human"), t + 5))
         for text in ("**Waiting on you:** approve the push", "- Waiting on Hayden: a pick"):
             with self.subTest(text):
-                self.write(typed(self.t), assistant(self.t + 5, text))
-                self.assertTrue(lanelib.read_transcript(self.path).reply[1])
-        # A tool call alone is no reply, and a subagent's reply is not the session's.
-        self.write(typed(self.t), assistant(self.t + 5, WAITS),
-                   {"type": "assistant", "timestamp": stamp(self.t + 7), "message": {
-                       "content": [{"type": "tool_use", "id": "t", "name": "Bash", "input": {}}]}},
-                   dict(assistant(self.t + 8, "done"), isSidechain=True))
-        self.assertEqual(lanelib.read_transcript(self.path).reply, (self.t + 5, True))
+                self.assertEqual(self.waits(typed(t), assistant(t + 5, text)), t + 5)
+        # A wait on the lead is no wait on Hayden, nor is a word that only starts with "you".
+        for text in ("Waiting on the lead: lane done", "waiting on youth sports", "All done."):
+            with self.subTest(text):
+                self.assertIsNone(self.waits(typed(t), assistant(t + 5, text)))
+
+    def test_a_later_reply_in_the_same_turn_keeps_the_question_open(self):
+        # Review round 2: a Stop hook blocks after the list, and the model's next line drops it.
+        t = self.t
+        self.assertEqual(self.waits(
+            typed(t), assistant(t + 1, WAITS),
+            user(t + 2, "Stop hook feedback: [autopass] Context is at 303k", isMeta=True),
+            assistant(t + 3, "Noted, passing next turn.")), t + 1)
+
+    def test_an_answered_question_waits_no_more(self):
+        t = self.t
+        self.assertIsNone(self.waits(assistant(t, WAITS), typed(t + 40), tool_result(t + 50)))
+
+    def test_a_tool_call_or_a_subagents_reply_is_no_reply(self):
+        t = self.t
+        self.assertIsNone(self.waits(
+            typed(t), {"type": "assistant", "timestamp": stamp(t + 7), "message": {"content": [
+                {"type": "tool_use", "id": "t", "name": "Bash",
+                 "input": {"command": "echo Waiting on you:"}}]}},
+            dict(assistant(t + 8, WAITS), isSidechain=True)))
 
     def test_an_unreadable_turn_fails_closed(self):
         cases = {"no stamp": dict(typed(self.t), timestamp=None),
@@ -238,7 +254,13 @@ class DoneTurns(test_cli.Fakes):
         self.stop(claude)
         p = self.run_lane("done", "chart-fix", "--abandon")
         self.assertIn(f"session {SID} is busy (mid-turn)", p.stderr)
-        self.assertIn(f"it (pid {claude}, no tmux) is stopped (Ctrl+Z): fg it there", p.stderr)
+        self.assertIn(f"it (pid {claude}, no tmux) is stopped (Ctrl+Z): fg it there, let it "
+                      "finish", p.stderr)
+        self.assertEqual(self.signals(), [])
+        self.session_file(claude, status="waiting")
+        p = self.run_lane("done", "chart-fix", "--abandon")
+        self.assertIn("is waiting on Hayden", p.stderr)
+        self.assertIn("fg it there, answer it, then rerun `lane done chart-fix`", p.stderr)
         self.assertEqual(self.signals(), [])
 
     def test_a_lane_with_no_live_session_closes_without_reading_its_record(self):
@@ -301,8 +323,8 @@ class DoneTurns(test_cli.Fakes):
         (claude,) = self.claude()
         self.transcript_of(typed(self.w - 60), assistant(self.w + 30, WAITS))
         p = self.run_lane("done", "chart-fix")
-        self.assertIn(f"session {SID}'s last reply", p.stderr)
-        self.assertIn("holds a Waiting on you line", p.stderr)
+        self.assertIn(f"session {SID} replied at", p.stderr)
+        self.assertIn("with a Waiting on you line, and no input has come since", p.stderr)
         self.assertIn("Message the lane (`lane addr chart-fix`)", p.stderr)
         self.assertRefusedUntouched(p, claude)
         self.assertClosed(self.lane("done", "chart-fix", "--abandon"))
@@ -312,6 +334,18 @@ class DoneTurns(test_cli.Fakes):
         self.transcript_of(peer(self.w - 30), assistant(self.w + 3, "Sent.\n\nWaiting on the "
                                                                     "lead: lane done"))
         self.assertClosed(self.lane("done", "chart-fix"))
+
+    def test_an_unmerged_lane_says_so_before_any_turn(self):
+        # Review round 2: the early check ran before the merge check and hid the real reason.
+        (claude,) = self.claude()
+        self.commit("more.txt", "unmerged\n", cwd=self.path)
+        os.utime(self.record("chart-fix"))
+        self.w = os.path.getmtime(self.record("chart-fix"))
+        self.transcript_of(typed(self.w + 60))
+        p = self.run_lane("done", "chart-fix")
+        self.assertIn("Pass --abandon to close it anyway", p.stderr)
+        self.assertNotIn("took a turn", p.stderr)
+        self.assertRefusedUntouched(p, claude)
 
     def test_abandon_closes_past_a_newer_turn(self):
         self.claude()
@@ -324,6 +358,9 @@ class DoneTurns(test_cli.Fakes):
         p = self.run_lane("done", "chart-fix")
         self.assertIn(f"session {SID}'s transcript", p.stderr)
         self.assertIn("can't tell when", p.stderr)
+        # No message to the lane can clear it, so the refusal names Hayden's ask.
+        self.assertIn("No message to the lane clears this: the lead asks Hayden", p.stderr)
+        self.assertNotIn("Message the lane", p.stderr)
         self.assertRefusedUntouched(p, claude)
 
     def test_two_transcripts_for_one_session_refuse(self):
@@ -333,6 +370,7 @@ class DoneTurns(test_cli.Fakes):
             self.home, ".claude", "projects", "-other", f"{SID}.jsonl"))
         p = self.run_lane("done", "chart-fix")
         self.assertIn("2 transcripts", p.stderr)
+        self.assertIn("the lead asks Hayden", p.stderr)
         self.assertRefusedUntouched(p, claude)
 
     # ---- read again just before the signals ------------------------------------------------

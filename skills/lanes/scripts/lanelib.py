@@ -2177,7 +2177,7 @@ class TurnUnread(ValueError):
 TURN_BYTES = (b'"user"', b'"queued_command"')
 REPLY_BYTES = (b'"assistant"', b'"text"')
 # A line of a reply that waits on Hayden: the Waiting on you list CLAUDE.md asks for (or
-# "Waiting on Hayden"), after any markup; hooks/stop_check.py reads it the same way.
+# "Waiting on Hayden"), after any markup. "Waiting on the lead:" is no wait on him.
 HAYDEN_WAIT = re.compile(r"^[\W_]*waiting on (you|hayden)\b", re.IGNORECASE | re.MULTILINE)
 
 
@@ -2231,15 +2231,19 @@ def reply_text(rec) -> str | None:
 
 
 class Transcript(NamedTuple):
-    """What read_transcript found: the newest turn as (when, origin kind), and the newest reply
-    with text as (when, whether it waits on Hayden); None for either when there is none."""
+    """What read_transcript found: the newest turn as (when, origin kind), and when the newest
+    reply that waits on Hayden (HAYDEN_WAIT) and is newer than that turn was; None for either
+    when there is none."""
     turn: tuple[float, str | None] | None
-    reply: tuple[float, bool] | None
+    waits: float | None
 
 
 def read_transcript(path: str) -> Transcript:
-    """The newest turn (turn_kind) and the newest reply with text (reply_text) in the transcript
-    at path, newest by stamp, not by line: the wall clock steps. No file is Transcript(None,
+    """The newest turn (turn_kind) in the transcript at path, and the newest reply (reply_text)
+    after it that waits on Hayden, newest by stamp, not by line: the wall clock steps. Any such
+    reply counts, not only the last: a turn can go on past a Waiting on you list (a Stop hook's
+    block, say) with a line that drops it, and his question is still open. One older than the
+    newest turn has had its answer. No file is Transcript(None,
     None): Claude Code writes none before a session's first input. The whole file is read,
     streamed (0.3 s for a 129 MB transcript, 2026-11-16). Raises TurnUnread when a turn's or a
     reply's time can't be told: a line that may be one won't parse, one has no readable
@@ -2251,7 +2255,7 @@ def read_transcript(path: str) -> Transcript:
         return Transcript(None, None)
     except OSError as e:
         raise TurnUnread(f"can't be opened ({e.strerror or e})")
-    turn = reply = None
+    turn, waiting = None, []
     try:
         with os.fdopen(fd, "rb") as f:
             if not stat.S_ISREG(os.fstat(f.fileno()).st_mode):
@@ -2274,11 +2278,12 @@ def read_transcript(path: str) -> Transcript:
                                      "timestamp can't tell when")
                 if is_turn and (turn is None or when > turn[0]):
                     turn = (when, kind)
-                elif text is not None and (reply is None or when > reply[0]):
-                    reply = (when, bool(HAYDEN_WAIT.search(text)))
+                elif text is not None and HAYDEN_WAIT.search(text):
+                    waiting.append(when)
     except OSError as e:
         raise TurnUnread(f"can't be read ({e.strerror or e})")
-    return Transcript(turn, reply)
+    after = [w for w in waiting if turn is None or w > turn[0]]
+    return Transcript(turn, max(after, default=None))
 
 
 def last_turn(path: str) -> tuple[float, str | None] | None:
