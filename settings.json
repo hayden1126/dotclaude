@@ -258,6 +258,7 @@
       "Edit(~/.local/state/dotclaude/verified/**)",
       "Edit(~/.local/**)",
       "Edit(~/.config/**)",
+      "Edit(~/.config/dotclaude/policy.local.toml)",
       "Edit(~/.ssh/**)",
       "Edit(~/.bun/**)",
       "Edit(~/.cargo/**)",
@@ -484,7 +485,8 @@
         "~/.claude/hooks",
         "~/.claude/skills",
         "~/.claude/agents",
-        "~/.local/state/dotclaude/verified"
+        "~/.local/state/dotclaude/verified",
+        "~/.config/dotclaude/policy.local.toml"
       ],
       "allowWrite": [
         "~/.cache/claude-sandbox"

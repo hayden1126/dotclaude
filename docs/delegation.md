@@ -196,6 +196,37 @@ repo that turns the sandbox off loses subagent Bash; the policy still applies.
 - **rm:** `-r` outside the root, allowWrite and temp is denied; so are a dynamic or glob target of
   `-r`, git metadata, and `/` or home.
 - **MCP:** only the read tools listed in `[mcp]`. A new MCP tool fails closed until it is listed.
+  A machine-local overlay adds reads this public repo must not name, such as a private server's:
+  - It lives at `$XDG_CONFIG_HOME/dotclaude/policy.local.toml` (`~/.config/dotclaude/` when that
+    is unset), outside git. The hook reads it only when a call misses the `[mcp]` list.
+  - It may hold only `[mcp] read_tools`, for example
+    `read_tools = ["mcp__example__get_page", "mcp__example__list_*"]`, matched as fnmatch globs
+    the way `[mcp]` is. Each entry is `mcp__<server>__<tool>`, spelled in letters, digits, `_`,
+    `.`, `-` and the one wildcard `*`, and its tool part starts with a literal character other
+    than `_`, as every `[mcp]` entry does (`get_*`). A tool part that starts with `*` matches
+    every tool on that server, its write tools too, and `mcp__srv___*` is `*` on a server named
+    `srv_`. `?` and bracket sets are refused because fnmatch can read them as a separator or a
+    wildcard that a text check misses: `mcp__example_[__]*` is `mcp__example__*` to fnmatch.
+    A literal start still allows a broad glob such as `g*`, so list exact names where you can.
+  - Known limit: Claude Code joins server and tool with `__` and turns punctuation into `_`, so
+    a server named `a (beta)` has tools named `mcp__a__beta__...`, and `mcp__a__b*` matches all
+    of them. No spelling rule tells the two apart. Glob only a server whose name no other
+    server's name extends, or list exact names.
+  - It counts only when its resolved path lies inside a write-protected directory: a sandbox
+    `denyWrite` or `[protect] write_denied` root that contains it (`~/.config` by default). The
+    file's own `denyWrite` line doesn't vouch for it, since that line resolves through any link
+    put there. So an `XDG_CONFIG_HOME` elsewhere, or a symlink out of `~/.config`, is ignored.
+    The protected lists are read strictly here: a `denyWrite` that isn't a list of strings, or
+    a root that isn't absolute, makes the overlay count for nothing. A string `"~/x"` would
+    otherwise read as one root per character, `/` among them.
+    `settings.json` also names the default path as an Edit deny and a `denyWrite` line.
+  - Anything else makes the whole file add nothing, so it never widens past `policy.toml`: a
+    stray key, a bad entry, TOML that won't parse, a file over 64 KiB or one that isn't a regular
+    file. A missing or empty file is a no-op.
+  - A denial says when the overlay was ignored and why. `delegation-ledger audit` lists its
+    entries (`info`), or says why it was ignored (`WARN`, which exits 1).
+  - No session's Edit tool can write it: `Edit(~/.config/**)` is a deny, and a deny beats an ask.
+    Write it from a sandbox-off Bash heredoc, which prompts Hayden, or by hand.
 - **Protected writes:** file tools and literal Bash targets are realpath-resolved, so symlinks count.
   The protected paths are:
   - `~/.claude`, the project's `.claude` (except `.claude/worktrees`) and `.mcp.json`;

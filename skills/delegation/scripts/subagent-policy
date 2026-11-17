@@ -1054,9 +1054,22 @@ class Analyzer:
         elif tool in READ_TOOLS:
             self.file_read(tool, ti)
         elif tool.startswith("mcp__"):
-            if not any(fnmatch.fnmatchcase(tool, g) for g in self.p["mcp"]["read_tools"]):
-                self.deny("mcp-write", "manual_only",
-                          f"{tool} is not on the read-only MCP list (policy.toml [mcp])")
+            self.mcp_tool(tool)
+
+    def mcp_tool(self, tool):
+        """A read on policy.toml's [mcp] list, or on the machine-local overlay's, which is read
+        only when the base list misses (dc.load_overlay: it can only add reads)."""
+        if any(fnmatch.fnmatchcase(tool, g) for g in self.p["mcp"]["read_tools"]):
+            return
+        extra, status = dc.load_overlay(self.home)
+        if any(fnmatch.fnmatchcase(tool, g) for g in extra):
+            return
+        note = ""
+        if status.startswith("ignored: "):
+            note = (f" (the local overlay {dc.overlay_path(self.home)} was "
+                    f"{status.replace(': ', ' as ', 1)})")
+        self.deny("mcp-write", "manual_only",
+                  f"{tool} is not on the read-only MCP list (policy.toml [mcp]){note}")
 
     def deadline(self, tool):
         """Past the role's stop budget for this activation, deny every tool but [deadline]

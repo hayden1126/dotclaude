@@ -5,6 +5,7 @@ Each test runs against a temporary home whose user settings carry this repo's ba
 liveness index the deadline reads) is in that home too."""
 import contextlib
 import datetime
+import fnmatch
 import io
 import json
 import os
@@ -15,6 +16,7 @@ import shutil
 import signal
 import subprocess
 import tempfile
+import time
 import unittest
 from unittest import mock
 
@@ -61,6 +63,7 @@ class Base(unittest.TestCase):
         env.start()
         self.addCleanup(env.stop)
         os.environ.pop("CLAUDE_CONFIG_DIR", None)  # the settings and sessions live in the fake home
+        os.environ.pop("XDG_CONFIG_HOME", None)  # so is the MCP overlay, never the real one
         self.tmp = tempfile.TemporaryDirectory(prefix="sp-test-", dir=TEST_TMP)
         self.home = os.path.realpath(self.tmp.name)
         os.makedirs(os.path.join(self.home, ".claude"))
@@ -1155,6 +1158,181 @@ class Mcp(Base):
     def test_non_policed_tools_pass(self):
         for tool in ("SubagentHandback", "SendMessage", "WebFetch", "ToolSearch", "TaskCreate"):
             self.assertIsNone(self.decide(tool, {"x": 1}), tool)
+
+
+class Overlay(Base):
+    """The machine-local overlay (~/.config/dotclaude/policy.local.toml): it can only add
+    [mcp] read_tools, only from a write-protected path, and anything else adds nothing."""
+
+    GOOD = '[mcp]\nread_tools = ["mcp__example__get_page", "mcp__example__list_*"]\n'
+
+    def overlay(self, text, base=None):
+        path = os.path.join(base or os.path.join(self.home, ".config"), "dotclaude",
+                            "policy.local.toml")
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w") as f:
+            f.write(text)
+        return path
+
+    def message(self, tool):
+        d = sp.evaluate(self.ev(tool, {}), POLICY, home=self.home)
+        return d and d.message
+
+    def assert_adds_nothing(self, text, why=None):
+        path = self.overlay(text)
+        self.assertDenied(self.decide("mcp__example__get_page", {}), "mcp-write", "manual_only",
+                          text)
+        msg = self.message("mcp__example__get_page")
+        self.assertIn(f"the local overlay {path} was ignored", msg, text)
+        if why:
+            self.assertIn(why, msg, text)
+        tools, status = sp.dc.load_overlay(self.home)
+        self.assertEqual(tools, [], text)
+        self.assertTrue(status.startswith("ignored: "), (text, status))
+
+    def test_the_overlay_adds_exact_names_and_globs(self):
+        self.overlay(self.GOOD)
+        for tool in ("mcp__example__get_page", "mcp__example__list_pages"):
+            self.assertIsNone(self.decide(tool, {}), tool)
+        self.assertEqual(sp.dc.load_overlay(self.home),
+                         (["mcp__example__get_page", "mcp__example__list_*"], "ok"))
+
+    def test_an_unlisted_tool_is_still_denied(self):
+        self.overlay(self.GOOD)
+        for tool in ("mcp__example__update_page", "mcp__other__get_page"):
+            self.assertDenied(self.decide(tool, {}), "mcp-write", "manual_only", tool)
+            self.assertNotIn("overlay", self.message(tool))
+
+    def test_an_absent_or_empty_overlay_is_a_no_op(self):
+        self.assertEqual(sp.dc.load_overlay(self.home), ([], "absent"))
+        self.assertDenied(self.decide("mcp__example__get_page", {}), "mcp-write")
+        self.assertNotIn("overlay", self.message("mcp__example__get_page"))
+        # The sandbox leaves an empty file (a /dev/null mount) over a missing denyWrite path.
+        self.overlay("")
+        self.assertEqual(sp.dc.load_overlay(self.home), ([], "absent"))
+        self.assertIsNone(self.decide("mcp__notion__notion-fetch", {}))  # the base list stands
+
+    def test_a_malformed_overlay_adds_nothing(self):
+        for text in ("[mcp\n", "[mcp]\nread_tools = [1]\n", '[mcp]\nread_tools = "mcp__a__b"\n',
+                     "[mcp]\n", "\x00", 'mcp = "x"\n',
+                     "[mcp]\nread_tools = " + "[" * 3000 + "]" * 3000 + "\n"):  # RecursionError
+            self.assert_adds_nothing(text)
+
+    def test_any_other_key_adds_nothing_even_beside_a_good_list(self):
+        for text in (self.GOOD + '[shell]\nbuiltins = ["x"]\n',
+                     self.GOOD + 'write_tools = ["mcp__example__set_page"]\n',
+                     "top = 1\n" + self.GOOD):
+            self.assert_adds_nothing(text, "only [mcp] read_tools")
+
+    def test_catch_alls_and_non_mcp_entries_are_refused(self):
+        # To fnmatch, `[!]]` is "any character but ]" and `[__]` is one `_`, so `[!]]*` and
+        # `mcp__example_[__]*` (which reads as `mcp__example__*`) match every tool.
+        for bypass in ("mcp__example__[!]]*", "mcp__example_[__]*"):
+            self.assertTrue(fnmatch.fnmatchcase("mcp__example__delete_page", bypass), bypass)
+        for entry in ("mcp__example__*", "mcp__example__[a-z]*", "mcp__example__[!]]*",
+                      "mcp__example__*[!]]", "mcp__example_[__]*", "mcp__example[__]_*",
+                      "mcp__example__g[!]]*", "mcp__example__*_page", "mcp__example__*e",
+                      "mcp__example__?et_page", "mcp__example__g?t_page", "mcp__*", "*",
+                      "mcp__example", "mcp____get_page", "mcp__example__", "mcp__ex ample__get",
+                      "mcp__srv___*",
+                      "Bash", "WebFetch*"):
+            self.assert_adds_nothing(
+                f'[mcp]\nread_tools = ["mcp__example__get_page", "{entry}"]\n', entry)
+        # A literal start is enough, whatever follows it; the server part may be a glob.
+        self.overlay('[mcp]\nread_tools = ["mcp__*__get_page", "mcp__plugin_x_y-z__notion-get-*", '
+                     '"mcp__example__get.v2_*", "mcp__srv___get_*"]\n')
+        self.assertEqual(sp.dc.load_overlay(self.home)[1], "ok")
+
+    def test_a_malformed_settings_list_ignores_the_overlay_without_raising(self):
+        self.overlay(self.GOOD)
+        # A string reads as one root per character ("/" among them), so trust reads it strictly.
+        for bad in (1, True, "~/x", ["~/x", 2], ["relative/dir"], ["/"]):
+            self.write_settings({"sandbox": {"filesystem": {"denyWrite": bad}}})
+            tools, status = sp.dc.load_overlay(self.home)
+            self.assertEqual(tools, [], bad)
+            self.assertIn("the protected paths can't be read", status, bad)
+
+    def test_a_string_deny_list_can_t_vouch_for_an_unprotected_dir(self):
+        xdg = os.path.join(self.home, "x")
+        self.overlay(self.GOOD, base=xdg)
+        os.environ["XDG_CONFIG_HOME"] = xdg
+        self.write_settings({"sandbox": {"filesystem": {"denyWrite": "~/x"}}})
+        self.assertEqual(sp.dc.load_overlay(self.home)[0], [])
+        self.assertDenied(self.decide("mcp__example__get_page", {}), "mcp-write")
+
+    def test_a_directory_is_refused_without_raising(self):
+        os.makedirs(sp.dc.overlay_path(self.home))
+        self.assertEqual(sp.dc.load_overlay(self.home), ([], "ignored: not a regular file"))
+        self.assertIn("not a regular file", self.message("mcp__example__get_page"))
+
+    def test_without_proc_the_open_file_still_resolves(self):
+        # macOS has no /proc: realpath would return /proc/self/fd/N unresolved, under no root.
+        self.overlay(self.GOOD)
+        with mock.patch.object(sp.dc, "PROC_FD", os.path.join(self.home, "no-proc")):
+            self.assertEqual(sp.dc.load_overlay(self.home)[1], "ok")
+            os.remove(sp.dc.overlay_path(self.home))
+            outside = os.path.join(self.home, "outside.toml")
+            with open(outside, "w") as f:
+                f.write(self.GOOD)
+            os.symlink(outside, sp.dc.overlay_path(self.home))
+            self.assertIn("not write-protected", sp.dc.load_overlay(self.home)[1])
+
+    def test_an_overlay_too_large_adds_nothing(self):
+        self.assert_adds_nothing(self.GOOD + "#" * 70000 + "\n", "too large")
+
+    def test_an_unprotected_xdg_config_home_is_ignored(self):
+        xdg = os.path.join(self.home, "xdg")
+        path = self.overlay(self.GOOD, base=xdg)
+        os.environ["XDG_CONFIG_HOME"] = xdg
+        self.assertEqual(sp.dc.overlay_path(self.home), path)
+        self.assertDenied(self.decide("mcp__example__get_page", {}), "mcp-write")
+        self.assertIn("not write-protected", self.message("mcp__example__get_page"))
+
+    def test_a_bogus_xdg_config_home_reads_no_overlay(self):
+        # Honouring XDG_CONFIG_HOME means never falling back to ~/.config.
+        self.overlay(self.GOOD)
+        os.environ["XDG_CONFIG_HOME"] = os.path.join(self.home, "no", "such", "dir")
+        self.assertEqual(sp.dc.load_overlay(self.home), ([], "absent"))
+        self.assertDenied(self.decide("mcp__example__get_page", {}), "mcp-write")
+
+    def test_a_symlink_out_of_the_protected_dir_is_ignored(self):
+        outside = os.path.join(self.home, "outside.toml")
+        with open(outside, "w") as f:
+            f.write(self.GOOD)
+        path = sp.dc.overlay_path(self.home)
+        os.makedirs(os.path.dirname(path))
+        os.symlink(outside, path)
+        self.assertDenied(self.decide("mcp__example__get_page", {}), "mcp-write")
+        self.assertIn("not write-protected", self.message("mcp__example__get_page"))
+
+    def test_a_symlinked_dotclaude_dir_out_of_the_protected_dir_is_ignored(self):
+        # The overlay's own denyWrite entry resolves through the link too; it must not vouch.
+        outside = os.path.join(self.home, "outside")
+        self.overlay(self.GOOD, base=os.path.dirname(outside))  # <home>/dotclaude/...
+        os.rename(os.path.join(self.home, "dotclaude"), outside)
+        os.makedirs(os.path.join(self.home, ".config"))
+        os.symlink(outside, os.path.join(self.home, ".config", "dotclaude"))
+        self.assertDenied(self.decide("mcp__example__get_page", {}), "mcp-write")
+        self.assertIn("not write-protected", self.message("mcp__example__get_page"))
+
+    def test_a_fifo_is_refused_without_hanging(self):
+        path = sp.dc.overlay_path(self.home)
+        os.makedirs(os.path.dirname(path))
+        os.mkfifo(path)
+        t = time.monotonic()
+        self.assertDenied(self.decide("mcp__example__get_page", {}), "mcp-write")
+        self.assertLess(time.monotonic() - t, 2)
+        self.assertIn("not a regular file", self.message("mcp__example__get_page"))
+
+    def test_main_lets_an_overlay_listed_read_through(self):
+        self.overlay(self.GOOD)
+        env = dict(os.environ, HOME=self.home, XDG_STATE_HOME=self.state)
+        for tool, out in (("mcp__example__get_page", ""), ("mcp__example__update_page", "deny")):
+            p = subprocess.run(["python3", SCRIPT], input=json.dumps(self.ev(tool, {})),
+                               capture_output=True, text=True, env=env)
+            self.assertEqual(p.returncode, 0, p.stderr)
+            self.assertIn(out, p.stdout)
+            self.assertEqual(bool(p.stdout), bool(out), (tool, p.stdout))
 
 
 class ReviewFindings(Base):

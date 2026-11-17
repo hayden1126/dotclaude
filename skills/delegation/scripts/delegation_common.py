@@ -23,6 +23,7 @@ import math
 import os
 import re
 import secrets
+import stat
 import subprocess
 import tempfile
 import time
@@ -119,13 +120,18 @@ def read_settings(path):
     return read_object(path, "settings file")
 
 
-def sandbox_paths(home=None):
+def sandbox_paths(home=None, strict=False):
     """(read_denied, write_denied): the sandbox's denyRead and denyWrite from the trusted
     settings tiers (user and managed) plus policy.toml's [protect] lists, each as its expanded
     path and its symlink-resolved one. Our wrappers run outside the sandbox, so they hold their
     own path arguments to these lists, which the sandbox can't do for them. ValueError when a
     settings file (read_settings) or policy.toml exists but can't be read, since skipping it
-    would drop its lists."""
+    would drop its lists.
+
+    A deny list only protects more for an extra root, so by default a malformed one is read
+    leniently. strict is for a reader that trusts what lies inside a root (load_overlay), where
+    an extra root widens trust: a list that isn't a list of strings (a string "~/x" reads as
+    the roots "~", "/" and "x") or a root that isn't absolute once expanded raises ValueError."""
     home = home or os.path.expanduser("~")
     lists = {"denyRead": [], "denyWrite": []}
     for path in (os.path.join(config_dir(home), "settings.json"),
@@ -134,6 +140,9 @@ def sandbox_paths(home=None):
         settings = read_settings(path)
         try:
             fs = (settings.get("sandbox") or {}).get("filesystem") or {}
+            if strict:
+                for key in lists:
+                    _strict_list(fs.get(key), f"{path} sandbox.filesystem.{key}")
             found = {key: [p for p in fs.get(key) or [] if isinstance(p, str)] for key in lists}
         except AttributeError:  # a sandbox or filesystem that isn't an object holds none
             continue
@@ -146,6 +155,9 @@ def sandbox_paths(home=None):
         protect = {}
     except (OSError, ValueError) as e:  # tomllib.TOMLDecodeError is a ValueError
         raise ValueError(f"unreadable policy file {policy_path()}: {e}") from None
+    if strict:
+        for key in ("read_denied", "write_denied"):
+            _strict_list(protect.get(key), f"{policy_path()} [protect] {key}")
     lists["denyRead"] += protect.get("read_denied") or []
     lists["denyWrite"] += protect.get("write_denied") or []
 
@@ -154,9 +166,17 @@ def sandbox_paths(home=None):
         for p in entries:
             p = str(p).replace("{uid}", str(os.getuid())).replace("{state_dir}", state_dir(home))
             p = os.path.normpath(home + p[1:] if p == "~" or p.startswith("~/") else p)
+            if strict and (not os.path.isabs(p) or p == "/"):
+                raise ValueError(f"protected path {p!r} is not an absolute path below /")
             out |= {p, os.path.realpath(p)}
         return sorted(out)
     return roots(lists["denyRead"]), roots(lists["denyWrite"])
+
+
+def _strict_list(value, what):
+    if value is not None and not (isinstance(value, list)
+                                  and all(isinstance(p, str) for p in value)):
+        raise ValueError(f"{what} is not a list of strings")
 
 
 def path_conflict(path, roots, contains=False):
@@ -171,13 +191,125 @@ def path_conflict(path, roots, contains=False):
     return None
 
 
+OVERLAY_MAX_BYTES = 64 * 1024
+
+
+def overlay_path(home=None):
+    """The machine-local MCP overlay: $XDG_CONFIG_HOME/dotclaude/policy.local.toml, else
+    <home>/.config/dotclaude/policy.local.toml. It lives outside git so this public repo never
+    names a private server's tools."""
+    base = (os.environ.get("XDG_CONFIG_HOME")
+            or os.path.join(home or os.path.expanduser("~"), ".config"))
+    return os.path.join(base, "dotclaude", "policy.local.toml")
+
+
+# An overlay entry: mcp__<server>__<tool> in a fixed alphabet whose one wildcard is `*`. With no
+# `[` (a bracket set can hide a `__` or a wildcard from any text check: `mcp__x_[__]*` is
+# `mcp__x__*` to fnmatch) and no `?`, every other character is literal to fnmatch, so each `__`
+# is a real separator, and the tool part must start with a literal character, as every [mcp]
+# entry does (`get_*`). A tool part that starts with `*` matches every tool on the server.
+# The tool part can't start with `_` either: `mcp__srv___*` would read as server srv, tool `_*`,
+# but it is `*` on a server named srv_. A known limit no spelling rule closes: Claude Code joins
+# server and tool with `__` and turns punctuation into `_`, so a server named `a (beta)` gives
+# tools `mcp__a__beta__...`, which `mcp__a__b*` matches. Glob only a server whose name no other
+# server's extends, or list exact names.
+OVERLAY_ENTRY = re.compile(r"mcp__[A-Za-z0-9_.*-]+__[A-Za-z0-9.-][A-Za-z0-9_.*-]*")
+
+
+def _overlay_entry_ok(entry):
+    return isinstance(entry, str) and OVERLAY_ENTRY.fullmatch(entry) is not None
+
+
+def load_overlay(home=None):
+    """(tools, status) for the overlay at overlay_path(home). It can only add [mcp] read_tools,
+    so every failure adds nothing: status is "absent" (missing, or empty as the sandbox's
+    /dev/null mount over a missing denyWrite path leaves it), "ok", or "ignored: <reason>".
+    The file counts only where it is write-protected (inside a sandbox_paths write root, checked
+    on the open file, so a symlink out or a swapped-in link fails). Never raises."""
+    path = overlay_path(home)
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK)  # a FIFO must not hang the hook
+    except FileNotFoundError:
+        return [], "absent"
+    except (OSError, ValueError) as e:
+        return [], f"ignored: unreadable ({type(e).__name__}: {e})"
+    try:
+        st = os.fstat(fd)
+        if not stat.S_ISREG(st.st_mode):  # before fdopen, which raises on a directory
+            os.close(fd)
+            if stat.S_ISCHR(st.st_mode) and st.st_rdev == os.stat("/dev/null").st_rdev:
+                return [], "absent"
+            return [], "ignored: not a regular file"
+    except OSError as e:
+        os.close(fd)
+        return [], f"ignored: unreadable ({type(e).__name__}: {e})"
+    with os.fdopen(fd, "rb") as f:
+        try:
+            data = f.read(OVERLAY_MAX_BYTES + 1)
+            real = fd_path(fd, path)
+        except OSError as e:
+            return [], f"ignored: unreadable ({type(e).__name__}: {e})"
+    if not data.strip():
+        return [], "absent"
+    # Only a root that strictly contains the file vouches for it. sandbox_paths adds each root's
+    # realpath, so the overlay's own denyWrite entry, were a link put there, would resolve to the
+    # link's target and vouch for a file anywhere.
+    try:
+        protected = [r for r in sandbox_paths(home, strict=True)[1]
+                     if real.startswith(r.rstrip("/") + "/")]
+    except (ValueError, OSError, TypeError, AttributeError) as e:  # a list that isn't one
+        protected, why = None, f" (the protected paths can't be read: {type(e).__name__}: {e})"
+    else:
+        why = ""
+    if not protected:
+        return [], (f"ignored: not write-protected ({real} lies under no sandbox denyWrite or "
+                    f"policy.toml [protect] write_denied path){why}")
+    if len(data) > OVERLAY_MAX_BYTES:
+        return [], f"ignored: too large (over {OVERLAY_MAX_BYTES} bytes)"
+    try:
+        doc = tomllib.loads(data.decode("utf-8"))
+    except (UnicodeDecodeError, tomllib.TOMLDecodeError, RecursionError) as e:  # deep nesting
+        return [], f"ignored: not valid TOML ({type(e).__name__}: {e})"
+    mcp = doc.get("mcp")
+    if set(doc) != {"mcp"} or not isinstance(mcp, dict) or set(mcp) != {"read_tools"}:
+        return [], "ignored: the file may hold only [mcp] read_tools"
+    tools = mcp["read_tools"]
+    if not isinstance(tools, list) or not all(isinstance(t, str) for t in tools):
+        return [], "ignored: read_tools must be a list of strings"
+    bad = [t for t in tools if not _overlay_entry_ok(t)]
+    if bad:
+        return [], ("ignored: each entry must be mcp__<server>__<tool> in letters, digits, "
+                    "`_`, `.`, `-` and the wildcard `*`, with a tool part that starts with a "
+                    f"literal character, so none matches a whole server; refused: {bad[:5]}")
+    return list(tools), "ok"
+
+
+PROC_FD = "/proc/self/fd"
+
+
+def fd_path(fd, path):
+    """The resolved path of the file open at fd: /proc on Linux, F_GETPATH on macOS (which has
+    no /proc, where realpath would hand back the /proc path unresolved), else path's realpath,
+    which can't catch a link swapped in after the open."""
+    proc = f"{PROC_FD}/{fd}"
+    if os.path.lexists(proc):
+        return os.path.realpath(proc)
+    if hasattr(fcntl, "F_GETPATH"):
+        try:
+            got = fcntl.fcntl(fd, fcntl.F_GETPATH, bytes(1024))
+            return os.path.realpath(os.fsdecode(got.split(b"\0", 1)[0]))
+        except OSError:
+            pass
+    return os.path.realpath(path)
+
+
 def open_unprotected(path):
     """path opened for binary reading, unless the file it reaches lies under a read-protected
     path (PermissionError). Checked on the open file, so a link swapped in after an earlier check
     is caught: a waiter reads its log outside the sandbox for as long as it waits."""
     f = open(path, "rb")
     try:
-        real = os.path.realpath(f"/proc/self/fd/{f.fileno()}")
+        real = fd_path(f.fileno(), path)
     except OSError:
         real = os.path.realpath(path)
     try:
