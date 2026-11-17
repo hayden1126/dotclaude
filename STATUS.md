@@ -95,7 +95,11 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     2026-11-13 (c060d9f) and is installed from main, lane closed, under Hayden's freeze lift
     ("ignore freeze, finish exam-prep"; #183, round 1, merged 2026-11-10). Round 3's retro starts
     in a new lane from `~/scratch/exam-prep/rounds/2/retro.md`, trials K02, K67, K68 carried in.
-    Next in merge order: done-gate, then demo-av PR 3. Policy-local merged 2026-11-17 as #188
+    Next in merge order: guards, then trial-fix (lane opened 2026-11-17 on Hayden's pick, for
+    the `lane trial` backlog item below), then stop-check, then practices' next turn; demo-av PR 3 goes
+    last (Hayden, 2026-11-17: "park demo-av because not important"). Done-gate merged 2026-11-17 as #189 (merge b593801:
+    `lane done` refuses a live session with a turn newer than its record), installed from
+    main, lane closed. Policy-local merged 2026-11-17 as #188
     (merge 288acdc: a root-owned `/etc/dotclaude/policy.local.toml` can add MCP read tools;
     live check passed through another repo's lane), installed from main, lane closed. Lane mocks went first (Hayden, 2026-11-16: "Mocks first"),
     then demo-av PR 4 merged 2026-11-16 as #180 (merge d0a9cbd: demo content planning in
@@ -111,7 +115,11 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     opened 2026-11-09 on Hayden's "open lane now": a Stop hook so lane sessions stop only on
     something they wait for, and `lane ls` marking stalled lanes; it changes settings.json and
     the lanes skill, as guards does; draft #182). Guards, practices and stop-check parked 2026-11-09
-    (pushed, waiting their turn). All change README.md or may. Lane daily-report (opened
+    (pushed, waiting their turn). All change README.md or may. On opening, guards and
+    stop-check merge main and resolve #189's overlap (skills/lanes/SKILL.md, docs/lanes.md,
+    README.md; stop-check also `lane` and lanelib.py). Stop-check also checks its hook against
+    #189: a post-merge turn ending `Waiting on you:` after the record write holds `lane done`,
+    while `Waiting on the lead:` passes. Lane daily-report (opened
     2026-11-15) closed unmerged the same day, no commits: Hayden moved the skill into the client
     repo as a project skill (his pick in that lane's dialog, session 9a2a47a7), so it leaves
     dotclaude. Its design went to that repo's lead.
@@ -255,7 +263,7 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
       text. So the bar includes trying a plain fetch before calling a page unreachable.
     Lands in its own practices PR on a later turn, not this one (Hayden, 2026-11-16, in that
     lane's dialog); the lane has it.
-  - **`lane trial` can't run sandboxed any more** (lane exam-prep, 2026-11-13, session
+  - **`lane trial` can't run sandboxed any more** (in lane trial-fix, 2026-11-17; lane exam-prep, 2026-11-13, session
     f55ae58c): its scratch `git worktree add` fails with "could not create directory of
     '.git/worktrees/tree12': Read-only file system". Claude Code's sandbox now write-allows only
     the session's own entry under `.git/worktrees`, and the skill says a trial runs only
@@ -280,7 +288,7 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     by a marketplace change, and `tests/delegation/test_settings.py`'s inventory test doesn't
     classify it. Lead's lean: deny it to delegated agents, since it writes config and handles
     secrets. A small lane.
-  - **`lane done` closes a lane whose session is still working with Hayden** (another repo's
+  - **`lane done` closes a lane whose session is still working with Hayden** (fixed: #189, merged 2026-11-17; another repo's
     lead, 2026-11-16, Hayden's screenshot): that lane's record said "Nothing left... the lead runs
     `lane done`", yet its live session kept walking Hayden through a test after that write, and
     the close cut it off. `done` has no busy or waiting gate (`lane park` has one: busy, or a
@@ -289,7 +297,7 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     transcript has a turn newer than its record (the `handoff?` idea applied to the session),
     with the refusal telling the lead to message the lane first. The archive kept the record and
     artifacts, so nothing was lost but the worktree. Lane done-gate (opened 2026-11-16 on
-    Hayden's "yes lane done fix"); next in merge order.
+    Hayden's "yes lane done fix").
   - **No private place to list an MCP server's read tools** (fixed: #188, merged 2026-11-17;
     Hayden picked a private local list over public policy.toml for five lesson reads
     another repo's lane asked for, then the root-owned /etc path) (capella-studio's lane roles,
