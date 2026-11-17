@@ -1007,7 +1007,7 @@ and status single-writer:
 - `lane done chart-fix` closes a merged lane in one run. It ends the lane's own sessions and
   what runs under them, proven from /proc and Claude Code's session files and never chosen by
   name or tmux window, and it refuses anything else by name. Then it archives the record and
-  removes the worktree, with the registration of any tree a killed `lane trial` left in it.
+  removes the worktree, with the registration of any tree an older `lane trial` left in it.
   While the worktree exists, it refuses a lane whose record's Next has a
   `Keep open:` line (more PRs to come; one inside a comment counts too), or whose record has an
   unclosed `<!--` or a stray `-->`, unless given `--abandon`. It never cuts off a lane session

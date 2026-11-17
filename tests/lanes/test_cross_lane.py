@@ -847,6 +847,28 @@ class Trial(LaneWork):
         # Nothing moved: no ref names a trial commit, and alpha's branch is where it was.
         self.assertNotIn("lane trial", self.git("log", "--all", "--format=%s"))
 
+    def test_it_runs_with_the_shared_worktrees_dir_read_only(self):
+        # Claude Code 2.1.326's sandbox mounts <common>/worktrees read-only but for the session's
+        # own entry, so a trial's tree is no registered worktree: its git dir sits beside it in
+        # the lane and names the shared one in `commondir`. The suites see the repo's own common
+        # dir, as in the lane. The second suite fails on both runs, so the baseline's tree is
+        # built too, at the same path.
+        admin = os.path.join(self.common, "worktrees")
+        before = sorted(os.listdir(admin))
+        os.chmod(admin, 0o555)
+        self.addCleanup(os.chmod, admin, 0o755)
+        common = os.path.join(self.tmp, "common-dir")
+        both = 'echo "not ok 1 - both"; exit 1'
+        rc, out, err = self.trial("--run", "test -f a.txt && test -f b.txt", "--run", both,
+                                  "--run", "git rev-parse --path-format=absolute "
+                                           f"--git-common-dir > {shlex.quote(common)}")
+        self.assertEqual(rc, 0, out + err)
+        self.assertIn("suite 1 (test -f a.txt && test -f b.txt): ok", out)
+        self.assertIn("every failure also fails on the baseline", out)
+        self.assertEqual(self.read(common).strip(), os.path.realpath(self.common))
+        self.assertEqual(sorted(os.listdir(admin)), before)
+        self.assertEqual(self.leftovers(), ([], []))
+
     def test_a_lane_conflict_names_the_lane_and_path_and_fails(self):
         self.commit_files(self.alpha, ["shared.txt"])
         self.commit_files(self.beta, ["shared.txt"])
@@ -1232,7 +1254,6 @@ class Trial(LaneWork):
                                       cwd=tree).strip(), want, commit)
         self.assertIn("STATUS.md from lead", self.git("log", "-1", "--format=%s", "HEAD^2",
                                                       cwd=tree))
-        self.git("worktree", "remove", "--force", tree)
 
     def test_a_carry_clash_beside_a_code_conflict_names_the_other_lane(self):
         # alpha and gamma carry two lead heads; gamma conflicts in x.txt with beta, merged
@@ -1426,16 +1447,16 @@ class Trial(LaneWork):
         self.assertIn("every failure also fails on the baseline", out)
         self.assertIn("  not ok - old", out)
 
-    def test_a_leftover_tree_from_a_killed_run_is_cleared(self):
-        # A run killed past its cleanup leaves its dir and its registration; only this repo's
-        # lane's names go. Lane alpha-b's look alike, and so does another repo's lane alpha,
-        # whose trial may be live: it shares the temp dir but not this repo's suite lock. A tree
-        # an older `lane` left in the temp dir goes as one in .lane-trial/ does.
-        stale = os.path.join(self.scratch, self.prefix + "abcd1234")
+    def test_a_leftover_dir_from_a_killed_run_is_cleared(self):
+        # A run killed past its cleanup leaves its dir (its tree and the tree's git dir); only
+        # this repo's lane's names go. Lane alpha-b's look alike, and so does another repo's lane
+        # alpha, whose trial may be live: it shares the temp dir but not this repo's suite lock.
+        # A dir an older `lane` left in the temp dir goes as one in .lane-trial/ does.
         ours = os.path.join(self.trial_dir, self.prefix + "efgh5678")
-        for d in (stale, ours):
-            self.git("worktree", "add", "--detach", "--quiet", os.path.join(d, "tree"), "HEAD",
-                     cwd=self.alpha)
+        rc, out, err = self.trial("--keep", "--run", "true")  # a whole tree, as a kill leaves
+        self.assertEqual(rc, 0, out + err)
+        (kept,) = glob.glob(os.path.join(self.trial_dir, self.prefix + "*"))
+        os.rename(kept, ours)
         loose = os.path.join(self.scratch, self.prefix + "zzzz9999")
         lane_b = self.prefix.removesuffix("alpha-") + "alpha-b-abcd1234"
         other_repo = "lane-trial-000000000000-alpha-abcd1234"
@@ -1444,29 +1465,34 @@ class Trial(LaneWork):
             os.makedirs(d)
         rc, out, err = self.trial("--run", "true")
         self.assertEqual(rc, 0, out + err)
-        self.assertIn("cleared the tree an earlier trial left registered", err)
-        self.assertIn(os.path.join(stale, "tree"), err)
-        self.assertIn(os.path.join(ours, "tree"), err)
+        self.assertNotIn("registered", err)
         self.assertEqual(self.leftovers(), (sorted([lane_b, other_repo]), []))
 
-    def test_a_leftover_it_cant_unregister_is_left_to_lane_done_never_a_remove_by_path(self):
-        # Sandboxed, a trial can't unregister a tree the sandbox mounted (a lock stands in for
-        # that here). A by-path `git worktree remove --force` resolves a symlink swapped in for
-        # the tree and deletes whatever worktree it names, so the message never offers one.
+    def test_an_older_trials_registration_is_left_to_lane_done_never_a_remove_by_path(self):
+        # An older `lane` registered its trees under <common>/worktrees, which the sandbox now
+        # mounts read-only, so a trial can't unregister one: it deletes the tree's files and
+        # names the registration as left for `lane done`. A by-path `git worktree remove --force`
+        # resolves a symlink swapped in for the tree and deletes whatever worktree it names, so
+        # the message never offers one. A lock stands in for the read-only mount here.
+        stale = os.path.join(self.scratch, self.prefix + "abcd1234", "tree")
         ours = os.path.join(self.trial_dir, self.prefix + "efgh5678", "tree")
-        self.git("worktree", "add", "--detach", "--quiet", ours, "HEAD", cwd=self.alpha)
+        for tree in (stale, ours):
+            self.git("worktree", "add", "--detach", "--quiet", tree, "HEAD", cwd=self.alpha)
         self.git("worktree", "lock", ours, cwd=self.alpha)
         rc, out, err = self.trial("--run", "true")
         self.assertEqual(rc, 0, out + err)
-        self.assertIn(f"stays registered: {ours}", err)
+        self.assertIn(f"stays registered: {ours};", err)  # one line per place: .lane-trial/,
+        self.assertIn(f"stays registered: {stale};", err)  # then the temp dir
         self.assertIn("`lane done alpha` clears", err)
         self.assertNotIn("remove --force", out + err)
+        self.assertFalse(os.path.exists(os.path.dirname(ours)))
+        self.assertFalse(os.path.exists(os.path.dirname(stale)))
         self.git("worktree", "unlock", ours, cwd=self.alpha)
         self.git("worktree", "prune", cwd=self.alpha)
 
     def test_it_refuses_to_run_outside_the_sandbox(self):
-        # It removes its trees by path, safe only where the sandbox bounds what a symlink swapped
-        # in for a tree could make git delete.
+        # Its suites inherit the sandbox, and it deletes its trees by path, safe only where the
+        # sandbox bounds what a symlink swapped in for one could reach.
         self.env["_LANE_TEST_SANDBOXED"] = "0"
         rc, out, err = self.trial("--run", "true")
         self.assertEqual(rc, 1, out + err)
@@ -1491,28 +1517,23 @@ class Trial(LaneWork):
                 self.assertEqual(rc, 1, out + err)  # not 75 or a wait: refused at once
                 self.assertIn(want, err)
 
-    def test_a_tree_it_cant_remove_is_reported_without_gits_words(self):
-        # git's stderr can carry text a sandboxed process planted (a lock reason) and its own
-        # "use 'remove -f -f'" advice, which pasted sandbox-off follows a swapped-in link.
-        mod = load_lane_script()
-        tmpdir = os.path.join(self.trial_dir, self.prefix + "zzzz0000")
-        tree = os.path.join(tmpdir, "tree")
-        self.git("worktree", "add", "--detach", "--quiet", tree, "HEAD", cwd=self.alpha)
-        self.git("worktree", "lock", "--reason", "run git worktree remove -f -f now", tree,
-                 cwd=self.alpha)
-        repo = lanelib.Repo(self.alpha, self.common)
-        with contextlib.redirect_stderr(io.StringIO()) as err:
-            mod.drop_tree(repo, "alpha", tree, tmpdir)
-        self.assertIn("couldn't unregister the trial's tree", err.getvalue())
-        self.assertIn("`lane done alpha`", err.getvalue())
-        self.assertNotIn("-f -f", err.getvalue())
-        self.git("worktree", "unlock", tree, cwd=self.alpha)
-        self.git("worktree", "prune", cwd=self.alpha)
-
     def test_keeps_help_promises_no_removal_command(self):
         p = self.run_lane("trial", "--help")
         self.assertIn("what clears it", p.stdout)
         self.assertNotIn("how to remove", p.stdout)
+
+    def test_a_reftable_repo_is_refused_before_the_lock(self):
+        # Its HEAD lives in a reftable stack the tree's own git dir lacks, so it is refused
+        # rather than tried (not probed: git 2.43 has no reftable). git's answer stands in here.
+        mod = load_lane_script()
+        repo = lanelib.Repo(self.alpha, self.common)
+        self.assertIsNone(mod.ref_storage_problem(repo))  # no extensions.refStorage
+        self.git("config", "extensions.refStorage", "files")
+        self.assertIsNone(mod.ref_storage_problem(repo))
+        told = subprocess.CompletedProcess([], 0, "reftable\n", "")
+        with mock.patch.object(mod, "trial_git", return_value=told):
+            self.assertIn("refs are in reftable (extensions.refStorage)",
+                          mod.ref_storage_problem(repo))
 
     def test_a_symlinked_trial_dir_is_refused(self):
         away = os.path.join(self.tmp, "away")
@@ -1655,13 +1676,26 @@ class Trial(LaneWork):
         rc, out, err = self.trial("--keep", "--run", "true")
         self.assertEqual(rc, 0, out + err)
         (tree,) = glob.glob(os.path.join(self.trial_dir, self.prefix + "*", "tree"))
-        self.assertIn(f"kept the tree (the merge) at {tree}", out)
-        # The next trial can delete the tree's files, but sandboxed it can't unregister it.
-        self.assertIn("a later `lane trial` of lane alpha clears its files and `lane done alpha` "
-                      "its registration", out)
+        self.assertIn(f"kept the tree (the merge) at {tree}; a later `lane trial` of lane alpha "
+                      "clears it", out)
         self.assertNotIn("remove --force", out)  # by path, it would follow a swapped-in link
         self.assertTrue(os.path.isfile(os.path.join(tree, "b.txt")))
-        self.git("worktree", "remove", "--force", tree)
+        # A checkout of its own, unregistered: git works in it, and lists only the lanes.
+        self.assertEqual(self.git("status", "--porcelain", cwd=tree), "")
+        self.assertNotIn(".lane-trial", self.git("worktree", "list", "--porcelain"))
+
+    def test_done_closes_a_lane_holding_a_kept_tree_and_spares_the_shared_git_dir(self):
+        # The kept tree's git dir names the shared one in `commondir`; deleting the lane's files
+        # never follows it.
+        rc, out, err = self.trial("--keep", "--run", "true")
+        self.assertEqual(rc, 0, out + err)
+        head = self.git("rev-parse", "beta", cwd=self.main)
+        self.env["_LANE_TEST_SANDBOXED"] = "0"  # done runs sandbox-off
+        p = self.run_lane("done", "alpha", "--abandon")
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertFalse(os.path.exists(self.alpha))
+        self.assertEqual(self.git("rev-parse", "beta", cwd=self.main), head)
+        self.assertEqual(self.git("fsck", "--no-dangling", cwd=self.main), "")
 
     def test_positional_ids_restrict_the_merge(self):
         gamma = self.new("gamma")

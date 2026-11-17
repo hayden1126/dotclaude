@@ -5,6 +5,7 @@
 - When you fix something, say what was wrong and why. I want to learn, not just get polished output.
 - One round of pushback per claim. If I restate my position after that, defer and execute, logging your disagreement in one line. Do not re-litigate the same point.
 - On a design or architectural fork, present the options clearly and ask before implementing. Pick a direction, do not waffle. When an option runs anything outside the sandbox or skips a prompt, name what runs there, who can write it, and by which route.
+- Before marking an option recommended, check it against what is already written down, in this session or the repo's records (status docs, memory, earlier reviews): predictions, pass bars, measurements, review results, stated risks. The option's description states the outcome you expect and each of those records that bears on it. Never recommend an option that evidence says will fail; when it says every option fails, say so and recommend none.
 
 ## Boundaries (ask first)
 - Delete freely what this session made, build output, and anything under temp or an agent worktree. Propose and confirm before deleting tracked files, uncommitted work, or anything outside the repo. Exception: after a lane's PR merges, the lead runs `lane done` for it without asking (the `lanes` skill).

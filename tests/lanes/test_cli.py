@@ -634,8 +634,9 @@ class RoundTrip(LanesRepo):
         self.assertIn(tree, p.stderr)
 
     def test_done_clears_a_tree_a_trial_left_in_the_lane(self):
-        # A trial killed past its cleanup leaves its tree registered in the lane's .lane-trial/:
-        # the close unregisters it, so removing the lane leaves no stale entry behind.
+        # A trial of an older `lane` (one that registered its trees) killed past its cleanup
+        # left its tree registered in the lane's .lane-trial/: the close unregisters it, so
+        # removing the lane leaves no stale entry behind.
         self.lane("new", "spike")
         path = self.lane_path("spike")
         key = lanelib.Repo(self.main, self.common).key
