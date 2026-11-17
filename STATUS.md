@@ -309,6 +309,15 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     malformed, and covered by the Edit deny as enforcement config. Name each read tool, never
     the server's wildcard. Meanwhile that lane's main thread makes the calls. Hayden's call;
     after Nov 16.
+  - **A CLAUDE.md line on recommended options** (in lane trial-fix's PR, Hayden's pick
+    2026-11-17): a recommended option states its expected outcome and any risk the session
+    already wrote down. Evidence (private): `~/scratch/rec-asks/FINDINGS.md`.
+  - **`lane park` refuses a lane just reopened in plan mode** (demo-av, 2026-11-17): `lane open`
+    starts the session in plan mode, and park's handoff-check needs a record write from that
+    session, which plan mode blocks. So a lane opened and then dropped can't be parked until
+    Hayden leaves plan mode in its window. Fix to design: park accepts a session that wrote
+    nothing past its plan file when the record already passed handoff-check before the open.
+    Not picked yet; small, and it touches trial-fix's files.
   - **MCP reads run only on general-purpose** (lane policy-local's live check through another
     repo's lane, 2026-11-17): Explore and researcher list no MCP tools, so a delegated MCP read
     needs general-purpose, which also has every write tool. The policy hook still holds its MCP
