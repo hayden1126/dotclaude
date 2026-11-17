@@ -191,7 +191,13 @@ an unregistered worktree: `lane whoami` tells you which.
    refusal, or a reason it can't fix, goes in its record's State, and it goes on. Then, as its
    last act (the lead's `lane done` ends its session), it sends the lead `merged #N`, to what a
    bare `lane addr lead` prints. It says nothing more about the merge to Hayden and never
-   proposes `lane done`: the lead runs the rest (The lead, step 7).
+   proposes `lane done`: the lead runs the rest (The lead, step 7). That record write is the
+   lane's word that it is finished: a turn after it (Hayden's prompt, a message), or a reply
+   with a Waiting on you list after it, makes `lane done` refuse the lane, since it may still
+   be working with him. So ask him anything before that write, never after: an item still
+   open for him goes in the record's Asks for Hayden, and the replies after the write end
+   with no Waiting on you list. Once nothing is left after a later turn, end it by writing the
+   record again (a `lane note` does) and sending `merged #N` again.
    When `lane addr lead` refuses (no lead running, several sessions and none picked, or the
    lead stopped), it tells Hayden once that #N merged, with the refusal's way to pick the lead
    or the stopped lead's window if it gives one.
@@ -224,7 +230,17 @@ an unregistered worktree: `lane whoami` tells you which.
    - a run from anywhere but the main checkout, or under a lane's session (only the lead
      closes lanes);
    - links the install still points into the lane;
-   - a failing `handoff-check --closing`.
+   - a failing `handoff-check --closing`;
+   - a lane session that is busy or waiting on Hayden (a permission dialog or a question),
+     read again just before the signals (one stopped with Ctrl+Z keeps that status until `fg`);
+     `--abandon` never overrides it;
+   - a live lane session whose transcript holds a turn newer than the record's last write
+     (any input: Hayden's prompt or dialog answer, a message, a task notice, a `!` or slash
+     command), or a reply holding a Waiting on you line, newer than the record's last write
+     (one within 3 s before it reads as after), read again just before the signals: it may
+     still be working with Hayden. Also a record, or a transcript, that can't say when those
+     were. Checked after the `Keep open:` and comment reads, which `--abandon` skips.
+     `--abandon` closes it anyway (it asks).
 
    A close refused after a signal, or one that couldn't record its proof (nothing signalled),
    leaves the lane `closing`, which `open` refuses: rerun `lane done`, which keeps what the
@@ -379,7 +395,18 @@ inherits the lead from it.
       fails on a lane with no live session is the lead's one ask to Hayden,
       since no lane is left to ask (step 5 says what his yes allows in each case). A record
       older than the merge means the lane may have stopped before writing `Keep open:`, or its last session
-      ended without writing it. Never `--abandon` here.
+      ended without writing it. Never `--abandon` here. When `done` refuses a lane session
+      still working with Hayden, its refusal says who acts:
+      - busy: rerun `done` once the session is idle;
+      - a turn, or a reply with a Waiting on you list, after the record's last write: message
+        the lane "#N: lane done refused, your session `<reason>`: finish with Hayden, write
+        your record, then send `merged #N` again", and rerun `done` on that message. No ask
+        to Hayden, unless the same refusal comes back after that resent `merged #N`: then it
+        is the lead's ask to him, with the refusal's text;
+      - a dialog open, a stopped session, an unreadable record or transcript, or two
+        transcripts for one session: no message to the lane clears it, so it is the lead's
+        ask to Hayden, with the refusal's text. A dialog or a stopped session he clears in the
+        lane's window (nothing overrides those); for the rest, his yes allows `--abandon`.
 
    Then tell Hayden one line ("#42 merged: installed, lane chart-fix closed, api-docs nudged"),
    or the step that failed. A failed step stops the chain. A chain stopped on something that can

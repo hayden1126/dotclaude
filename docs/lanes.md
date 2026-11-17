@@ -267,8 +267,8 @@ Why it works this way:
   standing approval written here; the lead proves the merge with `gh pr view` before it acts,
   and `lane done` checks it again (a merged PR whose head is the tip, or the tip in the base).
 - **A scoped exception to "confirm before deleting"**, which CLAUDE.md names. `lane done`
-  refuses an unmerged branch, a dirty worktree, links into the lane, a `Keep open:` lane and a
-  record whose comments don't parse,
+  refuses an unmerged branch, a dirty worktree, links into the lane, a `Keep open:` lane, a
+  record whose comments don't parse and a lane session still working with Hayden (below),
   archives the record before the remove, and never passes `--force` or `-D` (a killed trial's
   leftover registration goes by its gitdir text, never by path: the `lane trial` section). The approval
   covers `lane done` after a merge only; `--abandon` still asks.
@@ -317,6 +317,57 @@ Why it works this way:
   belongs in `lane.json`, set by a command (`lane keep "<why>"`), with the record's line for
   people and `handoff-check` warning when the two disagree. A lane can only hold itself that
   way, the safe direction. Until then, keep `Keep open:` at the top of Next, in plain text.
+- **`lane done` never cuts off a lane session still working with Hayden** (lane done-gate,
+  2026-11-16). In another repo, a lane wrote "Nothing left, the lead runs lane done" into its
+  record, its live session kept walking Hayden through a test, and the lead's `lane done` ended
+  it mid-conversation. `done` now refuses, before any signal, a lane session that is busy or
+  waiting on Hayden (park's gate, `status_gate`; `--abandon` never overrides it, since he
+  clears it in seconds in the lane's window and a SIGTERM mid-turn can leave half-written files
+  that keep the worktree), and a live one whose transcript holds a turn newer than the record's
+  last write (`turn_gate`, the `handoff?` idea applied to the conversation; `--abandon` skips
+  it). The record is the lane's word that it is finished, so a turn after it means it may not
+  be. `turn_gate` also refuses on a reply holding a Waiting on you line newer than the record:
+  a lane can write its record and end the same turn on a plain-text question, with no input
+  after the write and no dialog open. Any such reply counts, not only the last (a Stop hook's
+  block can draw one more line that drops the list while his question stays open). The line is
+  the Waiting on you list CLAUDE.md asks for, read after any markup (`lanelib.HAYDEN_WAIT`:
+  `^[\W_]*waiting on (you|hayden)\b`), so a lane's `Waiting on the lead:` passes. **One
+  reference point** (Hayden's pick, 2026-11-16): inputs and waiting replies are both weighed
+  against the record's last write, nothing else. Two earlier rules opened a major gap each.
+  Clearing a wait by any later input let the lead's own "lane done refused" message clear the
+  question it was refused for (review round 3); clearing it only by Hayden's own input then
+  refused every routine close where he merged on GitHub, since a lane's merge ask ends with a
+  Waiting on you list and only the lead's "#N merged" follows it (review round 4). With the
+  record as the reference, a merge ask before the after-merge write passes, and a question after
+  the write holds the close until the lane writes its record again, which the skill says it does
+  only once it is done with him: the record is the lane's word, as for every other check here.
+  Each refusal names who acts: a turn or a waiting reply newer than the record is the lane's to
+  clear (the lead messages it), busy clears by itself, and the rest (a dialog, a stopped
+  session, which keeps its busy or waiting status until `fg`, an unreadable record or
+  transcript, two transcripts) only Hayden can clear, so the lead asks him. Both run once the
+  lane is known closable and not kept open (after the merge check and the `Keep open:` and
+  comment reads, so those say so first: `--abandon`, where a refusal may lead, skips the
+  reads), before the slower gates, and again after
+  `handoff-check --closing`, just before the lane is marked `closing`. A turn is any input
+  (Hayden's pick, 2026-11-16; `lanelib.turn_kind`): every main-chain user record but a tool's
+  result, a compaction summary and an `isMeta` record with no `origin` (a loaded skill's body,
+  Stop-hook feedback), plus each `queued_command` attachment (input that arrived mid-turn). A
+  tool's result is no turn even with an image beside it (10 such records in the local
+  transcripts), except Hayden's answer to a question dialog (`toolUseResult.answers`) and his
+  refusal of a tool call (`toolDenialKind: user-rejected`). A tally of 300 real transcripts
+  gave the shapes: typed prompts carry `origin.kind` `human`, messages `peer`, background
+  notices `task-notification`; `!` commands, slash commands and interrupts carry none. An
+  input of a shape not seen yet counts (`auto-continuation`, a usage limit's reset resuming
+  work, turned up once in 4,231 transcripts), and a turn or reply whose time can't be read
+  refuses. None of the 4,231 local transcripts was unreadable, and the largest (129 MB) reads in
+  0.33 s. The
+  transcripts are Claude Code's own (`<config>/projects/*/<sid>.jsonl`), which sandboxed Bash
+  can't write; a session with none has taken no input. A write within 3 s after a turn reads
+  as older, as a merge's does (`TURN_SLACK`): a lane's after-merge write lands well after the
+  message that started its turn, and its `merged #N` send is a tool call, no turn. It stays out
+  of `handoff?`: a working lane always has turns newer than its record, so the flag would
+  never clear. On a refusal the lead messages the lane, which finishes, writes its record again
+  and resends `merged #N`. `park` keeps only the busy and waiting gate: `lane open` undoes it.
 - **The backlog line moved to the lead.** The lead owns the project STATUS, so the one line at
   merge is a step of its chain, not the lane's.
 
