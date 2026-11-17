@@ -91,7 +91,7 @@ Each decision appends one line to `$XDG_STATE_HOME/dotclaude/pass.log` (`~/.loca
 
 - The waiter decides within about a second of the turn's end, so by your next turn a pass has either run or dropped. A turn that starts inside that second gets the notice at its first tool call or your next turn, not at its prompt.
 - Never tell anyone a pass is still queued from memory: a `[pass]` notice means none is.
-- Pass again only when the reason still holds. Hayden asked for it, or an autopass tier is in effect: fix the notice's cause first.
+- Pass again only when the reason still holds. Hayden asked for it, the lead's "#N chain done: run /pass" did, or an autopass tier is in effect: fix the notice's cause first.
 
 ## Auto-pass nudges
 
