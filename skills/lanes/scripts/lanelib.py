@@ -2172,10 +2172,15 @@ class TurnUnread(ValueError):
     """read_transcript can't say when a transcript's last turn or reply was: `done` refuses."""
 
 
-# A line that may be a turn holds one of these; one that may be a reply holds both of the
-# second pair. Any other line is never parsed (most assistant lines are tool calls alone).
+# A line that may be a turn holds one of these; one that may be a reply holds "assistant" and
+# a text block or string content. Any other line is never parsed (most assistant lines are tool
+# calls alone).
 TURN_BYTES = (b'"user"', b'"queued_command"')
-REPLY_BYTES = (b'"assistant"', b'"text"')
+REPLY_BYTES = re.compile(rb'"text"|"content"\s*:\s*"')
+# The turn kinds that are Hayden's own input, and so can answer a question to him: typed, a
+# dialog answer, a refused tool call, and an input with no origin (a ! or slash command, an
+# interrupt). A message from another session, a task notice or a kind not seen yet can't.
+HAYDEN_KINDS = ("human", "answer", "refusal", None)
 # A line of a reply that waits on Hayden: the Waiting on you list CLAUDE.md asks for (or
 # "Waiting on Hayden"), after any markup. "Waiting on the lead:" is no wait on him.
 HAYDEN_WAIT = re.compile(r"^[\W_]*waiting on (you|hayden)\b", re.IGNORECASE | re.MULTILINE)
@@ -2232,18 +2237,18 @@ def reply_text(rec) -> str | None:
 
 class Transcript(NamedTuple):
     """What read_transcript found: the newest turn as (when, origin kind), and when the newest
-    reply that waits on Hayden (HAYDEN_WAIT) and is newer than that turn was; None for either
-    when there is none."""
+    reply that waits on Hayden (HAYDEN_WAIT) and is newer than his own newest input
+    (HAYDEN_KINDS) was; None for either when there is none."""
     turn: tuple[float, str | None] | None
     waits: float | None
 
 
 def read_transcript(path: str) -> Transcript:
     """The newest turn (turn_kind) in the transcript at path, and the newest reply (reply_text)
-    after it that waits on Hayden, newest by stamp, not by line: the wall clock steps. Any such
-    reply counts, not only the last: a turn can go on past a Waiting on you list (a Stop hook's
-    block, say) with a line that drops it, and his question is still open. One older than the
-    newest turn has had its answer. No file is Transcript(None,
+    that waits on Hayden since his own last input, newest by stamp, not by line: the wall clock
+    steps. Any such reply counts, not only the last: a turn can go on past a Waiting on you list
+    (a Stop hook's block, a message from the lead) with a reply that drops it, and his question
+    is still open. Only his own input (HAYDEN_KINDS) answers one. No file is Transcript(None,
     None): Claude Code writes none before a session's first input. The whole file is read,
     streamed (0.3 s for a 129 MB transcript, 2026-11-16). Raises TurnUnread when a turn's or a
     reply's time can't be told: a line that may be one won't parse, one has no readable
@@ -2255,14 +2260,14 @@ def read_transcript(path: str) -> Transcript:
         return Transcript(None, None)
     except OSError as e:
         raise TurnUnread(f"can't be opened ({e.strerror or e})")
-    turn, waiting = None, []
+    turn, his, waiting = None, None, []
     try:
         with os.fdopen(fd, "rb") as f:
             if not stat.S_ISREG(os.fstat(f.fileno()).st_mode):
                 raise TurnUnread("is no regular file")
             for n, line in enumerate(f, 1):
-                if not (any(b in line for b in TURN_BYTES)
-                        or all(b in line for b in REPLY_BYTES)):
+                if not (any(b in line for b in TURN_BYTES) or (
+                        b'"assistant"' in line and REPLY_BYTES.search(line))):
                     continue
                 try:
                     rec = json.loads(line)
@@ -2276,13 +2281,16 @@ def read_transcript(path: str) -> Transcript:
                 if when is None:
                     raise TurnUnread(f"line {n} is a {'turn' if is_turn else 'reply'}, but its "
                                      "timestamp can't tell when")
-                if is_turn and (turn is None or when > turn[0]):
-                    turn = (when, kind)
-                elif text is not None and HAYDEN_WAIT.search(text):
+                if is_turn:
+                    if turn is None or when > turn[0]:
+                        turn = (when, kind)
+                    if kind in HAYDEN_KINDS and (his is None or when > his):
+                        his = when
+                elif HAYDEN_WAIT.search(text):
                     waiting.append(when)
     except OSError as e:
         raise TurnUnread(f"can't be read ({e.strerror or e})")
-    after = [w for w in waiting if turn is None or w > turn[0]]
+    after = [w for w in waiting if his is None or w > his]
     return Transcript(turn, max(after, default=None))
 
 

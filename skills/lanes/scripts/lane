@@ -5656,13 +5656,15 @@ def status_gate(lane_id: str, sessions: list[dict], verb: str) -> None:
         sid, status = sid_of(s), status_of(s)
         if status not in ("busy", "waiting"):
             continue
+        # Only Hayden, in the lane's window, can answer a dialog or fg a stopped session, so
+        # those are the lead's ask to him; a busy one ends its turn by itself.
         if lanelib.session_stopped(s):
-            then = (f"{stopped_note('it', s)}, " +
-                    ("let it finish" if status == "busy" else "answer it"))
+            then = (f"{stopped_note('it', s)}: the lead asks Hayden to fg it" +
+                    (" and answer it" if status == "waiting" else ""))
         elif status == "busy":
             then = "wait until it is idle"
         else:
-            then = "answer it"
+            then = "the lead asks Hayden to answer it in the lane's window"
         what = ("is busy (mid-turn), and {ing} would cut its turn off" if status == "busy" else
                 "is waiting on Hayden (a permission dialog or a question), which {ing} would "
                 "lose").format(ing=ing)
@@ -5673,8 +5675,9 @@ def status_gate(lane_id: str, sessions: list[dict], verb: str) -> None:
 def turn_gate(repo: Repo, lane: dict, sids: list) -> None:
     """Refuse, before any signal, a live lane session that may still be working with Hayden:
     its transcript holds a turn (any input: lanelib.turn_kind) newer than the record's last
-    write less TURN_SLACK, or its last reply holds a Waiting on you list (Hayden's pick,
-    2026-11-16: a plain-text question asked in the turn that wrote the record). The record is
+    write less TURN_SLACK, or a reply holding a Waiting on you line since his own last input
+    (Hayden's pick, 2026-11-16: a plain-text question asked in the turn that wrote the record;
+    lanelib.read_transcript). The record is
     the lane's word that it is finished; a write within TURN_SLACK after a turn reads as older.
     Read only from Claude Code's own transcripts, which sandboxed Bash can't write. `done
     --abandon` skips it."""
@@ -5711,8 +5714,9 @@ def turn_gate(repo: Repo, lane: dict, sids: list) -> None:
         if seen.waits is not None:
             raise LaneError(shown(
                 f"lane {lane_id}'s session {sid} replied at {clock(seen.waits)} with a Waiting on "
-                f"you line, and no input has come since: it may still be waiting on Hayden, so nothing was "
-                f"signalled. {ask}"))
+                f"you line, and no input of Hayden's has come since: it may still be waiting on "
+                f"him, so nothing was signalled. Only his answer in the lane's window clears it: "
+                f"the lead asks him, and `--abandon` closes it anyway (it asks)"))
 
 
 def clock(t: float) -> str:

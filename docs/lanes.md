@@ -330,12 +330,15 @@ Why it works this way:
   you line (Hayden's pick, 2026-11-16, after review): a lane can write its record and end the
   same turn on a plain-text question, with no input after the write and no dialog open. Any
   such reply counts, not only the last (a Stop hook's block can draw one more line that drops
-  the list while his question stays open), and one older than the last input has had its
-  answer. The line is the Waiting on you list CLAUDE.md asks for, read after any markup
+  the list while his question stays open), and only his own input answers it (`HAYDEN_KINDS`:
+  typed, a dialog answer, a refused tool call, a `!` or slash command). A message from another
+  session can't: the lead's own "lane done refused" message would otherwise clear the very
+  question it was refused for (review round 3). The line is the Waiting on you list CLAUDE.md asks for, read after any markup
   (`lanelib.HAYDEN_WAIT`: `^[\W_]*waiting on (you|hayden)\b`), so a lane's `Waiting on the
-  lead:` passes. An unreadable record or transcript, or two transcripts for one session, can't
-  be cleared by a message to the lane, so that refusal says the lead asks Hayden. A stopped session (Ctrl+Z) keeps its busy or waiting status until `fg`,
-  so its refusal says to `fg` it. Both run once the lane is known closable (after the merge
+  lead:` passes. Each refusal names who acts: a newer turn is the lane's to clear (the lead
+  messages it), busy clears by itself, and the rest (a dialog, a stopped session, which keeps
+  its busy or waiting status until `fg`, a Waiting on you reply, an unreadable record or
+  transcript, two transcripts) only Hayden can clear, so the lead asks him. Both run once the lane is known closable (after the merge
   check, so an unmerged lane says so first), before the slower gates, and again after
   `handoff-check --closing`, just before the lane is marked `closing`. A turn is any input
   (Hayden's pick, 2026-11-16; `lanelib.turn_kind`): every main-chain user record but a tool's

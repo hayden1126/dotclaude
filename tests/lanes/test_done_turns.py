@@ -161,9 +161,25 @@ class LastTurn(unittest.TestCase):
             user(t + 2, "Stop hook feedback: [autopass] Context is at 303k", isMeta=True),
             assistant(t + 3, "Noted, passing next turn.")), t + 1)
 
-    def test_an_answered_question_waits_no_more(self):
+    def test_only_haydens_own_input_answers_a_question(self):
+        # Review round 3: the lead's "lane done refused" message is a peer turn, and must not
+        # clear the question it was refused for; nor may a task notice or an unknown kind.
         t = self.t
-        self.assertIsNone(self.waits(assistant(t, WAITS), typed(t + 40), tool_result(t + 50)))
+        for make in (typed, answer, refused, bang):
+            with self.subTest(clears=make.__name__):
+                self.assertIsNone(self.waits(assistant(t, WAITS), make(t + 40),
+                                             assistant(t + 50, "Done.")))
+        for make in (peer, notice, lambda w: user(w, origin={"kind": "auto-continuation"})):
+            with self.subTest(keeps=make.__name__):
+                self.assertEqual(self.waits(typed(t - 10), assistant(t, WAITS), make(t + 40),
+                                            assistant(t + 50, "Sent merged #9.")), t)
+
+    def test_a_reply_as_a_plain_string_counts(self):
+        # Not seen in 23,248 candidate lines (2026-11-16), so read rather than trusted absent.
+        t = self.t
+        self.assertEqual(self.waits(typed(t), {"type": "assistant", "timestamp": stamp(t + 5),
+                                               "message": {"role": "assistant",
+                                                           "content": WAITS}}), t + 5)
 
     def test_a_tool_call_or_a_subagents_reply_is_no_reply(self):
         t = self.t
@@ -236,7 +252,10 @@ class DoneTurns(test_cli.Fakes):
     def test_a_busy_or_waiting_session_refuses_even_with_abandon(self):
         (claude,) = self.claude()
         for status, said in (("busy", "is busy (mid-turn), and closing would cut its turn off"),
-                             ("waiting", "is waiting on Hayden")):
+                             ("waiting", "is waiting on Hayden (a permission dialog or a "
+                                         "question), which closing would lose, so nothing was "
+                                         "signalled: the lead asks Hayden to answer it in the "
+                                         "lane's window")):
             for extra in ([], ["--abandon"]):
                 with self.subTest(status=status, abandon=bool(extra)):
                     self.session_file(claude, status=status)
@@ -254,13 +273,14 @@ class DoneTurns(test_cli.Fakes):
         self.stop(claude)
         p = self.run_lane("done", "chart-fix", "--abandon")
         self.assertIn(f"session {SID} is busy (mid-turn)", p.stderr)
-        self.assertIn(f"it (pid {claude}, no tmux) is stopped (Ctrl+Z): fg it there, let it "
-                      "finish", p.stderr)
+        self.assertIn(f"it (pid {claude}, no tmux) is stopped (Ctrl+Z): fg it there: the lead "
+                      "asks Hayden to fg it, then rerun", p.stderr)
         self.assertEqual(self.signals(), [])
         self.session_file(claude, status="waiting")
         p = self.run_lane("done", "chart-fix", "--abandon")
         self.assertIn("is waiting on Hayden", p.stderr)
-        self.assertIn("fg it there, answer it, then rerun `lane done chart-fix`", p.stderr)
+        self.assertIn("the lead asks Hayden to fg it and answer it, then rerun `lane done "
+                      "chart-fix`", p.stderr)
         self.assertEqual(self.signals(), [])
 
     def test_a_lane_with_no_live_session_closes_without_reading_its_record(self):
@@ -324,10 +344,22 @@ class DoneTurns(test_cli.Fakes):
         self.transcript_of(typed(self.w - 60), assistant(self.w + 30, WAITS))
         p = self.run_lane("done", "chart-fix")
         self.assertIn(f"session {SID} replied at", p.stderr)
-        self.assertIn("with a Waiting on you line, and no input has come since", p.stderr)
-        self.assertIn("Message the lane (`lane addr chart-fix`)", p.stderr)
+        self.assertIn("with a Waiting on you line, and no input of Hayden's has come since",
+                      p.stderr)
+        self.assertIn("Only his answer in the lane's window clears it: the lead asks him",
+                      p.stderr)
         self.assertRefusedUntouched(p, claude)
         self.assertClosed(self.lane("done", "chart-fix", "--abandon"))
+
+    def test_a_message_from_the_lead_leaves_the_question_open(self):
+        # Review round 3: the lead's refusal message, then the lane rewrites its record and
+        # resends `merged #N` with no list: Hayden's question is still open.
+        (claude,) = self.claude()
+        self.transcript_of(assistant(self.w - 100, WAITS), peer(self.w - 30),
+                           assistant(self.w + 3, "Sent merged #9."))
+        p = self.run_lane("done", "chart-fix")
+        self.assertIn("with a Waiting on you line", p.stderr)
+        self.assertRefusedUntouched(p, claude)
 
     def test_a_last_reply_waiting_on_the_lead_closes(self):
         self.claude()
