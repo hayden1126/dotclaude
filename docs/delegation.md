@@ -77,7 +77,7 @@ Each layer covers what the others can't.
 | `reviewer` | `agents/reviewer.md` | Enforces: Read, Grep and Glob only |
 | `writer` | `agents/writer.md` | Enforces: `isolation: worktree`, no Agent tool, and the policy's worktree root |
 | Spawn guard | `hooks/agent-spawn-guard.sh`, `skills/delegation/scripts/agent-spawn-guard` | Enforces: denies a `writer` spawn without `isolation` on the call, and a named spawn without the `team-` prefix. Fails closed |
-| Sandbox | `settings.json` `sandbox` | Enforces (OS): the write roots, `denyRead` (the credential barrier, plus tool tokens and shell history), `denyWrite` (the enforcement sources, and the repo files that run outside the sandbox: `statusline/`, `notify-toast.ps1`, `chrome-debug.ps1`, `chrome-bg.ps1` (`bin/chrome-bg` runs it on every start), `codex/`, `tmux/`, `bin/`, `setup-tmux.sh`, `tests/` (the canary runs it), and `setup.sh` with the scripts and lists it installs from; installed from a lane, that checkout's copies too, plus the machine-local MCP overlay `~/.config/dotclaude/policy.local.toml`), and the network allowlist. The home PATH and install dirs an excluded command resolves through are Edit deny rules in `permissions.deny` instead, which Claude Code also merges into the sandbox and which bind the Edit and Write tools too (see "The excluded-command guard"). A sandboxed `git switch` or `merge` that touches a `denyWrite` file fails; `git pull` already runs outside. `failIfUnavailable`, and `autoAllowBashIfSandboxed: false`, so Hayden's prompts stay as they were |
+| Sandbox | `settings.json` `sandbox` | Enforces (OS): the write roots, `denyRead` (the credential barrier, plus tool tokens and shell history), `denyWrite` (the enforcement sources, and the repo files that run outside the sandbox: `statusline/`, `notify-toast.ps1`, `chrome-debug.ps1`, `chrome-bg.ps1` (`bin/chrome-bg` runs it on every start), `codex/`, `tmux/`, `bin/`, `setup-tmux.sh`, `tests/` (the canary runs it), and `setup.sh` with the scripts and lists it installs from; installed from a lane, that checkout's copies too), and the network allowlist. The home PATH and install dirs an excluded command resolves through are Edit deny rules in `permissions.deny` instead, which Claude Code also merges into the sandbox and which bind the Edit and Write tools too (see "The excluded-command guard"). A sandboxed `git switch` or `merge` that touches a `denyWrite` file fails; `git pull` already runs outside. `failIfUnavailable`, and `autoAllowBashIfSandboxed: false`, so Hayden's prompts stay as they were |
 | Excluded-command guard | `hooks/excluded-guard.sh`, `hooks/excluded_guard.py`, a `Bash` entry in `settings.json` (timeout 5) | Enforces on every thread: an excluded command runs only when its cwd resolves to the project's own repository, the other git config it reads and every PATH dir and file its head resolves through are write-protected, and `claude` or `codex` runs from the project root. See "The excluded-command guard" below. Fails closed for excluded heads |
 | Excluded-command check | `hooks/excluded-check.sh` (`excluded_guard.py --session`), a SessionStart entry in `settings.json` (timeout 5) | Observes: what the guard would refuse from the session's project and PATH, shown once per change in its findings. Fails open |
 | Subagent policy | `hooks/subagent-policy.sh`, `skills/delegation/scripts/subagent-policy`, `skills/delegation/policy.toml` | Enforces: see "Subagent policy" below. Fails closed for the tools it polices |
@@ -197,8 +197,8 @@ repo that turns the sandbox off loses subagent Bash; the policy still applies.
   `-r`, git metadata, and `/` or home.
 - **MCP:** only the read tools listed in `[mcp]`. A new MCP tool fails closed until it is listed.
   A machine-local overlay adds reads this public repo must not name, such as a private server's:
-  - It lives at `$XDG_CONFIG_HOME/dotclaude/policy.local.toml` (`~/.config/dotclaude/` when that
-    is unset), outside git. The hook reads it only when a call misses the `[mcp]` list.
+  - It lives at `/etc/dotclaude/policy.local.toml`, outside git. The hook reads it only when a
+    call misses the `[mcp]` list.
   - It may hold only `[mcp] read_tools`, for example
     `read_tools = ["mcp__example__get_page", "mcp__example__list_*"]`, matched as fnmatch globs
     the way `[mcp]` is. Each entry is `mcp__<server>__<tool>`, spelled in letters, digits, `_`,
@@ -212,21 +212,20 @@ repo that turns the sandbox off loses subagent Bash; the policy still applies.
     a server named `a (beta)` has tools named `mcp__a__beta__...`, and `mcp__a__b*` matches all
     of them. No spelling rule tells the two apart. Glob only a server whose name no other
     server's name extends, or list exact names.
-  - It counts only when its resolved path lies inside a write-protected directory: a sandbox
-    `denyWrite` or `[protect] write_denied` root that contains it (`~/.config` by default). The
-    file's own `denyWrite` line doesn't vouch for it, since that line resolves through any link
-    put there. So an `XDG_CONFIG_HOME` elsewhere, or a symlink out of `~/.config`, is ignored.
-    The protected lists are read strictly here: a `denyWrite` that isn't a list of strings, or
-    a root that isn't absolute, makes the overlay count for nothing. A string `"~/x"` would
-    otherwise read as one root per character, `/` among them.
-    `settings.json` also names the default path as an Edit deny and a `denyWrite` line.
+  - It counts only when root owns the file and every directory above it, and none of them is
+    writable by group or others. The hook checks the open file's resolved path, so a symlink
+    into a directory someone else owns is ignored. Ownership, not the sandbox, is the guard: a
+    sandbox-off Bash call runs as Hayden, and the kernel refuses it a write to `/etc`.
   - Anything else makes the whole file add nothing, so it never widens past `policy.toml`: a
-    stray key, a bad entry, TOML that won't parse, a file over 64 KiB or one that isn't a regular
-    file. A missing or empty file is a no-op.
-  - A denial says when the overlay was ignored and why. `delegation-ledger audit` lists its
-    entries (`info`), or says why it was ignored (`WARN`, which exits 1).
-  - No session's Edit tool can write it: `Edit(~/.config/**)` is a deny, and a deny beats an ask.
-    Write it from a sandbox-off Bash heredoc, which prompts Hayden, or by hand.
+    file root doesn't own, a stray key, a bad entry, TOML that won't parse, a file over 64 KiB
+    or one that isn't a regular file. A missing or empty file is a no-op.
+  - A denial names both lists, and says when the overlay was ignored and why.
+    `delegation-ledger audit` lists its entries (`info`), or says why it was ignored (`WARN`,
+    which exits 1).
+  - Install it from a terminal, not a `!` line in a session, since sudo needs a tty:
+    `sudo install -d -o root -g root -m 755 /etc/dotclaude && sudo install -o root -g root -m
+    644 <file> /etc/dotclaude/policy.local.toml`. `$DELEGATION_OVERLAY` points the hook at
+    another path for tests; the owner check still applies there.
 - **Protected writes:** file tools and literal Bash targets are realpath-resolved, so symlinks count.
   The protected paths are:
   - `~/.claude`, the project's `.claude` (except `.claude/worktrees`) and `.mcp.json`;

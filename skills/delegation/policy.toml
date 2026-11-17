@@ -253,8 +253,8 @@ yq = ["-i", "--inplace", "-s", "--split-exp"]
 [mcp]
 # MCP tools a delegated agent may call: reads only, as fnmatch globs on the full tool name.
 # Anything unlisted is denied, so a new write tool fails closed until someone lists it here.
-# A machine-local overlay (~/.config/dotclaude/policy.local.toml, outside git) can add reads
-# this public file must not name; it can add nothing else (docs/delegation.md, Subagent policy).
+# A root-owned overlay (/etc/dotclaude/policy.local.toml, outside git) can add reads this
+# public file must not name; it can add nothing else (docs/delegation.md, Subagent policy).
 read_tools = [
   "mcp__gw-*__search_gmail_messages", "mcp__gw-*__get_gmail_*", "mcp__gw-*__list_gmail_*",
   "mcp__gw-*__get_events", "mcp__gw-*__list_calendars", "mcp__gw-*__query_freebusy",

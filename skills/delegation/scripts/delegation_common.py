@@ -120,18 +120,13 @@ def read_settings(path):
     return read_object(path, "settings file")
 
 
-def sandbox_paths(home=None, strict=False):
+def sandbox_paths(home=None):
     """(read_denied, write_denied): the sandbox's denyRead and denyWrite from the trusted
     settings tiers (user and managed) plus policy.toml's [protect] lists, each as its expanded
     path and its symlink-resolved one. Our wrappers run outside the sandbox, so they hold their
     own path arguments to these lists, which the sandbox can't do for them. ValueError when a
     settings file (read_settings) or policy.toml exists but can't be read, since skipping it
-    would drop its lists.
-
-    A deny list only protects more for an extra root, so by default a malformed one is read
-    leniently. strict is for a reader that trusts what lies inside a root (load_overlay), where
-    an extra root widens trust: a list that isn't a list of strings (a string "~/x" reads as
-    the roots "~", "/" and "x") or a root that isn't absolute once expanded raises ValueError."""
+    would drop its lists."""
     home = home or os.path.expanduser("~")
     lists = {"denyRead": [], "denyWrite": []}
     for path in (os.path.join(config_dir(home), "settings.json"),
@@ -140,9 +135,6 @@ def sandbox_paths(home=None, strict=False):
         settings = read_settings(path)
         try:
             fs = (settings.get("sandbox") or {}).get("filesystem") or {}
-            if strict:
-                for key in lists:
-                    _strict_list(fs.get(key), f"{path} sandbox.filesystem.{key}")
             found = {key: [p for p in fs.get(key) or [] if isinstance(p, str)] for key in lists}
         except AttributeError:  # a sandbox or filesystem that isn't an object holds none
             continue
@@ -155,9 +147,6 @@ def sandbox_paths(home=None, strict=False):
         protect = {}
     except (OSError, ValueError) as e:  # tomllib.TOMLDecodeError is a ValueError
         raise ValueError(f"unreadable policy file {policy_path()}: {e}") from None
-    if strict:
-        for key in ("read_denied", "write_denied"):
-            _strict_list(protect.get(key), f"{policy_path()} [protect] {key}")
     lists["denyRead"] += protect.get("read_denied") or []
     lists["denyWrite"] += protect.get("write_denied") or []
 
@@ -166,17 +155,9 @@ def sandbox_paths(home=None, strict=False):
         for p in entries:
             p = str(p).replace("{uid}", str(os.getuid())).replace("{state_dir}", state_dir(home))
             p = os.path.normpath(home + p[1:] if p == "~" or p.startswith("~/") else p)
-            if strict and (not os.path.isabs(p) or p == "/"):
-                raise ValueError(f"protected path {p!r} is not an absolute path below /")
             out |= {p, os.path.realpath(p)}
         return sorted(out)
     return roots(lists["denyRead"]), roots(lists["denyWrite"])
-
-
-def _strict_list(value, what):
-    if value is not None and not (isinstance(value, list)
-                                  and all(isinstance(p, str) for p in value)):
-        raise ValueError(f"{what} is not a list of strings")
 
 
 def path_conflict(path, roots, contains=False):
@@ -191,16 +172,36 @@ def path_conflict(path, roots, contains=False):
     return None
 
 
+OVERLAY_PATH = "/etc/dotclaude/policy.local.toml"
 OVERLAY_MAX_BYTES = 64 * 1024
 
 
-def overlay_path(home=None):
-    """The machine-local MCP overlay: $XDG_CONFIG_HOME/dotclaude/policy.local.toml, else
-    <home>/.config/dotclaude/policy.local.toml. It lives outside git so this public repo never
-    names a private server's tools."""
-    base = (os.environ.get("XDG_CONFIG_HOME")
-            or os.path.join(home or os.path.expanduser("~"), ".config"))
-    return os.path.join(base, "dotclaude", "policy.local.toml")
+def overlay_path():
+    """The machine-local MCP overlay, or $DELEGATION_OVERLAY (the tests point it elsewhere). It
+    lives outside git so this public repo never names a private server's tools. The override
+    widens nothing: load_overlay trusts a file by its owner, wherever it lies."""
+    return os.environ.get("DELEGATION_OVERLAY") or OVERLAY_PATH
+
+
+def _root_only(st):
+    """Owned by root and writable by root alone: no session or agent, sandboxed or not, can
+    change it. A sticky /tmp (mode 1777) fails, as it should."""
+    return st.st_uid == 0 and not st.st_mode & (stat.S_IWGRP | stat.S_IWOTH)
+
+
+def _not_root_owned(real, st):
+    """(path, stat) of the first of the file at real (st, from its open fd) and the directories
+    above it that isn't _root_only; None when all are. A writable directory anywhere above
+    would let its owner swap the file out."""
+    if not _root_only(st):
+        return real, st
+    d = real
+    while d != "/":
+        d = os.path.dirname(d)
+        dst = os.lstat(d)  # real is resolved, so a link here was swapped in since
+        if not (stat.S_ISDIR(dst.st_mode) and _root_only(dst)):
+            return d, dst
+    return None
 
 
 # An overlay entry: mcp__<server>__<tool> in a fixed alphabet whose one wildcard is `*`. With no
@@ -220,13 +221,13 @@ def _overlay_entry_ok(entry):
     return isinstance(entry, str) and OVERLAY_ENTRY.fullmatch(entry) is not None
 
 
-def load_overlay(home=None):
-    """(tools, status) for the overlay at overlay_path(home). It can only add [mcp] read_tools,
-    so every failure adds nothing: status is "absent" (missing, or empty as the sandbox's
-    /dev/null mount over a missing denyWrite path leaves it), "ok", or "ignored: <reason>".
-    The file counts only where it is write-protected (inside a sandbox_paths write root, checked
-    on the open file, so a symlink out or a swapped-in link fails). Never raises."""
-    path = overlay_path(home)
+def load_overlay():
+    """(tools, status) for the overlay at overlay_path(). It can only add [mcp] read_tools, so
+    every failure adds nothing: status is "absent" (missing, empty or /dev/null), "ok", or
+    "ignored: <reason>". The file counts only when root owns it and every directory above it
+    (_root_only, checked on the open file's resolved path, so a symlink into a directory
+    someone else owns fails). Never raises."""
+    path = overlay_path()
     try:
         fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK)  # a FIFO must not hang the hook
     except FileNotFoundError:
@@ -247,23 +248,16 @@ def load_overlay(home=None):
         try:
             data = f.read(OVERLAY_MAX_BYTES + 1)
             real = fd_path(fd, path)
+            weak = _not_root_owned(real, st)
         except OSError as e:
             return [], f"ignored: unreadable ({type(e).__name__}: {e})"
     if not data.strip():
         return [], "absent"
-    # Only a root that strictly contains the file vouches for it. sandbox_paths adds each root's
-    # realpath, so the overlay's own denyWrite entry, were a link put there, would resolve to the
-    # link's target and vouch for a file anywhere.
-    try:
-        protected = [r for r in sandbox_paths(home, strict=True)[1]
-                     if real.startswith(r.rstrip("/") + "/")]
-    except (ValueError, OSError, TypeError, AttributeError) as e:  # a list that isn't one
-        protected, why = None, f" (the protected paths can't be read: {type(e).__name__}: {e})"
-    else:
-        why = ""
-    if not protected:
-        return [], (f"ignored: not write-protected ({real} lies under no sandbox denyWrite or "
-                    f"policy.toml [protect] write_denied path){why}")
+    if weak:
+        where, wst = weak
+        return [], (f"ignored: not root-owned ({where} has owner uid {wst.st_uid} and mode "
+                    f"{stat.filemode(wst.st_mode)}; root must own the file and every "
+                    "directory above it, writable by root alone)")
     if len(data) > OVERLAY_MAX_BYTES:
         return [], f"ignored: too large (over {OVERLAY_MAX_BYTES} bytes)"
     try:

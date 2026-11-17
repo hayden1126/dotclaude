@@ -1061,15 +1061,15 @@ class Analyzer:
         only when the base list misses (dc.load_overlay: it can only add reads)."""
         if any(fnmatch.fnmatchcase(tool, g) for g in self.p["mcp"]["read_tools"]):
             return
-        extra, status = dc.load_overlay(self.home)
+        extra, status = dc.load_overlay()
         if any(fnmatch.fnmatchcase(tool, g) for g in extra):
             return
         note = ""
         if status.startswith("ignored: "):
-            note = (f" (the local overlay {dc.overlay_path(self.home)} was "
+            note = (f" (the local overlay {dc.overlay_path()} was "
                     f"{status.replace(': ', ' as ', 1)})")
-        self.deny("mcp-write", "manual_only",
-                  f"{tool} is not on the read-only MCP list (policy.toml [mcp]){note}")
+        self.deny("mcp-write", "manual_only", f"{tool} is not on the read-only MCP list "
+                  f"(policy.toml [mcp] or {dc.overlay_path()}){note}")
 
     def deadline(self, tool):
         """Past the role's stop budget for this activation, deny every tool but [deadline]

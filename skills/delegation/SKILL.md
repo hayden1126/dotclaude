@@ -59,8 +59,8 @@ permission flow.
   config writes.
 - **Can't use aliases or functions:** `gp` is denied; `git push` is spelled out.
 - **Can't use MCP write tools** (only the reads listed in policy.toml, plus any that the
-  machine-local overlay `~/.config/dotclaude/policy.local.toml` adds; docs/delegation.md says
-  what it accepts).
+  root-owned overlay `/etc/dotclaude/policy.local.toml` adds; docs/delegation.md says what it
+  accepts).
 - **Can't send data over HTTP:** only GET or HEAD.
 - **Can't write** Claude Code, shell, git or enforcement config.
 - **Can't read credential files** or `/proc`, and can't Grep a directory that contains one

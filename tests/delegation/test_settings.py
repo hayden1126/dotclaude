@@ -14,7 +14,6 @@ import shutil
 import subprocess
 import time
 import unittest
-from unittest import mock
 
 import command_inventory as inv
 from _paths import REPO, load_script
@@ -713,23 +712,10 @@ class Baseline(unittest.TestCase):
             self.assertNotIn(p, S["sandbox"]["filesystem"]["denyWrite"])
             self.assertIn(p, POLICY["protect"]["write_denied"])
 
-    def test_the_mcp_overlay_is_write_protected_both_ways(self):
-        # subagent-policy trusts the overlay only on a write-protected path, and an overlay
-        # widens what delegated agents may call. Edit(~/.config/**) covers it too; this rule pins
-        # it if that one narrows, and the denyWrite line binds sandboxed Bash whatever allowWrite
-        # gains.
-        path = "~/.config/dotclaude/policy.local.toml"
-        self.assertIn(f"Edit({path})", S["permissions"]["deny"])
-        self.assertIn(path, S["sandbox"]["filesystem"]["denyWrite"])
-        dc = load_script("delegation_common.py")
-        with mock.patch.dict(os.environ):
-            os.environ.pop("XDG_CONFIG_HOME", None)
-            self.assertEqual(dc.overlay_path("/h"), "/h" + path[1:])
-
     def test_lane_sync_main_s_store_is_write_protected_both_ways(self):
         # lane sync-main checks a merge out from its store (DA15/DA16) and refuses to build one
-        # unless the live settings hold both rules (store_guard). With the MCP overlay above, it
-        # is one of the two paths that are an Edit deny and a denyWrite line at once.
+        # unless the live settings hold both rules (store_guard), so this is the one path that
+        # is an Edit deny and a denyWrite line at once.
         self.assertIn("Edit(~/.local/state/dotclaude/verified/**)", S["permissions"]["deny"])
         self.assertIn("~/.local/state/dotclaude/verified",
                       S["sandbox"]["filesystem"]["denyWrite"])
