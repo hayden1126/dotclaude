@@ -245,11 +245,14 @@ class Rules(unittest.TestCase):
 
     def test_the_reason_keeps_a_merged_lanes_close_free(self):
         # lane done (#189) refuses a lane whose reply after its record write holds a Waiting on
-        # you line, so a blocked post-merge turn is steered to the lead's wait line instead.
+        # you line. A blocked post-merge turn sent nothing (a send passes), so it is steered to
+        # the send the lead's chain reruns on, or a kept-open lane to the pass line it waits for.
         self.entries(notice(), say())
         reason = self.assertBlocks(self.decide())
-        self.assertIn("`Waiting on the lead: lane done`", reason)
         self.assertIn("holds `lane done`", reason)
+        self.assertIn("send the lead `merged #N`", reason)
+        self.assertIn("`Waiting on the lead: #N chain done`", reason)
+        self.assertNotIn("Waiting on the lead: lane done", reason)
 
     def test_the_words_mid_line_are_no_list(self):
         self.entries(notice(), say())
@@ -424,6 +427,8 @@ class Rules(unittest.TestCase):
             "Waiting on you:\n\n- a\n- b\nThanks.\n- not this": ["a", "b"],
             "## Waiting on Hayden\n1. merge\n2) push": ["merge", "push"],
             "Waiting on lane x: its release.": [],
+            "Done.\r\n**Waiting on you:**\r\n- a\r\n- b\r\n": ["a", "b"],
+            "Waiting on you: approve\r\n- b": ["approve", "b"],
             "No list here.": [],
         }
         for text, items in cases.items():
@@ -442,6 +447,12 @@ class Rules(unittest.TestCase):
                 self.assertEqual(bool(sc.hayden_waits(line + "\n- x")),
                                  bool(lanelib.HAYDEN_WAIT.search(line)))
         self.assertTrue(sc.wait_heading().pattern.startswith(lanelib.HAYDEN_WAIT_HEAD))
+        # Lines are what `^` in lanelib's MULTILINE pattern sees: \n alone, not \r or \x85,
+        # which str.splitlines() would also break on.
+        for sep in ("\r", "\x0b", "\x0c", "\x1c", "\x85", " "):
+            with self.subTest(sep=repr(sep)):
+                text = "Done." + sep + "Waiting on you: x"
+                self.assertEqual(bool(sc.hayden_waits(text)), bool(lanelib.HAYDEN_WAIT.search(text)))
 
     # ---- the reason ----
     def test_the_reason_names_the_soft_tier_once_past_it(self):

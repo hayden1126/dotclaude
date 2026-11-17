@@ -85,9 +85,10 @@ REASON = (MARKER + " This lane turn ends with nothing to wait on: no Waiting on 
           "and end your reply with a Waiting on you list.\n"
           "- If the lane is pushed and only waits its merge turn, send the lead `park me` "
           "(to what a bare `lane addr lead` prints).\n"
-          "- If your PR merged and your record is written for it, ask Hayden nothing more "
-          "(anything open goes in Asks for Hayden) and end with `Waiting on the lead: lane "
-          "done`: a Waiting on you list after that write holds `lane done`.\n"
+          "- If your PR merged, ask Hayden nothing more: anything open goes in Asks for Hayden, "
+          "since a Waiting on you list after your record's write holds `lane done`. If this turn "
+          "came after that write, write the record again. Then send the lead `merged #N`, or, "
+          "with `Keep open:` in your Next, end with `Waiting on the lead: #N chain done`.\n"
           "- If you wait on another lane, the lead's reply, a person or a job outside this "
           "session, end with a line `Waiting on <who>: <what>` and stop.\n"
           "- If none applies, say so in one line and stop: this check blocks once per turn.")
@@ -251,12 +252,14 @@ def ctx_line(sid, transcript) -> str:
 def hayden_waits(text) -> list[str]:
     """The items of the reply's last Waiting on you (or Waiting on Hayden) list: the text after
     the heading on its own line, then each bullet after it, up to the first other line."""
-    lines = text.splitlines() if isinstance(text, str) else []
+    # On \n alone: lanelib's MULTILINE `^` starts a line nowhere else (splitlines() also breaks
+    # on \r, \x85 and the like), and the two must agree on every line.
+    lines = text.split("\n") if isinstance(text, str) else []
     heading = wait_heading()
     start = next((i for i in range(len(lines) - 1, -1, -1) if heading.match(lines[i])), None)
     if start is None:
         return []
-    rest = heading.match(lines[start]).group(2).strip(" *_:")
+    rest = heading.match(lines[start]).group(2).rstrip().strip(" *_:")  # rstrip: a CRLF's \r
     items = [rest] if rest else []
     for line in lines[start + 1:]:
         if not line.strip() and not items:

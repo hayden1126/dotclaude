@@ -792,9 +792,12 @@ sessions only:
   Its rules are in the module's docstring. Two blocking Stop hooks both reach the model, so it
   sits beside context-watch and watch-guard with no ordering. Its block never holds `lane done`
   by itself (Stop-hook feedback is no turn to the turn gate), but a reply it draws after a merged
-  lane's record write could, so its reason steers that case to `Waiting on the lead: lane done`.
-  Its Waiting on you heading is built on `lanelib.HAYDEN_WAIT_HEAD`, the line the turn gate
-  reads, so the two never disagree on a line. At every lane Stop, a continued
+  lane's record write could. A blocked post-merge turn sent no message (a send passes), so its
+  reason steers that case to what the lead's chain waits for: write the record again if the
+  turn came after it, then send `merged #N`, or, for a `Keep open:` lane, end on
+  `Waiting on the lead: #N chain done`. Its Waiting on you heading is built on
+  `lanelib.HAYDEN_WAIT_HEAD` and read on `\n`-split lines, as the turn gate's `^` reads them,
+  so the two never disagree on a line. At every lane Stop, a continued
   one too, it writes `stop-check/<session>.json` in the state dir: its verdict (`why`, before
   block-once), the last reply's Waiting on you items and the prompt it last blocked. The next
   two parts read only that record, so the hook, the flag and the list never disagree on what a

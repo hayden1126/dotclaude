@@ -204,8 +204,8 @@ an unregistered worktree: `lane whoami` tells you which.
    with a Waiting on you list after it, makes `lane done` refuse the lane, since it may still
    be working with him. So ask him anything before that write, never after: an item still
    open for him goes in the record's Asks for Hayden, and the replies after the write end
-   with no Waiting on you list (one the stop-check hook blocks ends on `Waiting on the lead:
-   lane done`). Once nothing is left after a later turn, end it by writing the
+   with no Waiting on you list (the stop-check hook's block says so too). Once nothing is
+   left after a later turn, end it by writing the
    record again (a `lane note` does) and, with no `Keep open:` line, sending `merged #N` again.
    A `Keep open:` lane only writes the record: `lane done` refuses it anyway, and a second
    `merged #N` would rerun the lead's chain and its pass.
