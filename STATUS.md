@@ -95,7 +95,9 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     2026-11-13 (c060d9f) and is installed from main, lane closed, under Hayden's freeze lift
     ("ignore freeze, finish exam-prep"; #183, round 1, merged 2026-11-10). Round 3's retro starts
     in a new lane from `~/scratch/exam-prep/rounds/2/retro.md`, trials K02, K67, K68 carried in.
-    Next in merge order: policy-local, then done-gate, then demo-av PR 3. Lane mocks went first (Hayden, 2026-11-16: "Mocks first"),
+    Next in merge order: done-gate, then demo-av PR 3. Policy-local merged 2026-11-17 as #188
+    (merge 288acdc: a root-owned `/etc/dotclaude/policy.local.toml` can add MCP read tools;
+    live check passed through another repo's lane), installed from main, lane closed. Lane mocks went first (Hayden, 2026-11-16: "Mocks first"),
     then demo-av PR 4 merged 2026-11-16 as #180 (merge d0a9cbd: demo content planning in
     `demo-first-scope`, captions on by default, `demo-video` no longer manual-only; no layered
     invideo test, the connector still 404s), installed from main; lane demo-av stays open for PR 3.
@@ -287,10 +289,10 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     transcript has a turn newer than its record (the `handoff?` idea applied to the session),
     with the refusal telling the lead to message the lane first. The archive kept the record and
     artifacts, so nothing was lost but the worktree. Lane done-gate (opened 2026-11-16 on
-    Hayden's "yes lane done fix"); merges after policy-local.
-  - **No private place to list an MCP server's read tools** (lane policy-local, opened
-    2026-11-16: Hayden picked a private local list over public policy.toml for five lesson reads
-    another repo's lane asked for; next in merge order) (capella-studio's lane roles,
+    Hayden's "yes lane done fix"); next in merge order.
+  - **No private place to list an MCP server's read tools** (fixed: #188, merged 2026-11-17;
+    Hayden picked a private local list over public policy.toml for five lesson reads
+    another repo's lane asked for, then the root-owned /etc path) (capella-studio's lane roles,
     session c35239ad, 2026-11-14): subagent-policy refused a delegated agent's calls to a client
     MCP server's read tools as `mcp-write`, since policy.toml `[mcp] read_tools` doesn't list
     them. That list is the only one, and dotclaude is public, so a client server's names can't
