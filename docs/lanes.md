@@ -790,7 +790,11 @@ sessions only:
   plan mode, or a turn Hayden's own typed prompt started without approving a plan in it (he
   reads that reply first; the prompts pass-respawn and `lane open` type don't count as his).
   Its rules are in the module's docstring. Two blocking Stop hooks both reach the model, so it
-  sits beside context-watch and watch-guard with no ordering. At every lane Stop, a continued
+  sits beside context-watch and watch-guard with no ordering. Its block never holds `lane done`
+  by itself (Stop-hook feedback is no turn to the turn gate), but a reply it draws after a merged
+  lane's record write could, so its reason steers that case to `Waiting on the lead: lane done`.
+  Its Waiting on you heading is built on `lanelib.HAYDEN_WAIT_HEAD`, the line the turn gate
+  reads, so the two never disagree on a line. At every lane Stop, a continued
   one too, it writes `stop-check/<session>.json` in the state dir: its verdict (`why`, before
   block-once), the last reply's Waiting on you items and the prompt it last blocked. The next
   two parts read only that record, so the hook, the flag and the list never disagree on what a

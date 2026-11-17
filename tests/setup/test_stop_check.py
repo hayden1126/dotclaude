@@ -243,6 +243,14 @@ class Rules(unittest.TestCase):
         self.entries(notice(), say())
         self.assertIn("`Waiting on <who>: <what>`", self.assertBlocks(self.decide()))
 
+    def test_the_reason_keeps_a_merged_lanes_close_free(self):
+        # lane done (#189) refuses a lane whose reply after its record write holds a Waiting on
+        # you line, so a blocked post-merge turn is steered to the lead's wait line instead.
+        self.entries(notice(), say())
+        reason = self.assertBlocks(self.decide())
+        self.assertIn("`Waiting on the lead: lane done`", reason)
+        self.assertIn("holds `lane done`", reason)
+
     def test_the_words_mid_line_are_no_list(self):
         self.entries(notice(), say())
         self.assertBlocks(self.decide("Nothing is waiting on you now."))
@@ -422,6 +430,18 @@ class Rules(unittest.TestCase):
             with self.subTest(text=text[:20]):
                 self.assertEqual(sc.hayden_waits(text), items)
         self.assertEqual(len(sc.hayden_waits("Waiting on you:\n" + "- x\n" * 50)), sc.ITEMS_MAX)
+
+    def test_the_wait_heading_is_lane_dones(self):
+        # One heading for both readers: `lane asks` and `stalled` read this hook's record, and
+        # lane done's turn gate reads lanelib.HAYDEN_WAIT. They must never disagree on a line.
+        for line in ("Waiting on you:", "**Waiting on you:** approve", "  - **Waiting on you:** x",
+                     "## Waiting on Hayden", "_waiting on HAYDEN_", "Waiting on you",
+                     "Waiting on youth sports", "Waiting on the lead: lane done",
+                     "Waiting for you", "Nothing is waiting on you now.", "Waiting on yours"):
+            with self.subTest(line=line):
+                self.assertEqual(bool(sc.hayden_waits(line + "\n- x")),
+                                 bool(lanelib.HAYDEN_WAIT.search(line)))
+        self.assertTrue(sc.wait_heading().pattern.startswith(lanelib.HAYDEN_WAIT_HEAD))
 
     # ---- the reason ----
     def test_the_reason_names_the_soft_tier_once_past_it(self):

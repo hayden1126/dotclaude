@@ -48,6 +48,7 @@ as that lane, as it does to the lane-identity hook. Two blocking Stop hooks both
 error passes the stop, and its traceback goes to stderr, which the shim appends to
 stop-check.err.
 """
+import functools
 import glob
 import json
 import mmap
@@ -68,7 +69,6 @@ SCRIPTS = os.path.join(os.path.dirname(HERE), "skills", "lanes", "scripts")
 MARKER = "[stop-check]"
 WAIT_KINDS = {"subagent", "shell", "workflow", "cloud session", "teammate"}
 WAITING = re.compile(r"^[\W_]*waiting (on|for)\b", re.IGNORECASE | re.MULTILINE)
-HAYDEN_WAIT = re.compile(r"^[\W_]*waiting on (you|hayden)\b[\W_]*(.*)$", re.IGNORECASE)
 WAIT_ITEM = re.compile(r"^\s*(?:[-*+]|\d+[.)])\s+(.*\S)")
 ITEMS_MAX, ITEM_MAX = 20, 300   # the record keeps at most this many items, each this long
 PRUNE_AGE, PRUNE_EVERY = 7 * 86400, 86400
@@ -85,6 +85,9 @@ REASON = (MARKER + " This lane turn ends with nothing to wait on: no Waiting on 
           "and end your reply with a Waiting on you list.\n"
           "- If the lane is pushed and only waits its merge turn, send the lead `park me` "
           "(to what a bare `lane addr lead` prints).\n"
+          "- If your PR merged and your record is written for it, ask Hayden nothing more "
+          "(anything open goes in Asks for Hayden) and end with `Waiting on the lead: lane "
+          "done`: a Waiting on you list after that write holds `lane done`.\n"
           "- If you wait on another lane, the lead's reply, a person or a job outside this "
           "session, end with a line `Waiting on <who>: <what>` and stop.\n"
           "- If none applies, say so in one line and stop: this check blocks once per turn.")
@@ -108,14 +111,29 @@ def log(line: str) -> None:
         pass
 
 
+def lanes_lib():
+    """The lanes CLI's library, imported on first use: an import error stays inside the caller's
+    try, so the hook still fails open."""
+    if SCRIPTS not in sys.path:
+        sys.path.insert(0, SCRIPTS)
+    import lanelib
+    return lanelib
+
+
+@functools.cache
+def wait_heading() -> re.Pattern:
+    """A Waiting on you (or Waiting on Hayden) heading line, group 2 the text after it. Built on
+    lanelib.HAYDEN_WAIT_HEAD, the line lane done's turn gate reads, so the record `lane asks`
+    and `stalled` read never disagrees with the gate on a line."""
+    return re.compile(lanes_lib().HAYDEN_WAIT_HEAD + r"[\W_]*(.*)$", re.IGNORECASE)
+
+
 def lane_of(transcript) -> str | None:
     """The id of the registered lane the session was launched in, else None (any failure
     included). The launch dir is the transcript's first recorded cwd: the payload's cwd follows
     a Bash `cd`, so a lead that cd'd into a lane would read as that lane."""
-    if SCRIPTS not in sys.path:
-        sys.path.insert(0, SCRIPTS)
     try:
-        import lanelib
+        lanelib = lanes_lib()
         cwd = lanelib.transcript_cwd(transcript) if isinstance(transcript, str) else None
         if not isinstance(cwd, str) or not os.path.isdir(cwd):
             return None
@@ -234,10 +252,11 @@ def hayden_waits(text) -> list[str]:
     """The items of the reply's last Waiting on you (or Waiting on Hayden) list: the text after
     the heading on its own line, then each bullet after it, up to the first other line."""
     lines = text.splitlines() if isinstance(text, str) else []
-    start = next((i for i in range(len(lines) - 1, -1, -1) if HAYDEN_WAIT.match(lines[i])), None)
+    heading = wait_heading()
+    start = next((i for i in range(len(lines) - 1, -1, -1) if heading.match(lines[i])), None)
     if start is None:
         return []
-    rest = HAYDEN_WAIT.match(lines[start]).group(2).strip(" *_:")
+    rest = heading.match(lines[start]).group(2).strip(" *_:")
     items = [rest] if rest else []
     for line in lines[start + 1:]:
         if not line.strip() and not items:
@@ -289,10 +308,7 @@ def prune(d: str, now: float) -> None:
         with open(stamp, "a"):  # first: whatever follows, the next try waits a day
             pass
         os.utime(stamp, (now, now))
-        if SCRIPTS not in sys.path:
-            sys.path.insert(0, SCRIPTS)
-        import lanelib
-        scan = lanelib.session_scan()
+        scan = lanes_lib().session_scan()
         if scan.unread:  # outside the sandbox, a file still unread after the reread is a live
             return       # pid's (session_scan), whose record must stay: prune nothing
         keep = {s.get("sessionId") for s in scan.files}
