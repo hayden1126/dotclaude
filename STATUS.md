@@ -95,9 +95,12 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     2026-11-13 (c060d9f) and is installed from main, lane closed, under Hayden's freeze lift
     ("ignore freeze, finish exam-prep"; #183, round 1, merged 2026-11-10). Round 3's retro starts
     in a new lane from `~/scratch/exam-prep/rounds/2/retro.md`, trials K02, K67, K68 carried in.
-    Next in merge order: guards, then trial-fix (lane opened 2026-11-17 on Hayden's pick, for
-    the `lane trial` backlog item below), then stop-check, then practices' next turn; demo-av PR 3 goes
-    last (Hayden, 2026-11-17: "park demo-av because not important"). Done-gate merged 2026-11-17 as #189 (merge b593801:
+    Next in merge order: trial-fix (lane opened 2026-11-17 on Hayden's pick, for
+    the `lane trial` backlog item below; draft #190), then stop-check, then practices' next turn; demo-av PR 3 goes
+    last (Hayden, 2026-11-17: "park demo-av because not important"). Guards merged 2026-11-17 as
+    #181 (merge 1c82f18: a long-runs check on test and trial commands, `gh pr ready` refused
+    without a `Skipped:` line, a kept-open lane passes on the lead's "#N chain done: run /pass"),
+    installed from main, lane closed. Done-gate merged 2026-11-17 as #189 (merge b593801:
     `lane done` refuses a live session with a turn newer than its record), installed from
     main, lane closed. Policy-local merged 2026-11-17 as #188
     (merge 288acdc: a root-owned `/etc/dotclaude/policy.local.toml` can add MCP read tools;
@@ -115,8 +118,8 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     opened 2026-11-09 on Hayden's "open lane now": a Stop hook so lane sessions stop only on
     something they wait for, and `lane ls` marking stalled lanes; it changes settings.json and
     the lanes skill, as guards does; draft #182). Guards, practices and stop-check parked 2026-11-09
-    (pushed, waiting their turn). All change README.md or may. On opening, guards and
-    stop-check merge main and resolve #189's overlap (skills/lanes/SKILL.md, docs/lanes.md,
+    (pushed, waiting their turn). All change README.md or may. On opening, stop-check merges
+    main and resolves #189's and #181's overlap (skills/lanes/SKILL.md, docs/lanes.md,
     README.md; stop-check also `lane` and lanelib.py). Stop-check also checks its hook against
     #189: a post-merge turn ending `Waiting on you:` after the record write holds `lane done`,
     while `Waiting on the lead:` passes. Lane daily-report (opened
@@ -207,7 +210,7 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
 
   Backlog:
   - **Guards for general skills that sessions skip, and a kept-open lane idling after its merge:**
-    in lane guards (2026-11-08). Evidence for the guards, capella-studio session af16c38c's audit:
+    fixed in #181 (2026-11-17; the kept-open pass gets its first live run at the next Keep open merge). Evidence for the guards, capella-studio session af16c38c's audit:
     `long-runs` triggered in 12 sessions and loaded in 5, `coding-practices` 9 and 2, while
     step-bound `release` loaded 8 of 9 (regex triggers, a rough count).
   - **`lane sync-main` refuses on paths `git status` doesn't report** (capella-studio session
