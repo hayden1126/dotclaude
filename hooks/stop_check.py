@@ -125,7 +125,8 @@ def lanes_lib():
 def wait_heading() -> re.Pattern:
     """A Waiting on you (or Waiting on Hayden) heading line, group 2 the text after it. Built on
     lanelib.HAYDEN_WAIT_HEAD, the line lane done's turn gate reads, so the record `lane asks`
-    and `stalled` read never disagrees with the gate on a line."""
+    and `stalled` read never disagrees with the gate on a line. (The gate weighs every reply
+    after the record's write; this hook reads the turn's last, by design.)"""
     return re.compile(lanes_lib().HAYDEN_WAIT_HEAD + r"[\W_]*(.*)$", re.IGNORECASE)
 
 
@@ -251,7 +252,8 @@ def ctx_line(sid, transcript) -> str:
 
 def hayden_waits(text) -> list[str]:
     """The items of the reply's last Waiting on you (or Waiting on Hayden) list: the text after
-    the heading on its own line, then each bullet after it, up to the first other line."""
+    the heading on its own line, then each bullet after it, up to the first other line. A
+    heading with neither takes the plain line under it as its one item."""
     # On \n alone: lanelib's MULTILINE `^` starts a line nowhere else (splitlines() also breaks
     # on \r, \x85 and the like), and the two must agree on every line.
     lines = text.split("\n") if isinstance(text, str) else []
@@ -266,6 +268,8 @@ def hayden_waits(text) -> list[str]:
             continue
         m = WAIT_ITEM.match(line)
         if not m:
+            if not items:  # a plain line right under the heading is its one item
+                items.append(line.strip())
             break
         items.append(m.group(1).strip())
     # A lone surrogate would raise when `lane asks` prints it: make it "?", as stop_ring does.

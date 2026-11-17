@@ -2180,7 +2180,7 @@ REPLY_BYTES = re.compile(rb'"text"|"content"\s*:\s*"')
 # A line of a reply that waits on Hayden: the Waiting on you list CLAUDE.md asks for (or
 # "Waiting on Hayden"), after any markup. "Waiting on the lead:" is no wait on him. The
 # stop-check hook builds its list reader from the same head, so the two never disagree on a line.
-HAYDEN_WAIT_HEAD = r"^[\W_]*waiting on (you|hayden)\b"
+HAYDEN_WAIT_HEAD = r"^[\W_]*waiting on (you|hayden)(?![^\W_])"  # no \b: "_you_" is a heading
 HAYDEN_WAIT = re.compile(HAYDEN_WAIT_HEAD, re.IGNORECASE | re.MULTILINE)
 
 

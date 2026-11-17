@@ -430,6 +430,10 @@ class Rules(unittest.TestCase):
             "Waiting on lane x: its release.": [],
             "Done.\r\n**Waiting on you:**\r\n- a\r\n- b\r\n": ["a", "b"],
             "Waiting on you: approve\r\n- b": ["approve", "b"],
+            # A heading with a plain line under it, not a bullet: lane done's gate counts the
+            # reply, so the record shows that line rather than no wait at all.
+            "Waiting on you:\nApprove the merge.\n- not this": ["Approve the merge."],
+            "**Waiting on you:**\n\nApprove the merge.": ["Approve the merge."],
             "No list here.": [],
         }
         for text, items in cases.items():
@@ -448,6 +452,12 @@ class Rules(unittest.TestCase):
                 self.assertEqual(bool(sc.hayden_waits(line + "\n- x")),
                                  bool(lanelib.HAYDEN_WAIT.search(line)))
         self.assertTrue(sc.wait_heading().pattern.startswith(lanelib.HAYDEN_WAIT_HEAD))
+        # A heading in underscore italics is a heading: `\b` between "u" and "_" never matched.
+        for line in ("_Waiting on you_", "__Waiting on Hayden__: merge", "_waiting on you:_"):
+            with self.subTest(line=line):
+                self.assertTrue(lanelib.HAYDEN_WAIT.search(line))
+                self.assertTrue(sc.hayden_waits(line + "\n- x"))
+        self.assertFalse(lanelib.HAYDEN_WAIT.search("Waiting on you2"))
         # Lines are what `^` in lanelib's MULTILINE pattern sees: \n alone, not \r or \x85,
         # which str.splitlines() would also break on.
         for sep in ("\r", "\x0b", "\x0c", "\x1c", "\x85", " "):
