@@ -95,7 +95,7 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     2026-11-13 (c060d9f) and is installed from main, lane closed, under Hayden's freeze lift
     ("ignore freeze, finish exam-prep"; #183, round 1, merged 2026-11-10). Round 3's retro starts
     in a new lane from `~/scratch/exam-prep/rounds/2/retro.md`, trials K02, K67, K68 carried in.
-    Next in merge order: policy-local, then demo-av PR 3. Lane mocks went first (Hayden, 2026-11-16: "Mocks first"),
+    Next in merge order: policy-local, then done-gate, then demo-av PR 3. Lane mocks went first (Hayden, 2026-11-16: "Mocks first"),
     then demo-av PR 4 merged 2026-11-16 as #180 (merge d0a9cbd: demo content planning in
     `demo-first-scope`, captions on by default, `demo-video` no longer manual-only; no layered
     invideo test, the connector still 404s), installed from main; lane demo-av stays open for PR 3.
@@ -278,6 +278,16 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     by a marketplace change, and `tests/delegation/test_settings.py`'s inventory test doesn't
     classify it. Lead's lean: deny it to delegated agents, since it writes config and handles
     secrets. A small lane.
+  - **`lane done` closes a lane whose session is still working with Hayden** (another repo's
+    lead, 2026-11-16, Hayden's screenshot): that lane's record said "Nothing left... the lead runs
+    `lane done`", yet its live session kept walking Hayden through a test after that write, and
+    the close cut it off. `done` has no busy or waiting gate (`lane park` has one: busy, or a
+    permission or question dialog), and an idle session waiting on a chat reply passes even
+    park's. Fix to design: `done` shares park's gate, and also refuses a live session whose
+    transcript has a turn newer than its record (the `handoff?` idea applied to the session),
+    with the refusal telling the lead to message the lane first. The archive kept the record and
+    artifacts, so nothing was lost but the worktree. Lane done-gate (opened 2026-11-16 on
+    Hayden's "yes lane done fix"); merges after policy-local.
   - **No private place to list an MCP server's read tools** (lane policy-local, opened
     2026-11-16: Hayden picked a private local list over public policy.toml for five lesson reads
     another repo's lane asked for; next in merge order) (capella-studio's lane roles,
@@ -289,6 +299,12 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     malformed, and covered by the Edit deny as enforcement config. Name each read tool, never
     the server's wildcard. Meanwhile that lane's main thread makes the calls. Hayden's call;
     after Nov 16.
+  - **MCP reads run only on general-purpose** (lane policy-local's live check through another
+    repo's lane, 2026-11-17): Explore and researcher list no MCP tools, so a delegated MCP read
+    needs general-purpose, which also has every write tool. The policy hook still holds its MCP
+    calls to the read list, but nothing else keeps that agent read-only. #188 documents it as a
+    fourth general-purpose use. Fix to design: give researcher (or Explore) the MCP read tools
+    the policy lists, so read-only MCP work runs on a read-only role. Not picked yet; a small lane.
   - **CJ1** (medium, 2026-11-13; private: sandbox-audit FINDINGS, row CJ1): a read deny names one
     exact path where copies of that file sit beside it. Fix and probe in the row. Not picked yet;
     `settings.json` and its test, a lane after Nov 16 (lane practices changes both).
