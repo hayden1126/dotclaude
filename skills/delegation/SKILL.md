@@ -160,7 +160,8 @@ validated (`report_ok`).
   - the policy hook saw every agent that used tools;
   - no writer's run coincided with a change in the main checkout or the parent's lane;
   - which reports failed the contract;
-  - the denials.
+  - the denials;
+  - the machine-local MCP overlay: its entries, or why it is ignored (a warning).
 
   A session start runs it once a day and shows a warning once; run it yourself any time.
   `delegation-ledger sandbox-denials` lists the hosts and paths the sandbox refused, which feed
