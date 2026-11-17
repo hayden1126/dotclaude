@@ -337,7 +337,7 @@ Why it works this way:
   after the write and no dialog open. Any such reply counts, not only the last (a Stop hook's
   block can draw one more line that drops the list while his question stays open). The line is
   the Waiting on you list CLAUDE.md asks for, read after any markup (`lanelib.HAYDEN_WAIT`:
-  `^[\W_]*waiting on (you|hayden)\b`), so a lane's `Waiting on the lead:` passes. **One
+  `^[\W_]*waiting on (you|hayden)(?![^\W_])`, which `_Waiting on you_` matches too), so a lane's `Waiting on the lead:` passes. **One
   reference point** (Hayden's pick, 2026-11-16): inputs and waiting replies are both weighed
   against the record's last write, nothing else. Two earlier rules opened a major gap each.
   Clearing a wait by any later input let the lead's own "lane done refused" message clear the

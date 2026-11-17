@@ -249,7 +249,8 @@ def ctx_line(sid, transcript) -> str:
 def hayden_waits(text) -> list[str]:
     """The items of the reply's last Waiting on you (or Waiting on Hayden) list: the text after
     the heading on its own line, then each bullet after it, up to the first other line. A
-    heading with neither takes the plain line under it as its one item."""
+    heading with neither takes the first plain line under it with a word in it as its one
+    item, past blank lines and markup."""
     # On \n alone: lanelib's MULTILINE `^` starts a line nowhere else (splitlines() also breaks
     # on \r, \x85 and the like), and the two must agree on every line.
     lines = text.split("\n") if isinstance(text, str) else []
@@ -264,7 +265,9 @@ def hayden_waits(text) -> list[str]:
             continue
         m = WAIT_ITEM.match(line)
         if not m:
-            if not items:  # a plain line right under the heading is its one item
+            if not items:  # the first plain line with a word under the heading is its one item
+                if not re.search(r"[^\W_]", line):
+                    continue  # markup alone (a code fence, a rule)
                 items.append(line.strip())
             break
         items.append(m.group(1).strip())

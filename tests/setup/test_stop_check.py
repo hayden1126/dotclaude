@@ -422,6 +422,8 @@ class Rules(unittest.TestCase):
             # reply, so the record shows that line rather than no wait at all.
             "Waiting on you:\nApprove the merge.\n- not this": ["Approve the merge."],
             "**Waiting on you:**\n\nApprove the merge.": ["Approve the merge."],
+            "**Waiting on you:**\n\n```\ngh pr merge 182\n```": ["gh pr merge 182"],  # markup
+            "Waiting on you:\n---\n": [],                                               # skipped
             "No list here.": [],
         }
         for text, items in cases.items():
