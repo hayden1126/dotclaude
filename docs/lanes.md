@@ -269,7 +269,7 @@ Why it works this way:
 - **A scoped exception to "confirm before deleting"**, which CLAUDE.md names. `lane done`
   refuses an unmerged branch, a dirty worktree, links into the lane, a `Keep open:` lane, a
   record whose comments don't parse and a lane session still working with Hayden (below),
-  archives the record before the remove, and never passes `--force` or `-D` (a killed trial's
+  archives the record before the remove, and never passes `--force` or `-D` (an older trial's
   leftover registration goes by its gitdir text, never by path: the `lane trial` section). The approval
   covers `lane done` after a merge only; `--abandon` still asks.
 - **`lane done` reads `Keep open:` itself.** `handoff-check --closing` fails on the line too,
@@ -550,8 +550,8 @@ alone skips the uncommitted read then, since it can afford to.
 
 **`lane trial`.** Before a lane asks Hayden for ready, it runs
 `lane trial --run "<suite>" --run "<suite>" ...`, sandboxed. It refuses to run anywhere else
-(a plain shell): it removes its scratch trees by path, which is safe only where the sandbox
-bounds what a symlink swapped in for a tree could make git delete, and its suites inherit the
+(a plain shell): it deletes its scratch trees by path, which is safe only where the sandbox
+bounds what a symlink swapped in for a tree could reach, and its suites inherit the
 sandbox. Before it waits for the lock, it also refuses a bad link path, a link under another one,
 and a link the lane lacks (step 3), and a config `trial-locks` entry its `locks` don't list or
 that names `suite`.
@@ -604,7 +604,16 @@ that names `suite`.
    (SandboxReality, the subagent-policy cases). The first trial makes `.lane-trial/` with a
    `.gitignore` of `*` in it, so neither it nor the trees show in the lane's git status; a
    symlink there is refused. The lead notes' scratch index stays in the temp dir, since no suite
-   runs there. The tree then gets set up as the lane's own tests ran: the lane's gitignored files
+   runs there. The tree is no registered worktree: Claude Code 2.1.326's sandbox mounts
+   `<common>/worktrees` read-only but for the session's own entry, so a sandboxed
+   `git worktree add` fails in every lane (no lane could run a trial from 2026-11-13 until
+   lane trial-fix). Its git dir sits beside it (`.../XXXXXXXX/git`, which `tree/.git` names) and
+   holds its HEAD and index and a `commondir` file naming the shared common dir
+   (gitrepository-layout(5)), so git in the tree sees the repo's objects, refs and config as a
+   linked worktree does, and `lane` there finds the repo and its locks; `git worktree list`
+   never shows it. gc in the repo can't see the tree's HEAD, so the trial's dangling commits
+   outlive a run only by gc's prune grace (2 weeks by default). The tree then gets set up as the
+   lane's own tests ran: the lane's gitignored files
    that its `.worktreeinclude` matches are copied in (from the lane, not main, so the suites see
    the lane's copies; git's names are read with `-z`, so a non-ASCII name is never quoted), and
    each path the config's `trial-link` (`lane init --trial-link node_modules,.venv`) or a
@@ -662,11 +671,11 @@ merge's. The number of tests run is never compared, so a fail-fast flag (pytest 
 drops a test package from discovery passes unseen. Node resolves a bare `require` up the parent
 dirs, so a tree in `.lane-trial/` without the link still finds the lane's `node_modules`; the
 link makes it the tree's own path, which tools that read `./node_modules` (its `.bin`) need. And
-a trial killed partway (the Bash cap, a respawn) leaves its tree registered. The sandbox mounts
-each registered worktree's admin dir in every command started after the tree exists, so a later
-sandboxed run can't delete it. The next trial removes the files it can (in `.lane-trial/`, and
-in the temp dir an older `lane` used) and names each registration it can't, which stays,
-harmless, until `lane done` clears it; never a blanket `git worktree prune`. Neither that
+a trial killed partway (the Bash cap, a respawn) leaves its dir behind, which the next trial of
+the lane deletes (in `.lane-trial/`, and in the temp dir an older `lane` used). An older `lane`
+registered its trees as worktrees, and a registration the sandbox mounted can't be removed
+sandboxed, so the next trial deletes such a tree's files and names its registration, which
+stays, harmless, until `lane done` clears it; never a blanket `git worktree prune`. Neither that
 message nor `--keep`'s offers a by-path `git worktree remove --force`: git resolves the path,
 so a symlink swapped in for the tree points it at whatever worktree the link names, and it
 deletes that worktree whole (probed on git 2.43, 2026-10-24). `lane done` clears such a
@@ -680,8 +689,8 @@ lane's files are gone (`done` removes them itself, below), or at once when the l
 by hand. One it can't remove it names as left in place, with no path to remove by hand: run
 sandbox-off, that would follow whatever link made the removal fail. No message of `lane` ever
 offers a by-path removal that can recurse or follow a link (a test pins it); the one removal
-it names, `unlink` for a `.lane-trial` that is a symlink, does neither. The trial adds its trees with `worktree.useRelativePaths=false`, so that text is
-always an absolute path.
+it names, `unlink` for a `.lane-trial` that is a symlink, does neither. The older `lane` added
+its trees with `worktree.useRelativePaths=false`, so that text is always an absolute path.
 
 ## Parked lanes (lane park, 2026-10-29)
 
