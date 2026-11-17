@@ -143,6 +143,10 @@ def lane_context(lane: dict, source: str, where: str, serving: str = "") -> str:
         "To message the lead, SendMessage to what a bare `lane addr lead` prints, run just before "
         "each send (a pass gives it a new address); never its ListAgents name or tab title, "
         "which change most turns.",
+        "End a turn that leaves nothing running on what it waits for: a Waiting on you list for "
+        "Hayden, or a line `Waiting on <who>: <what>` for a lane, the lead, a person or a job. A "
+        "lane pushed and only waiting its merge turn sends the lead `park me` instead. The "
+        "stop-check hook blocks a lane turn that ends with none of these once.",
     ]
     if source == "compact":
         lines.append("Context was just compacted: re-read your record before acting.")

@@ -294,6 +294,16 @@ class Baseline(unittest.TestCase):
         self.assertLessEqual(h["timeout"], 10)  # every stop waits for it
         self.assertTrue(os.access(os.path.join(REPO, "hooks", "watch-guard.sh"), os.X_OK))
 
+    def test_the_stop_check_is_wired_on_stop_and_fails_open(self):
+        (entry,) = [e for e in S["hooks"]["Stop"]
+                    if any("stop-check.sh" in h["command"] for h in e["hooks"])]
+        self.assertNotIn("matcher", entry)
+        (h,) = entry["hooks"]
+        self.assertEqual(h["command"], 'bash "$HOME/.claude/hooks/stop-check.sh"')
+        self.assertNotIn("exit 2", h["command"])  # it blocks by JSON, never by exit code
+        self.assertLessEqual(h["timeout"], 10)  # every stop waits for it
+        self.assertTrue(os.access(os.path.join(REPO, "hooks", "stop-check.sh"), os.X_OK))
+
     def test_the_overwrite_guard_is_wired_on_write_and_fails_open(self):
         # The Write tool's own read-before-write check last fired in 2.1.285. The guard runs
         # on every Write, the main thread's included, and denies by JSON, never by exit code.

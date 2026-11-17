@@ -2178,8 +2178,10 @@ class TurnUnread(ValueError):
 TURN_BYTES = (b'"user"', b'"queued_command"')
 REPLY_BYTES = re.compile(rb'"text"|"content"\s*:\s*"')
 # A line of a reply that waits on Hayden: the Waiting on you list CLAUDE.md asks for (or
-# "Waiting on Hayden"), after any markup. "Waiting on the lead:" is no wait on him.
-HAYDEN_WAIT = re.compile(r"^[\W_]*waiting on (you|hayden)\b", re.IGNORECASE | re.MULTILINE)
+# "Waiting on Hayden"), after any markup. "Waiting on the lead:" is no wait on him. The
+# stop-check hook builds its list reader from the same head, so the two never disagree on a line.
+HAYDEN_WAIT_HEAD = r"^[\W_]*waiting on (you|hayden)(?![^\W_])"  # no \b: "_you_" is a heading
+HAYDEN_WAIT = re.compile(HAYDEN_WAIT_HEAD, re.IGNORECASE | re.MULTILINE)
 
 
 def turn_kind(rec) -> tuple[bool, str | None]:
@@ -2309,6 +2311,103 @@ def lane_sid(sid, path: str, files: list[dict]) -> bool:
         return True
     return any(cwd_inside(transcript_cwd(t), path)
                for t in glob.glob(os.path.join(config_dir(), "projects", "*", sid + ".jsonl")))
+
+
+# ---- what an idle session waits for (lane stop-check) ----------------------------------------
+# The board's `stalled` flag and `lane asks`'s chat waits read the record hooks/stop_check.py
+# writes at every lane Stop (stop-check/<session>.json: the hook's verdict and the last reply's
+# Waiting on you items), so the hook, the flag and the list never disagree on what a lane waits
+# for. The `unanswered` flag reads the transcript's tail, found through stop-ring's stop record
+# (stops/<session>.json). The lanes CLI stores none of it (invariant 4).
+STOP_RECORD_MAX = 1024 * 1024      # stop_ring caps replies at 128 KiB; the rest is small
+TRANSCRIPT_TAIL = 256 * 1024       # bytes of a transcript's end read for `unanswered`
+UNANSWERED_GRACE = 120             # seconds a prompt may wait before an idle session's status
+PROMPT_KINDS = ("human", "peer", "task-notification")
+
+
+def _state_json(kind: str, sid) -> dict | None:
+    if not isinstance(sid, str) or not SID.fullmatch(sid):
+        return None
+    raw = read_head(os.path.join(state_dir(), kind, sid + ".json"), STOP_RECORD_MAX)
+    try:
+        rec = json.loads(raw) if raw else None
+    except (ValueError, RecursionError):
+        return None
+    return rec if isinstance(rec, dict) else None
+
+
+def stop_record(sid) -> dict | None:
+    """stop-ring's record for the session (stops/<sid>.json), or None."""
+    return _state_json("stops", sid)
+
+
+def stop_check(sid) -> dict | None:
+    """The stop-check hook's record for the session (stop-check/<sid>.json): `why` is its
+    verdict at the session's last Stop ("block" when that Stop had nothing to wait on), `waits`
+    the last reply's Waiting on you items, `time` the Stop's. None when it never ran there."""
+    return _state_json("stop-check", sid)
+
+
+def read_tail(path, limit: int) -> bytes | None:
+    """Up to the last limit bytes of a regular file, or None (read_head's rules)."""
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW | os.O_CLOEXEC)
+    except (OSError, TypeError, ValueError):
+        return None
+    try:
+        st = os.fstat(fd)
+        if not stat.S_ISREG(st.st_mode):
+            return None
+        os.lseek(fd, max(0, st.st_size - limit), os.SEEK_SET)
+        chunks, left = [], limit
+        while left > 0 and (chunk := os.read(fd, left)):
+            chunks.append(chunk)
+            left -= len(chunk)
+        data = b"".join(chunks)
+        return data.split(b"\n", 1)[1] if st.st_size > limit and b"\n" in data else data
+    except OSError:
+        return None
+    finally:
+        os.close(fd)
+
+
+def transcript_for(sid, rec) -> str | None:
+    """The session's transcript: the stop record's transcript_path, else the one
+    <config>/projects/*/<sid>.jsonl (a session that never stopped has no stop record)."""
+    tp = rec.get("transcript_path") if isinstance(rec, dict) else None
+    if isinstance(tp, str) and tp:
+        return tp
+    if not isinstance(sid, str) or not SID.fullmatch(sid):
+        return None
+    found = glob.glob(os.path.join(config_dir(), "projects", "*", sid + ".jsonl"))
+    return found[0] if len(found) == 1 else None
+
+
+def unanswered(path, now: float) -> bool:
+    """Whether the transcript's last main-chain user or assistant entry is a prompt (typed, a
+    peer's message, a task notice) at least UNANSWERED_GRACE old, with no reply after it. A
+    compaction summary, a tool result, an interrupt or a local command's echo is no prompt."""
+    raw = read_tail(path, TRANSCRIPT_TAIL)
+    for line in reversed((raw or b"").splitlines()):
+        try:
+            d = json.loads(line)
+        except (ValueError, RecursionError):
+            continue
+        if not isinstance(d, dict) or d.get("isSidechain"):
+            continue
+        if d.get("type") == "system" and d.get("subtype") == "compact_boundary":
+            return False
+        if d.get("type") == "assistant":
+            return False
+        if d.get("type") != "user":
+            continue
+        origin = d.get("origin")
+        if d.get("isCompactSummary") or not isinstance(origin, dict) \
+                or origin.get("kind") not in PROMPT_KINDS:
+            return False
+        when = parse_iso(d.get("timestamp"))
+        return when is not None and now - when >= UNANSWERED_GRACE
+    return False
 
 
 # ---- the lead -------------------------------------------------------------------------------

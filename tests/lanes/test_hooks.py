@@ -198,7 +198,9 @@ class IdentityHook(LanesRepo):
         self.assertEqual(out["hookEventName"], "SessionStart")
         for piece in ("`chart-fix`", "branch `fix/chart`", "#42", "port 5191",
                       self.record("chart-fix"), "read-only", "`lane who", "another session",
-                      "`lane addr lead`", "just before each send"):
+                      "`lane addr lead`", "just before each send",
+                      # stop-check's wait line and its alternative, taught before any block
+                      "`Waiting on <who>: <what>`", "`park me`"):
             self.assertIn(piece, ctx)
         self.assertNotIn("re-read", ctx)
         (s,) = self.lane_json("chart-fix")["sessions"]

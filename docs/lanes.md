@@ -95,7 +95,7 @@ writer, and every other place links to it.
 | 6 | How will we build it? | Design | the lane's `.lane/PLAN.md`; cross-lane design goes in the project `PLAN.md` or `docs/` | the lane, or the lead for cross-lane | lane / durable |
 | 7 | What was decided, by whom, and on what evidence? | Rulings | the record's "Decisions": `Hayden picked chip row + preview (2026-10-11); evidence: <artifact path>, session <id>`. Promoted at merge into the PR body; also to memory if it constrains future work | the lane | lane, then durable |
 | 8 | Where does it stand, and what's next? | State + handoff | the record's State and Next. A shift-change note in SBAR order: situation, background, assessment, next step | the lane | lane |
-| 9 | What is this lane blocked on Hayden for? | Asks | the record's "Asks for Hayden" (a design pick, push or merge approval), shown by `lane asks` across lanes. Each ask has one owner, and the lead's stay in its window ("Who asks what") | the lane; cleared after Hayden answers | living |
+| 9 | What is this lane blocked on Hayden for? | Asks | the record's "Asks for Hayden" (a design pick, push or merge approval), shown by `lane asks` across lanes, with each lane's chat waits (a Waiting on you list in the last reply of its newest session not marked ended). Each ask has one owner, and the lead's stay in its window ("Who asks what") | the lane; cleared after Hayden answers | living |
 | 10 | What did a delegate produce? | Report (up) | a subagent's report JSON (the delegation contract); a lane's hand-back is a passing `handoff-check` plus a State summary; the PR body to outsiders | the delegate | ephemeral, then PR |
 | 11 | Proof behind a claim | Evidence | `.lane/artifacts/` (mocks, shots, gate logs), mirrored so it survives `worktree remove`; rulings point here | the lane | archived with the record |
 | 12 | Shared machine resources | Env state | `lane.json` port block, `lane serve`'s listener check, live sessions and `lane lock` holders (derived; a hand-kept "machine state" list drifts) | the CLI | live |
@@ -337,7 +337,7 @@ Why it works this way:
   after the write and no dialog open. Any such reply counts, not only the last (a Stop hook's
   block can draw one more line that drops the list while his question stays open). The line is
   the Waiting on you list CLAUDE.md asks for, read after any markup (`lanelib.HAYDEN_WAIT`:
-  `^[\W_]*waiting on (you|hayden)\b`), so a lane's `Waiting on the lead:` passes. **One
+  `^[\W_]*waiting on (you|hayden)(?![^\W_])`, which `_Waiting on you_` matches too), so a lane's `Waiting on the lead:` passes. **One
   reference point** (Hayden's pick, 2026-11-16): inputs and waiting replies are both weighed
   against the record's last write, nothing else. Two earlier rules opened a major gap each.
   Clearing a wait by any later input let the lead's own "lane done refused" message clear the
@@ -776,6 +776,54 @@ M slots held (K parked)` line follows, with `, X over` past the cap. It counts t
 as `new`, twins included, by the same rule. The lead sends a parked lane no "main moved"
 message, since no session reads it: at the lane's turn the lead runs `lane open <id>` first
 (Merge turns). `lane trial` keeps merging parked lanes, which are live and will merge.
+
+**Idle lanes.** Lane sessions went idle with nothing to wake them (2026-11-08/09): turns ended
+mid-plan after a commit with no question, a finished lane never sent `park me`, and a lane kept
+its waits on Hayden only in chat, so `lane asks` showed none. Three parts answer it, all lane
+sessions only:
+
+- **The stop-check hook** (`hooks/stop_check.py`, on Stop) blocks a turn's end once when it ends
+  with nothing to wait on, in a session launched in a lane (the transcript's first cwd: a
+  Bash `cd` into a lane doesn't make the lead one). A stop passes on a line opening "Waiting on" or "Waiting for" (a
+  Waiting on you list, or `Waiting on <who>: <what>`), a waited-on background task (subagent,
+  shell, workflow, cloud session, teammate), a message to the lead or a lane (`uds:`), a pass,
+  plan mode, or a turn Hayden's own typed prompt started without approving a plan in it (he
+  reads that reply first; the prompts pass-respawn and `lane open` type don't count as his).
+  Its rules are in the module's docstring. Two blocking Stop hooks both reach the model, so it
+  sits beside context-watch and watch-guard with no ordering. Its block never holds `lane done`
+  by itself (Stop-hook feedback is no turn to the turn gate), but a reply it draws after a merged
+  lane's record write could, and the gate's refusal path recovers it (the lead messages the
+  lane, which finishes and resends `merged #N`). A post-merge bullet in the reason was tried
+  and dropped (Hayden's pick, 2026-11-17): three review rounds each found a new case its
+  wording got wrong, two of them a wait line where `merged #N` was still owed, which deadlocks
+  against the lead and hides from `stalled`, where the refusal is loud. Its Waiting on you heading is built on
+  `lanelib.HAYDEN_WAIT_HEAD` and read on `\n`-split lines, as the turn gate's `^` reads them,
+  so the two never disagree on a line. At every lane Stop, a continued
+  one too, it writes `stop-check/<session>.json` in the state dir: its verdict (`why`, before
+  block-once), the last reply's Waiting on you items and the prompt it last blocked. The next
+  two parts read only that record, so the hook, the flag and the list never disagree on what a
+  lane waits for.
+- **The board's `stalled` and `unanswered` flags**: `stalled` is an idle lane whose sessions'
+  last Stops the hook found with nothing to wait on (`why` is `block`), with a Next step, no
+  Asks, and not only waiting its merge turn; no record, or gh down, is not stalled.
+  `unanswered` is an idle session whose transcript ends on an unanswered prompt. A compaction
+  summary at the end is no prompt: Claude Code compacts idle sessions itself ("Compacted while
+  idle").
+- **`lane asks`'s chat waits**: the Waiting on you items the hook recorded for the lane's
+  newest session that `lane.json` doesn't mark ended and that Claude Code's own records place
+  in the lane (`lane.json`'s `sessions[]`, which sandboxed Bash can write, proves nothing). It
+  reads files only, so it runs sandboxed and can't see whether that session still runs: a
+  session killed before its SessionEnd keeps its list showing until a newer one stops. A Stop
+  with no reply text keeps the same prompt's earlier list.
+
+A replay over 30 days of lane transcripts (6463 stops, 143 lanes) would have blocked 4.3% of
+stops. Of 60 sampled blocks, the false ones were fair waits on someone other than Hayden, which no
+phrase match told from a stall, so lanes are taught the `Waiting on <who>:` line at session start
+(the lane-identity text) and in the block's reason. Known limits: a lane that writes a wait line
+instead of working passes; a lead that ran `cd` into a lane and then /clear starts a
+transcript there and reads as that lane (to the lane-identity hook too); the `stalled` check
+reads "waiting its merge turn" from local refs (an open PR whose
+head the remote-tracking ref holds), so a push from elsewhere shows only after a fetch.
 
 ## Merge turns (lane lanes-turn, 2026-11-07)
 
