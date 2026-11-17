@@ -5,6 +5,7 @@ Each test runs against a temporary home whose user settings carry this repo's ba
 liveness index the deadline reads) is in that home too."""
 import contextlib
 import datetime
+import fnmatch
 import io
 import json
 import os
@@ -13,8 +14,11 @@ import random
 import re
 import shutil
 import signal
+import stat
 import subprocess
 import tempfile
+import time
+import types
 import unittest
 from unittest import mock
 
@@ -22,6 +26,7 @@ from _paths import HOOKS, REPO, SCRIPTS, load_script
 
 sp = load_script("subagent-policy")
 POLICY = sp.load_policy()
+OVERLAY_PATH = sp.dc.OVERLAY_PATH  # before Base patches it
 SCRIPT = os.path.join(SCRIPTS, "subagent-policy")
 SHIM = os.path.join(HOOKS, "subagent-policy.sh")
 with open(os.path.join(REPO, "settings.json")) as f:
@@ -63,6 +68,12 @@ class Base(unittest.TestCase):
         os.environ.pop("CLAUDE_CONFIG_DIR", None)  # the settings and sessions live in the fake home
         self.tmp = tempfile.TemporaryDirectory(prefix="sp-test-", dir=TEST_TMP)
         self.home = os.path.realpath(self.tmp.name)
+        # The MCP overlay too, never the real /etc one: a temp path here, none in a subprocess.
+        overlay = mock.patch.object(sp.dc, "OVERLAY_PATH", os.path.join(
+            self.home, "etc", "dotclaude", "policy.local.toml"))
+        overlay.start()
+        self.addCleanup(overlay.stop)
+        os.environ["DELEGATION_NO_OVERLAY"] = "1"
         os.makedirs(os.path.join(self.home, ".claude"))
         self.write_settings({"sandbox": BASELINE["sandbox"]})
         self.proj = os.path.join(self.home, "code", "proj")
@@ -1155,6 +1166,206 @@ class Mcp(Base):
     def test_non_policed_tools_pass(self):
         for tool in ("SubagentHandback", "SendMessage", "WebFetch", "ToolSearch", "TaskCreate"):
             self.assertIsNone(self.decide(tool, {"x": 1}), tool)
+
+
+class Overlay(Base):
+    """The machine-local overlay (/etc/dotclaude/policy.local.toml): it can only add [mcp]
+    read_tools, only from a file root owns along its whole path, and anything else adds
+    nothing. Tests can't make root-owned files, so dc._root_only is patched to trust them."""
+
+    GOOD = '[mcp]\nread_tools = ["mcp__example__get_page", "mcp__example__list_*"]\n'
+
+    def setUp(self):
+        super().setUp()
+        os.environ.pop("DELEGATION_NO_OVERLAY")
+        self.root_only = sp.dc._root_only
+        trust = mock.patch.object(sp.dc, "_root_only", return_value=True)
+        self.trust = trust.start()
+        self.addCleanup(trust.stop)
+
+    def overlay(self, text):
+        path = sp.dc.OVERLAY_PATH
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w") as f:
+            f.write(text)
+        return path
+
+    def message(self, tool):
+        d = sp.evaluate(self.ev(tool, {}), POLICY, home=self.home)
+        return d and d.message
+
+    def assert_adds_nothing(self, text, why=None):
+        path = self.overlay(text)
+        self.assertDenied(self.decide("mcp__example__get_page", {}), "mcp-write", "manual_only",
+                          text)
+        msg = self.message("mcp__example__get_page")
+        self.assertIn(f"the local overlay {path} was ignored", msg, text)
+        if why:
+            self.assertIn(why, msg, text)
+        tools, status = sp.dc.load_overlay()
+        self.assertEqual(tools, [], text)
+        self.assertTrue(status.startswith("ignored: "), (text, status))
+
+    def test_the_path_is_fixed_in_etc_and_the_environment_only_switches_it_off(self):
+        # A path override would let a user pick a filesystem whose owners it reports (FUSE).
+        self.assertEqual(OVERLAY_PATH, "/etc/dotclaude/policy.local.toml")
+        self.overlay(self.GOOD)
+        elsewhere = os.path.join(self.home, "elsewhere.toml")
+        with open(elsewhere, "w") as f:
+            f.write('[mcp]\nread_tools = ["mcp__example__delete_page"]\n')
+        os.environ.update(DELEGATION_OVERLAY=elsewhere, XDG_CONFIG_HOME=self.home)
+        self.assertEqual(sp.dc.load_overlay()[0], ["mcp__example__get_page", "mcp__example__list_*"])
+        os.environ["DELEGATION_NO_OVERLAY"] = "1"
+        self.assertEqual(sp.dc.load_overlay(), ([], "absent"))
+        self.assertDenied(self.decide("mcp__example__get_page", {}), "mcp-write")
+
+    def test_the_owner_walk_passes_real_root_owned_directories(self):
+        # Every other case patches the owner check. Here only the uid is mapped: the sandbox
+        # shows root as nobody, so whoever owns / stands in for root.
+        root = os.stat("/").st_uid
+        st = os.stat("/etc/passwd")
+        if st.st_uid != root or st.st_mode & 0o22:
+            self.skipTest("/etc/passwd is not owned like /")
+        self.trust.side_effect = lambda s: self.root_only(types.SimpleNamespace(
+            st_uid=0 if s.st_uid == root else s.st_uid, st_mode=s.st_mode))
+        with mock.patch.object(sp.dc, "OVERLAY_PATH", "/etc/passwd"):
+            status = sp.dc.load_overlay()[1]
+        self.assertTrue(status.startswith("ignored: not valid TOML"), status)  # past the owners
+
+    def test_the_overlay_adds_exact_names_and_globs(self):
+        self.overlay(self.GOOD)
+        for tool in ("mcp__example__get_page", "mcp__example__list_pages"):
+            self.assertIsNone(self.decide(tool, {}), tool)
+        self.assertEqual(sp.dc.load_overlay(),
+                         (["mcp__example__get_page", "mcp__example__list_*"], "ok"))
+
+    def test_an_unlisted_tool_is_still_denied_and_the_refusal_names_both_lists(self):
+        path = self.overlay(self.GOOD)
+        for tool in ("mcp__example__update_page", "mcp__other__get_page"):
+            self.assertDenied(self.decide(tool, {}), "mcp-write", "manual_only", tool)
+            self.assertIn(f"not on the read-only MCP list (policy.toml [mcp] or {path})",
+                          self.message(tool))
+            self.assertNotIn("was ignored", self.message(tool))
+
+    def test_an_absent_or_empty_overlay_is_a_no_op(self):
+        self.assertEqual(sp.dc.load_overlay(), ([], "absent"))
+        self.assertDenied(self.decide("mcp__example__get_page", {}), "mcp-write")
+        self.assertNotIn("was ignored", self.message("mcp__example__get_page"))
+        self.overlay("")
+        self.assertEqual(sp.dc.load_overlay(), ([], "absent"))
+        self.assertIsNone(self.decide("mcp__notion__notion-fetch", {}))  # the base list stands
+
+    def test_a_file_root_does_not_own_is_ignored(self):
+        path = self.overlay(self.GOOD)
+        with mock.patch.object(sp.dc, "_root_only", self.root_only):  # a temp file is ours
+            self.assertEqual(sp.dc.load_overlay()[0], [])
+            self.assertDenied(self.decide("mcp__example__get_page", {}), "mcp-write")
+            self.assertIn(f"the local overlay {path} was ignored as not root-owned ({path} ",
+                          self.message("mcp__example__get_page"))
+
+    def test_root_only_means_owned_by_root_and_writable_by_it_alone(self):
+        for uid, mode, ok in ((0, stat.S_IFREG | 0o644, True), (0, stat.S_IFDIR | 0o755, True),
+                              (0, stat.S_IFREG | 0o600, True), (0, stat.S_IFREG | 0o664, False),
+                              (0, stat.S_IFREG | 0o646, False),
+                              (0, stat.S_IFDIR | 0o1777, False),  # a sticky /tmp
+                              (1000, stat.S_IFREG | 0o644, False)):
+            st = types.SimpleNamespace(st_uid=uid, st_mode=mode)
+            self.assertEqual(self.root_only(st), ok, (uid, oct(mode)))
+
+    def test_a_directory_on_the_path_root_does_not_own_ignores_the_file(self):
+        path = self.overlay(self.GOOD)
+        for d in (os.path.dirname(path), os.path.dirname(os.path.dirname(path)), self.home):
+            bad = os.stat(d)
+            self.trust.side_effect = lambda s, bad=bad: ((s.st_dev, s.st_ino)
+                                                         != (bad.st_dev, bad.st_ino))
+            tools, status = sp.dc.load_overlay()
+            self.assertEqual(tools, [], d)
+            self.assertTrue(status.startswith(f"ignored: not root-owned ({d} "), (d, status))
+        self.trust.side_effect = None
+        self.assertEqual(sp.dc.load_overlay()[1], "ok")
+
+    def test_a_symlink_is_judged_where_it_lands(self):
+        # The open file's resolved path is checked, so a link into a directory root doesn't own
+        # fails, with /proc (Linux) and without it (macOS, where F_GETPATH or realpath serve).
+        outside = os.path.join(self.home, "outside")
+        os.makedirs(outside)
+        with open(os.path.join(outside, "o.toml"), "w") as f:
+            f.write(self.GOOD)
+        path = sp.dc.OVERLAY_PATH
+        os.makedirs(os.path.dirname(path))
+        os.symlink(os.path.join(outside, "o.toml"), path)
+        bad = os.stat(outside)
+        self.trust.side_effect = lambda s: (s.st_dev, s.st_ino) != (bad.st_dev, bad.st_ino)
+        no_proc = os.path.join(self.home, "no-proc")
+        for proc in (sp.dc.PROC_FD, no_proc):
+            with mock.patch.object(sp.dc, "PROC_FD", proc):
+                self.assertTrue(sp.dc.load_overlay()[1].startswith(
+                    f"ignored: not root-owned ({outside} "), proc)
+        self.trust.side_effect = None
+        with mock.patch.object(sp.dc, "PROC_FD", no_proc):
+            self.assertEqual(sp.dc.load_overlay()[1], "ok")
+
+    def test_a_malformed_overlay_adds_nothing(self):
+        for text in ("[mcp\n", "[mcp]\nread_tools = [1]\n", '[mcp]\nread_tools = "mcp__a__b"\n',
+                     "[mcp]\n", "\x00", 'mcp = "x"\n',
+                     "[mcp]\nread_tools = " + "[" * 3000 + "]" * 3000 + "\n"):  # RecursionError
+            self.assert_adds_nothing(text)
+
+    def test_any_other_key_adds_nothing_even_beside_a_good_list(self):
+        for text in (self.GOOD + '[shell]\nbuiltins = ["x"]\n',
+                     self.GOOD + 'write_tools = ["mcp__example__set_page"]\n',
+                     "top = 1\n" + self.GOOD):
+            self.assert_adds_nothing(text, "only [mcp] read_tools")
+
+    def test_catch_alls_and_non_mcp_entries_are_refused(self):
+        # To fnmatch, `[!]]` is "any character but ]" and `[__]` is one `_`, so `[!]]*` and
+        # `mcp__example_[__]*` (which reads as `mcp__example__*`) match every tool.
+        for bypass in ("mcp__example__[!]]*", "mcp__example_[__]*"):
+            self.assertTrue(fnmatch.fnmatchcase("mcp__example__delete_page", bypass), bypass)
+        for entry in ("mcp__example__*", "mcp__example__[a-z]*", "mcp__example__[!]]*",
+                      "mcp__example__*[!]]", "mcp__example_[__]*", "mcp__example[__]_*",
+                      "mcp__example__g[!]]*", "mcp__example__*_page", "mcp__example__*e",
+                      "mcp__example__?et_page", "mcp__example__g?t_page", "mcp__*", "*",
+                      "mcp__example", "mcp____get_page", "mcp__example__", "mcp__ex ample__get",
+                      "mcp__srv___*",
+                      "Bash", "WebFetch*"):
+            self.assert_adds_nothing(
+                f'[mcp]\nread_tools = ["mcp__example__get_page", "{entry}"]\n', entry)
+        # A literal start is enough, whatever follows it; the server part may be a glob.
+        self.overlay('[mcp]\nread_tools = ["mcp__*__get_page", "mcp__plugin_x_y-z__notion-get-*", '
+                     '"mcp__example__get.v2_*", "mcp__srv___get_*"]\n')
+        self.assertEqual(sp.dc.load_overlay()[1], "ok")
+
+    def test_a_directory_is_refused_without_raising(self):
+        os.makedirs(sp.dc.OVERLAY_PATH)
+        self.assertEqual(sp.dc.load_overlay(), ([], "ignored: not a regular file"))
+        self.assertIn("not a regular file", self.message("mcp__example__get_page"))
+
+    def test_an_overlay_too_large_adds_nothing(self):
+        self.assert_adds_nothing(self.GOOD + "#" * 70000 + "\n", "too large")
+
+    def test_a_fifo_is_refused_without_hanging(self):
+        path = sp.dc.OVERLAY_PATH
+        os.makedirs(os.path.dirname(path))
+        os.mkfifo(path)
+        t = time.monotonic()
+        self.assertDenied(self.decide("mcp__example__get_page", {}), "mcp-write")
+        self.assertLess(time.monotonic() - t, 2)
+        self.assertIn("not a regular file", self.message("mcp__example__get_page"))
+
+    def test_main_lets_an_overlay_listed_read_through(self):
+        # In process, since only here can the owner check be patched to trust a temp file.
+        self.overlay(self.GOOD)
+        os.environ["HOME"] = self.home
+        self.addCleanup(signal.signal, signal.SIGALRM, signal.getsignal(signal.SIGALRM))
+        for tool, denied in (("mcp__example__get_page", False),
+                             ("mcp__example__update_page", True)):
+            out = io.StringIO()
+            with mock.patch("sys.stdin", io.StringIO(json.dumps(self.ev(tool, {})))), \
+                    contextlib.redirect_stdout(out):
+                self.assertEqual(sp.main(), 0)
+            self.assertEqual(bool(out.getvalue()), denied, (tool, out.getvalue()))
+            self.assertEqual('"deny"' in out.getvalue(), denied, (tool, out.getvalue()))
 
 
 class ReviewFindings(Base):
