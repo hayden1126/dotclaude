@@ -297,8 +297,9 @@ CLAUDE_COMMANDS = {
                "reset-project-choices": "ask", "serve": "ask"},
     ("plugin",): {"configure": "ok", "details": "ok", "disable": "ask", "enable": "ask",
                   "eval": "ask", "help": "ok", "init|new": "ask", "install|i": "ask",
-                  "list": "ok", "marketplace": "ask", "prune|autoremove": "ask", "tag": "ask",
-                  "test": "ask", "uninstall|remove": "ask", "update": "ask", "validate": "ok"},
+                  "list": "ok", "marketplace": "ask", "prune|autoremove": "ask",
+                  "restore-set-aside": "ask", "tag": "ask", "test": "ask",
+                  "uninstall|remove": "ask", "update": "ask", "validate": "ok"},
     ("sandbox",): {"help": "ok", "install": "ask", "status": "ok",  # a hidden group
                    "uninstall": "ask"},
 }
@@ -329,7 +330,7 @@ CLAUDE_RULES = [
     Rule(f"Bash(claude plugin* {sub}*)", "installs, removes or changes plugins",
          [f"claude plugin {sub.strip()} x"])
     for sub in ("disable", "enable", "init", "new", "install", "i ", "marketplace", "prune",
-                "autoremove", "tag", "uninstall", "remove", "update")
+                "autoremove", "restore-set-aside", "tag", "uninstall", "remove", "update")
 ] + [
     # Like --plugin-dir: the path is in the command text, but the code under it is whatever the
     # sandbox wrote there (Hayden, 2026-10-13).

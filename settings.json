@@ -190,6 +190,7 @@
       "Bash(claude plugin* marketplace*)",
       "Bash(claude plugin* prune*)",
       "Bash(claude plugin* autoremove*)",
+      "Bash(claude plugin* restore-set-aside*)",
       "Bash(claude plugin* tag*)",
       "Bash(claude plugin* uninstall*)",
       "Bash(claude plugin* remove*)",

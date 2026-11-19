@@ -95,9 +95,12 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     2026-11-13 (c060d9f) and is installed from main, lane closed, under Hayden's freeze lift
     ("ignore freeze, finish exam-prep"; #183, round 1, merged 2026-11-10). Round 3's retro starts
     in a new lane from `~/scratch/exam-prep/rounds/2/retro.md`, trials K02, K67, K68 carried in.
-    Next in merge order: trial-fix (lane opened 2026-11-17 on Hayden's pick, for
-    the `lane trial` backlog item below; draft #190), then stop-check, then practices' next turn; demo-av PR 3 goes
-    last (Hayden, 2026-11-17: "park demo-av because not important"). Guards merged 2026-11-17 as
+    Next in merge order: stop-check, then inventory (the flag inventory backlog item below),
+    then practices' next turn; demo-av PR 3 goes
+    last (Hayden, 2026-11-17: "park demo-av because not important"). Trial-fix merged 2026-11-17
+    as #190 (merge adde9d2: `lane trial` builds its tree as an unregistered checkout, so it runs
+    sandboxed again; the CLAUDE.md line on recommended options), installed from main, lane
+    closed. Guards merged 2026-11-17 as
     #181 (merge 1c82f18: a long-runs check on test and trial commands, `gh pr ready` refused
     without a `Skipped:` line, a kept-open lane passes on the lead's "#N chain done: run /pass"),
     installed from main, lane closed. Done-gate merged 2026-11-17 as #189 (merge b593801:
@@ -266,7 +269,7 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
       text. So the bar includes trying a plain fetch before calling a page unreachable.
     Lands in its own practices PR on a later turn, not this one (Hayden, 2026-11-16, in that
     lane's dialog); the lane has it.
-  - **`lane trial` can't run sandboxed any more** (in lane trial-fix, 2026-11-17; lane exam-prep, 2026-11-13, session
+  - **`lane trial` can't run sandboxed any more** (fixed in #190, 2026-11-17; lane exam-prep, 2026-11-13, session
     f55ae58c): its scratch `git worktree add` fails with "could not create directory of
     '.git/worktrees/tree12': Read-only file system". Claude Code's sandbox now write-allows only
     the session's own entry under `.git/worktrees`, and the skill says a trial runs only
@@ -290,7 +293,7 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     `claude plugin restore-set-aside`, which gives a plugin back options and secrets set aside
     by a marketplace change, and `tests/delegation/test_settings.py`'s inventory test doesn't
     classify it. Lead's lean: deny it to delegated agents, since it writes config and handles
-    secrets. A small lane.
+    secrets. In lane inventory (opened 2026-11-19 on Hayden's pick, merges after stop-check).
   - **`lane done` closes a lane whose session is still working with Hayden** (fixed: #189, merged 2026-11-17; another repo's
     lead, 2026-11-16, Hayden's screenshot): that lane's record said "Nothing left... the lead runs
     `lane done`", yet its live session kept walking Hayden through a test after that write, and
@@ -312,7 +315,7 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     malformed, and covered by the Edit deny as enforcement config. Name each read tool, never
     the server's wildcard. Meanwhile that lane's main thread makes the calls. Hayden's call;
     after Nov 16.
-  - **A CLAUDE.md line on recommended options** (in lane trial-fix's PR, Hayden's pick
+  - **A CLAUDE.md line on recommended options** (fixed in #190, Hayden's pick
     2026-11-17): a recommended option states its expected outcome and any risk the session
     already wrote down. Evidence (private): `~/scratch/rec-asks/FINDINGS.md`.
   - **`lane park` refuses a lane just reopened in plan mode** (demo-av, 2026-11-17): `lane open`
@@ -320,7 +323,7 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     session, which plan mode blocks. So a lane opened and then dropped can't be parked until
     Hayden leaves plan mode in its window. Fix to design: park accepts a session that wrote
     nothing past its plan file when the record already passed handoff-check before the open.
-    Not picked yet; small, and it touches trial-fix's files.
+    Not picked yet; small (`skills/lanes/scripts/lane`, which stop-check also changes).
   - **MCP reads run only on general-purpose** (lane policy-local's live check through another
     repo's lane, 2026-11-17): Explore and researcher list no MCP tools, so a delegated MCP read
     needs general-purpose, which also has every write tool. The policy hook still holds its MCP
